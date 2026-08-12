@@ -883,14 +883,17 @@
     REL_ORDER.concat(restOrder).forEach(function (kind) {
       var items = byKind[kind];
       if (!items || !items.length) return;
+      if (kind === 'calls') {
+        // 调用拆分为 caller/callee 两组：出=该节点调用（callee），
+        // 入=调用该节点（caller）
+        var out = items.filter(function (g) { return g.dir === '出'; });
+        var inn = items.filter(function (g) { return g.dir === '入'; });
+        if (out.length) html.push(relGroupHtml('调用（' + out.length + '）', out));
+        if (inn.length) html.push(relGroupHtml('被调用（' + inn.length + '）', inn));
+        return;
+      }
       items.sort(function (a, b) { return a.dir === b.dir ? 0 : (a.dir === '出' ? -1 : 1); });
-      var lis = items.map(function (g) {
-        var loc = g.loc ? ' · ' + escapeHtml(g.loc) : '';
-        return '<div class="rel"><span class="dir">' + (g.dir === '出' ? '→' : '←') + '</span>' +
-          '<span class="name">' + escapeHtml(g.name) + '</span>' +
-          '<span class="loc">' + loc + '</span></div>';
-      });
-      html.push('<h3>' + (EDGE_KIND_LABEL[kind] || kind) + '（' + items.length + '）</h3>' + lis.join(''));
+      html.push(relGroupHtml((EDGE_KIND_LABEL[kind] || kind) + '（' + items.length + '）', items));
     });
 
     panelBody.innerHTML = html.join('');
@@ -901,6 +904,17 @@
     var f = e.source === node.id ? node.file : (otherNode ? otherNode.file : '');
     if (!e.line) return f;
     return f ? f + ':' + e.line : '';
+  }
+
+  // relGroupHtml 关系分组标题 + 条目列表（方向 →/←、对方节点、位置）
+  function relGroupHtml(title, items) {
+    var lis = items.map(function (g) {
+      var loc = g.loc ? ' · ' + escapeHtml(g.loc) : '';
+      return '<div class="rel"><span class="dir">' + (g.dir === '出' ? '→' : '←') + '</span>' +
+        '<span class="name">' + escapeHtml(g.name) + '</span>' +
+        '<span class="loc">' + loc + '</span></div>';
+    });
+    return '<h3>' + title + '</h3>' + lis.join('');
   }
 
   // kv 键值行

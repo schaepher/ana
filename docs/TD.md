@@ -552,8 +552,9 @@ v2.0 设计树封闭后，MVP 实现过程中补充与调整的能力记录。�
   （properties.doc_comment）、提交信息（commit 节点的 message/date）、
   关系（按类型分组：调用/实现/导入/初始化/使用/传给/类型/数据流，
   每条显示方向 →/←、对方节点、位置行号——出边行号在节点自身文件，
-  入边在对方文件）。数据复用 /api/expand（node+edges+neighbors），
-  后端 NodeJSON 补充 doc_comment/message/date/fields 字段。
+  入边在对方文件；**调用拆分为两组**：调用（N）= callee 出边、
+  被调用（N）= caller 入边）。数据复用 /api/expand（node+edges+
+  neighbors），后端 NodeJSON 补充 doc_comment/message/date/fields 字段。
 - **Source Code 弹窗**：函数/方法节点信息栏顶部有 Source Code 按钮，
   点击弹窗展示完整源码（`/api/source?id=`）。后端按需读取仓库文件并
   go/parser 定位声明提取源码区间（匹配策略：LineStart 精确 → 行范围
