@@ -135,6 +135,11 @@ defer logger.Debug("exit <name>")
     G6 v5 给容器设内联 position:relative 会覆盖样式表的 absolute——
     侧边布局必须用外层 wrapper（#main-area 绝对定位 right:320px，
     容器 100% 填充），否则 right 不生效且节点会被面板遮挡不可点。
+    **方法 receiver**：AST 适配器 emitMethodReceiver 为方法建立
+    has_receiver 边（方法 → 接收者类型，轻量节点模式同 createObject）；
+    前端边虚线 [5,2] 标注"接收者"。**坑**：三行布局中间行单个节点
+    （如 receiver）会落在中心节点正上方（placeRow 单个节点 start=cx）——
+    须 offsetSingle 偏移到中心右侧。
 11. **serve 运维坑**：`serve` 打开的是 .codeintel/codeintel.db；重建索引
     （rm -rf .codeintel 或 init 清库）会留下持有已删除文件句柄的旧 serve 进程，
     表现为 API 返回旧数据。改库后须重启 serve。

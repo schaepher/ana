@@ -145,6 +145,10 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 		return nil
 	}
 
+	if err := a.emitMethodReceiver(repo, pkg, f, emit); err != nil {
+		return err
+	}
+
 	var stack []ast.Node
 	// 对象流追踪：变量名 → 对象 ID（同一函数内）；表达式 Pos → 对象 ID（去重）
 	objVars := map[string]domain.CanonicalID{}
@@ -435,6 +439,63 @@ func (a *Adapter) markHTTPHandlers(repo *domain.Repository, pkg *packages.Packag
 		}}); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// emitMethodReceiver 为文件内每个带 receiver 的方法声明建立 has_receiver 边
+// （方法 → 接收者类型节点）。接收者类型节点如不存在则创建（与 createObject
+// 相同的轻量节点模式，SCIP 已建则 UPSERT 合并属性）。展开方法时前端即可
+// 连线到其 receiver 节点。
+func (a *Adapter) emitMethodReceiver(repo *domain.Repository, pkg *packages.Package, f *ast.File, emit domain.EmitFunc) error {
+	logger := zap.L()
+	logger.Debug("enter (Adapter).emitMethodReceiver")
+	defer logger.Debug("exit (Adapter).emitMethodReceiver")
+	for _, decl := range f.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Recv == nil || len(fn.Recv.List) == 0 {
+			continue
+		}
+		method, ok := pkg.TypesInfo.Defs[fn.Name].(*types.Func)
+		if !ok {
+			continue
+		}
+		methodID, _ := fnID(method)
+		if methodID == "" {
+			continue
+		}
+		t := pkg.TypesInfo.TypeOf(fn.Recv.List[0].Type)
+		if p, ok := t.(*types.Pointer); ok {
+			t = p.Elem()
+		}
+		named, ok := t.(*types.Named)
+		if !ok {
+			continue // 匿名结构体上的方法
+		}
+		if named.Obj().Pkg() == nil || !isInModule(named.Obj().Pkg().Path(), repo.Module) {
+			continue
+		}
+		recvID := canonicalizer.GoSymbolID(named.Obj().Pkg().Path(), named.Obj().Name())
+		if recvID == methodID {
+			continue
+		}
+		// 保障接收者类型节点存在
+		tpos := pkg.Fset.PositionFor(named.Obj().Pos(), false)
+		_ = emit(domain.Item{Node: &domain.CodeEntity{
+			ID:        recvID,
+			Kind:      domain.KindStruct,
+			Name:      named.Obj().Name(),
+			FilePath:  relPath(repo.Path, tpos.Filename),
+			LineStart: tpos.Line,
+			LineEnd:   tpos.Line,
+		}})
+		_ = emit(domain.Item{Fact: &domain.Fact{
+			SourceID:   methodID,
+			TargetID:   recvID,
+			Kind:       domain.FactHasReceiver,
+			ToolSource: domain.ToolCodeGraph,
+			Confidence: 0.8,
+		}})
 	}
 	return nil
 }

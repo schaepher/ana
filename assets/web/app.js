@@ -48,7 +48,8 @@
     initializes: [1, 3],
     uses: [6, 2],
     passes_to: [2, 2, 2, 4],
-    of_type: [1, 4, 1, 4]
+    of_type: [1, 4, 1, 4],
+    has_receiver: [5, 2]
   };
   var EDGE_KIND_LABEL = {
     calls: '调用',
@@ -58,6 +59,7 @@
     uses: '使用',
     passes_to: '传给',
     of_type: '类型',
+    has_receiver: '接收者',
     data_flows_to: '数据流'
   };
   var EDGE_OUT_COLOR = '#1677ff';
@@ -345,8 +347,9 @@
     var updates = [{ id: id, style: { x: cx, y: cy } }];
     var rowGap = 240;
     var rowWidth = w - 140;
-    // 中间行：非 calls 关联水平分布在节点两侧
-    placeRow(updates, others, cy, rowWidth, cx, 160);
+    // 中间行：非 calls 关联水平分布在节点两侧；
+    // offsetSingle：单个节点（如 receiver）偏移到中心右侧，避免与中心节点重叠
+    placeRow(updates, others, cy, rowWidth, cx, 160, true);
     // 上行：callers
     placeRow(updates, callers, cy - rowGap, rowWidth, cx, 90);
     // 下行：callees
@@ -355,10 +358,12 @@
   }
 
   // placeRow 将一组节点水平均匀排布在一行（居中）。
-  function placeRow(updates, ids, y, rowWidth, cx, minSpacing) {
+  // offsetSingle：仅 1 个节点且与中心节点同行时偏移到中心右侧（避免重叠）。
+  function placeRow(updates, ids, y, rowWidth, cx, minSpacing, offsetSingle) {
     if (!ids.length) return;
     var spacing = Math.min(170, Math.max(minSpacing, rowWidth / ids.length));
     var start = cx - ((ids.length - 1) * spacing) / 2;
+    if (offsetSingle && ids.length === 1) start = cx + spacing;
     ids.forEach(function (nid, i) {
       updates.push({ id: nid, style: { x: start + i * spacing, y: y } });
     });
@@ -756,7 +761,7 @@
   };
   var FLAG_LABEL = { main: 'main 入口', http: 'HTTP 服务', grpc: 'gRPC 服务', framework: '框架回调' };
   // 关系分组展示顺序（未知 kind 追加在最后）
-  var REL_ORDER = ['calls', 'implements', 'imports', 'initializes', 'uses', 'passes_to', 'of_type', 'data_flows_to'];
+  var REL_ORDER = ['calls', 'implements', 'imports', 'initializes', 'uses', 'passes_to', 'of_type', 'has_receiver', 'data_flows_to'];
 
   // showNodePanel 单击节点：复用 /api/expand 取节点的完整关系后渲染信息栏
   function showNodePanel(id) {
