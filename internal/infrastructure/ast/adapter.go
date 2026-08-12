@@ -148,6 +148,9 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 	if err := a.emitMethodReceiver(repo, pkg, f, emit); err != nil {
 		return err
 	}
+	if err := a.emitStructFields(repo, pkg, f, emit); err != nil {
+		return err
+	}
 
 	var stack []ast.Node
 	// 对象流追踪：变量名 → 对象 ID（同一函数内）；表达式 Pos → 对象 ID（去重）
@@ -441,6 +444,88 @@ func (a *Adapter) markHTTPHandlers(repo *domain.Repository, pkg *packages.Packag
 		}
 	}
 	return nil
+}
+
+// emitStructFields 为文件内每个 struct 类型声明写入字段列表
+// （properties.fields = [{"name","type"}...]，类型用 go/types 相对路径
+// 字符串如 *domain.BuildMeta）。信息栏据此以表格展示字段。
+func (a *Adapter) emitStructFields(repo *domain.Repository, pkg *packages.Package, f *ast.File, emit domain.EmitFunc) error {
+	logger := zap.L()
+	logger.Debug("enter (Adapter).emitStructFields")
+	defer logger.Debug("exit (Adapter).emitStructFields")
+	for _, decl := range f.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			ts, ok := spec.(*ast.TypeSpec)
+			if !ok {
+				continue
+			}
+			st, ok := ts.Type.(*ast.StructType)
+			if !ok {
+				continue
+			}
+			named, ok := pkg.TypesInfo.TypeOf(ts.Name).(*types.Named)
+			if !ok {
+				continue // 别名（type T = struct{...}）无具名类型
+			}
+			if named.Obj().Pkg() == nil || !isInModule(named.Obj().Pkg().Path(), repo.Module) {
+				continue
+			}
+			fields := []map[string]any{}
+			// 短类型名：本包不加前缀，其他包用包名（如 *domain.Repository）
+			qual := func(p *types.Package) string {
+				if p == nil || p.Path() == pkg.PkgPath {
+					return ""
+				}
+				return p.Name()
+			}
+			for _, fld := range st.Fields.List {
+				ft := pkg.TypesInfo.TypeOf(fld.Type)
+				if ft == nil {
+					continue
+				}
+				ts := types.TypeString(ft, qual)
+				if len(fld.Names) == 0 {
+					// 匿名嵌入字段：用其类型名
+					fields = append(fields, map[string]any{"name": embeddedTypeName(ft), "type": ts})
+					continue
+				}
+				for _, n := range fld.Names {
+					fields = append(fields, map[string]any{"name": n.Name, "type": ts})
+				}
+			}
+			if len(fields) == 0 {
+				continue
+			}
+			pos := pkg.Fset.PositionFor(ts.Pos(), false)
+			_ = emit(domain.Item{Node: &domain.CodeEntity{
+				ID:        canonicalizer.GoSymbolID(named.Obj().Pkg().Path(), named.Obj().Name()),
+				Kind:      domain.KindStruct,
+				Name:      named.Obj().Name(),
+				FilePath:  relPath(repo.Path, pos.Filename),
+				LineStart: pos.Line,
+				LineEnd:   pos.Line,
+				Properties: map[string]any{
+					"fields": fields,
+				},
+			}})
+		}
+	}
+	return nil
+}
+
+// embeddedTypeName 匿名嵌入字段的显示名（解引用指针取具名类型名）。
+func embeddedTypeName(t types.Type) string {
+	if p, ok := t.(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	if n, ok := t.(*types.Named); ok {
+		return n.Obj().Name()
+	}
+	return types.TypeString(t, nil)
 }
 
 // emitMethodReceiver 为文件内每个带 receiver 的方法声明建立 has_receiver 边

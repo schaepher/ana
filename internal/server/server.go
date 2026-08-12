@@ -64,16 +64,23 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 // NodeJSON 节点输出格式。
 type NodeJSON struct {
-	ID         string   `json:"id"`
-	Name       string   `json:"name"`
-	Kind       string   `json:"kind"`
-	File       string   `json:"file,omitempty"`
-	Line       int      `json:"line,omitempty"`
-	Signature  string   `json:"signature,omitempty"`
-	Flags      []string `json:"flags,omitempty"` // main / http / grpc
-	DocComment string   `json:"docComment,omitempty"` // properties.doc_comment
-	Message    string   `json:"message,omitempty"`    // commit 说明
-	Date       string   `json:"date,omitempty"`       // commit 时间
+	ID         string          `json:"id"`
+	Name       string          `json:"name"`
+	Kind       string          `json:"kind"`
+	File       string          `json:"file,omitempty"`
+	Line       int             `json:"line,omitempty"`
+	Signature  string          `json:"signature,omitempty"`
+	Flags      []string        `json:"flags,omitempty"` // main / http / grpc
+	DocComment string          `json:"docComment,omitempty"` // properties.doc_comment
+	Message    string          `json:"message,omitempty"`    // commit 说明
+	Date       string          `json:"date,omitempty"`       // commit 时间
+	Fields     []NodeFieldJSON `json:"fields,omitempty"`     // struct 字段表
+}
+
+// NodeFieldJSON 结构体字段（properties.fields）。
+type NodeFieldJSON struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
 }
 
 // EdgeJSON 边输出格式；direction: "out"=该节点依赖对方，"in"=对方依赖该节点。
@@ -199,5 +206,17 @@ func nodeToJSON(n *domain.CodeEntity) NodeJSON {
 	j.DocComment = n.Property("doc_comment")
 	j.Message = n.Property("message")
 	j.Date = n.Property("date")
+	if raw, ok := n.Properties["fields"].([]any); ok {
+		for _, f := range raw {
+			m, ok := f.(map[string]any)
+			if !ok {
+				continue
+			}
+			j.Fields = append(j.Fields, NodeFieldJSON{
+				Name: fmt.Sprint(m["name"]),
+				Type: fmt.Sprint(m["type"]),
+			})
+		}
+	}
 	return j
 }

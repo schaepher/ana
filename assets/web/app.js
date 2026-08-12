@@ -798,6 +798,15 @@
     basic.push(kv('ID', node.id));
     html.push('<h3>基本信息</h3>' + basic.join(''));
 
+    // 字段（struct 节点）
+    if (node.fields && node.fields.length) {
+      var rows = node.fields.map(function (f) {
+        return '<tr><td>' + escapeHtml(f.name) + '</td><td class="ftype">' + escapeHtml(f.type) + '</td></tr>';
+      }).join('');
+      html.push('<h3>字段（' + node.fields.length + '）</h3>' +
+        '<table class="fields"><thead><tr><th>字段名</th><th>类型</th></tr></thead><tbody>' + rows + '</tbody></table>');
+    }
+
     // 文档注释
     if (node.docComment) html.push('<h3>文档注释</h3><p class="doc">' + escapeHtml(node.docComment) + '</p>');
 

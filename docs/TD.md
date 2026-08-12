@@ -547,12 +547,13 @@ v2.0 设计树封闭后，MVP 实现过程中补充与调整的能力记录。�
 - **交互**：单击选中节点（右侧信息栏展示详情）；双击展开/收起依赖；
   单击空白取消选中并复位信息栏。
 - **右侧节点信息栏**（常驻侧边栏，320px）：单击节点后分组展示——
-  基本信息（名称/类型/文件/签名/标记/ID）、文档注释
+  基本信息（名称/类型/文件/签名/标记/ID）、**字段表**（struct 节点，
+  字段名 | 类型，来自 properties.fields）、文档注释
   （properties.doc_comment）、提交信息（commit 节点的 message/date）、
   关系（按类型分组：调用/实现/导入/初始化/使用/传给/类型/数据流，
   每条显示方向 →/←、对方节点、位置行号——出边行号在节点自身文件，
   入边在对方文件）。数据复用 /api/expand（node+edges+neighbors），
-  后端 NodeJSON 补充 doc_comment/message/date 字段。
+  后端 NodeJSON 补充 doc_comment/message/date/fields 字段。
   **布局坑**：G6 v5 会给容器设内联 `position:relative`，覆盖样式表的
   absolute 定位，`right:320px` 不收缩宽度——需外层 #main-area 承担
   定位让出右侧空间（容器 100% 填充）。
@@ -606,6 +607,11 @@ v2.0 设计树封闭后，MVP 实现过程中补充与调整的能力记录。�
 
 - **排除 `_test.go`**：scip-go `--skip-tests` + AST 适配器关闭 Tests 模式，
   测试符号（TestXxx、测试 main）不入图。
+- **struct 字段**（v2.1 补充）：AST 适配器 emitStructFields 为 struct
+  类型声明提取字段列表写入 `properties.fields`（[{name, type}]，类型
+  用 go/types 短名——本包无前缀、其他包用包名如 `*domain.Repository`，
+  匿名嵌入字段用其类型名；注意 `types.RelativeTo` 对非本包是全限定
+  路径，须自定义 qualifier），信息栏以表格展示。
 - **对象追踪**（v2.1 补充）：struct 实例化（`&T{}` / `T{}` / 内建
   `new(T)`）的实例**合并到 struct 类型节点**（不建独立对象节点，同一
   类型的实例在图里统一），建立：
