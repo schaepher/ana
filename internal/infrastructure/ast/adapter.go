@@ -104,6 +104,11 @@ func (a *Adapter) processPackage(repo *domain.Repository, pkg *packages.Package,
 		return err
 	}
 
+	// HTTP handler 类型级检测：实现 net/http.Handler 接口的类型作为入口
+	if err := a.markHTTPHandlers(repo, pkg, emit); err != nil {
+		return err
+	}
+
 	// IMPORTS 边：直接依赖的项目内包
 	for importPath := range pkg.Imports {
 		if !isInModule(importPath, repo.Module) {
@@ -192,6 +197,15 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 					marked = true
 				}
 			}
+			// HTTP handler 函数：http.Handle / http.HandleFunc / mux.Handle 的
+			// handler 参数（具名函数或 http.HandlerFunc(f) 包装），作为入口
+			if p == "net/http" && (callee.Name() == "Handle" || callee.Name() == "HandleFunc") {
+				if hf := handlerFuncNode(pkg, call, repo); hf != nil {
+					if err := emit(domain.Item{Node: hf}); err != nil {
+						return false
+					}
+				}
+			}
 			// gRPC 服务注册：protoc 生成的 RegisterXxxServer（定义在 .pb.go），
 			// 其第二个参数是服务实现，作为顶层服务入口
 			if registerServers[callee.Pkg().Path()+":"+callee.Name()] {
@@ -240,11 +254,104 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 	return nil
 }
 
+// markHTTPHandlers 标记实现 net/http.Handler 接口（ServeHTTP 方法）的项目内
+// 类型，作为 HTTP 服务入口（serves_http）。
+func (a *Adapter) markHTTPHandlers(repo *domain.Repository, pkg *packages.Package, emit domain.EmitFunc) error {
+	// 从导入中找 net/http.Handler 接口
+	var handlerIface *types.Interface
+	for _, imp := range pkg.Imports {
+		if imp.PkgPath != "net/http" && !strings.HasPrefix(imp.PkgPath, "net/http/") {
+			continue
+		}
+		if obj := imp.Types.Scope().Lookup("Handler"); obj != nil {
+			if iface, ok := obj.Type().Underlying().(*types.Interface); ok {
+				handlerIface = iface
+				break
+			}
+		}
+	}
+	if handlerIface == nil {
+		return nil
+	}
+	scope := pkg.Types.Scope()
+	for _, name := range scope.Names() {
+		tn, ok := scope.Lookup(name).(*types.TypeName)
+		if !ok {
+			continue
+		}
+		named, ok := tn.Type().(*types.Named)
+		if !ok {
+			continue
+		}
+		// 值或指针接收者实现均可（方法可能在 *T 上）
+		if !types.Implements(named, handlerIface) && !types.Implements(types.NewPointer(named), handlerIface) {
+			continue
+		}
+		obj := named.Obj()
+		if obj.Pkg() == nil || !isInModule(obj.Pkg().Path(), repo.Module) {
+			continue
+		}
+		pos := pkg.Fset.PositionFor(obj.Pos(), false)
+		if err := emit(domain.Item{Node: &domain.CodeEntity{
+			ID:        canonicalizer.GoSymbolID(obj.Pkg().Path(), obj.Name()),
+			Kind:      domain.KindStruct,
+			Name:      obj.Name(),
+			FilePath:  relPath(repo.Path, pos.Filename),
+			LineStart: pos.Line,
+			LineEnd:   pos.Line,
+			Properties: map[string]any{
+				"serves_http": "true",
+			},
+		}}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // isRegisterServerName 判断函数名是否匹配 protoc 生成惯例 RegisterXxxServer。
 func isRegisterServerName(name string) bool {
 	return len(name) > len("RegisterServer") &&
 		strings.HasPrefix(name, "Register") &&
 		strings.HasSuffix(name, "Server")
+}
+
+// handlerFuncNode 提取 http.Handle/HandleFunc 的 handler 参数（第二个参数），
+// 支持形态：
+//
+//	http.Handle("/", myHandler)          // 变量（具名函数）
+//	http.Handle("/", http.HandlerFunc(f)) // HandlerFunc 包装
+//	http.HandleFunc("/", home)            // 具名函数
+//
+// 返回标记 serves_http 的节点；匿名函数（FuncLit）与外部函数返回 nil。
+func handlerFuncNode(pkg *packages.Package, call *ast.CallExpr, repo *domain.Repository) *domain.CodeEntity {
+	if len(call.Args) < 2 {
+		return nil
+	}
+	arg := call.Args[1]
+	// 解包 http.HandlerFunc(f)
+	if ce, ok := arg.(*ast.CallExpr); ok {
+		if sel, ok2 := ce.Fun.(*ast.SelectorExpr); ok2 && sel.Sel.Name == "HandlerFunc" && len(ce.Args) > 0 {
+			arg = ce.Args[0]
+		}
+	}
+	id, ok := arg.(*ast.Ident)
+	if !ok {
+		return nil // 匿名函数/复合字面量等（类型级检测已覆盖 struct 实现）
+	}
+	obj := pkg.TypesInfo.Uses[id]
+	if obj == nil {
+		obj = pkg.TypesInfo.Defs[id]
+	}
+	fn, ok := obj.(*types.Func)
+	if !ok || fn.Pkg() == nil || !isInModule(fn.Pkg().Path(), repo.Module) {
+		return nil
+	}
+	fnID, fnKind := fnID(fn)
+	if fnID == "" {
+		return nil
+	}
+	return nodeFor(repo, pkg, fn, fnID, fnKind, map[string]bool{"serves_http": true})
 }
 
 // serviceImplNode 提取 RegisterXxxServer 调用的第二个参数（服务实现），
