@@ -387,6 +387,7 @@ SELECT id FROM reach LIMIT 2000`
 //   - init 函数（框架注册常发生在 init() 中，作为入口展开）
 //   - HTTP 服务入口（serves_http 标记）
 //   - gRPC 服务入口（serves_grpc 标记）
+//   - 框架回调 struct：方法未被当前 module 其他文件调用（由框架调用）
 //
 // 约束：入口必须落在当前 module 内的文件（file_path 非空、非 _test.go、
 // 非仓库外路径）。
@@ -407,8 +408,143 @@ ORDER BY kind, name LIMIT 200`)
 	if err != nil {
 		return nil, fmt.Errorf("get roots: %w", err)
 	}
+	roots, err := scanNodes(rows)
+	if err != nil {
+		return nil, err
+	}
+	// 框架回调 struct：方法未被其他文件调用（无跨文件 CALLS 入边）
+	framework, err := r.GetFrameworkStructs()
+	if err != nil {
+		return nil, err
+	}
+	seen := map[domain.CanonicalID]bool{}
+	for _, n := range roots {
+		seen[n.ID] = true
+	}
+	for _, n := range framework {
+		if !seen[n.ID] {
+			roots = append(roots, n)
+			seen[n.ID] = true
+		}
+	}
+	return roots, nil
+}
+
+// GetFrameworkStructs 返回"方法未被当前 module 其他文件调用"的 struct
+// （无跨文件 caller → 推测由框架通过注册/回调机制调用），标记为顶层。
+func (r *Repo) GetFrameworkStructs() ([]*domain.CodeEntity, error) {
+	logger := zap.L()
+	logger.Debug("enter (Repo).GetFrameworkStructs")
+	defer logger.Debug("exit (Repo).GetFrameworkStructs")
+	// 被"其他文件"调用过的方法（跨文件 CALLS 边）
+	rows, err := r.Query(`
+SELECT DISTINCT e.target_id
+FROM edges e
+JOIN nodes caller_n ON caller_n.id = e.source_id
+JOIN nodes method_n ON method_n.id = e.target_id
+WHERE e.kind = 'calls'
+  AND caller_n.file_path IS NOT NULL
+  AND method_n.file_path IS NOT NULL
+  AND caller_n.file_path != method_n.file_path`)
+	if err != nil {
+		return nil, fmt.Errorf("framework structs: %w", err)
+	}
 	defer rows.Close()
-	return scanNodes(rows)
+
+	called := map[string]bool{} // 有跨文件 caller 的 struct ID
+	for rows.Next() {
+		var methodID string
+		if err := rows.Scan(&methodID); err != nil {
+			return nil, err
+		}
+		if sid, ok := structIDFromMethod(methodID); ok {
+			called[sid] = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// 收集"带方法"的 struct（用户要求：带方法的 struct 才可能是框架回调，
+	// 纯字段的数据模型除外）
+	methodRows, err := r.Query(`SELECT id FROM nodes WHERE kind = 'method'`)
+	if err != nil {
+		return nil, fmt.Errorf("framework structs methods: %w", err)
+	}
+	withMethods := map[string]bool{}
+	for methodRows.Next() {
+		var methodID string
+		if err := methodRows.Scan(&methodID); err != nil {
+			methodRows.Close()
+			return nil, err
+		}
+		if sid, ok := structIDFromMethod(methodID); ok {
+			withMethods[sid] = true
+		}
+	}
+	methodRows.Close()
+	if err := methodRows.Err(); err != nil {
+		return nil, err
+	}
+
+	// 候选 struct：带方法 且 未被跨文件调用
+	var placeholders string
+	var args []any
+	add := func(sid string) {
+		if placeholders != "" {
+			placeholders += ","
+		}
+		placeholders += "?"
+		args = append(args, sid)
+	}
+	for sid := range withMethods {
+		if !called[sid] {
+			add(sid)
+		}
+	}
+	if len(args) == 0 {
+		return nil, nil
+	}
+	nodeRows, err := r.Query(`
+SELECT id, kind, name, file_path, line_start, line_end, properties FROM nodes
+WHERE kind = 'struct'
+  AND file_path IS NOT NULL
+  AND file_path NOT LIKE '%_test.go'
+  AND file_path NOT LIKE '../%'
+  AND id IN (`+placeholders+`)
+ORDER BY name LIMIT 300`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("framework structs query: %w", err)
+	}
+	defer nodeRows.Close()
+	nodes, err := scanNodes(nodeRows)
+	if err != nil {
+		return nil, err
+	}
+	// 标记 framework 属性（前端展示用）
+	for _, n := range nodes {
+		if n.Properties == nil {
+			n.Properties = map[string]any{}
+		}
+		n.Properties["framework"] = "true"
+	}
+	return nodes, nil
+}
+
+// structIDFromMethod 将方法 ID（symbol:go:<pkg>:(T).M）还原为所属 struct ID
+// （symbol:go:<pkg>:T）。
+func structIDFromMethod(methodID string) (string, bool) {
+	s := strings.TrimPrefix(methodID, "symbol:go:")
+	i := strings.Index(s, ":(")
+	if i < 0 {
+		return "", false
+	}
+	rest := s[i+2:]
+	j := strings.Index(rest, ").")
+	if j < 0 {
+		return "", false
+	}
+	return "symbol:go:" + s[:i] + ":" + rest[:j], true
 }
 
 // Expand 返回节点的直接邻居（前端点击展开）：
