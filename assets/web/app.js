@@ -885,11 +885,11 @@
       if (!items || !items.length) return;
       if (kind === 'calls') {
         // 调用拆分为 caller/callee 两组：出=该节点调用（callee），
-        // 入=调用该节点（caller）
+        // 入=调用该节点（caller）；caller（被调用）在上，与图布局一致
         var out = items.filter(function (g) { return g.dir === '出'; });
         var inn = items.filter(function (g) { return g.dir === '入'; });
-        if (out.length) html.push(relGroupHtml('调用（' + out.length + '）', out));
         if (inn.length) html.push(relGroupHtml('被调用（' + inn.length + '）', inn));
+        if (out.length) html.push(relGroupHtml('调用（' + out.length + '）', out));
         return;
       }
       items.sort(function (a, b) { return a.dir === b.dir ? 0 : (a.dir === '出' ? -1 : 1); });
