@@ -366,24 +366,39 @@
     graph.draw();
   }
 
-  // pruneSiblings 移除被展开节点的兄弟节点（父节点的其他子节点及其
-  // 递归展开子树），保留从根到当前节点的干净链路。用 setData 全量重建。
+  // pruneSiblings 展开节点后的剪枝（用 setData 全量重建）：
+  //   1. 节点有父：移除其兄弟节点（父的其他未展开子节点及其子树）
+  //   2. 节点无父（根）：移除其子节点的其他父节点（其他展开分支）
   function pruneSiblings(id) {
     var parent = parentOf(id);
-    if (!parent) return;
-    var rec = expandedMap.get(parent);
-    if (!rec) return;
-    // 已展开的兄弟节点（有展开记录）保留，不移除其分支
-    var siblings = rec.nodes.filter(function (cid) {
-      return cid !== id && !expandedMap.has(cid);
-    });
-    if (!siblings.length) return;
-
     var toRemove = new Set();
     var edgesToRemove = new Set();
-    siblings.forEach(function (sid) {
-      collectSubtree(sid, toRemove, edgesToRemove);
-    });
+    if (parent) {
+      var rec = expandedMap.get(parent);
+      if (!rec) return;
+      // 已展开的兄弟节点（有展开记录）保留，不移除其分支
+      var siblings = rec.nodes.filter(function (cid) {
+        return cid !== id && !expandedMap.has(cid);
+      });
+      siblings.forEach(function (sid) {
+        collectSubtree(sid, toRemove, edgesToRemove);
+      });
+    } else {
+      // 无父（根）：移除其子节点的其他父节点（其他分支）
+      var rec2 = expandedMap.get(id);
+      if (!rec2) return;
+      var otherParents = new Set();
+      rec2.nodes.forEach(function (cid) {
+        expandedMap.forEach(function (r, pid) {
+          if (pid !== id && r.nodes.indexOf(cid) >= 0) otherParents.add(pid);
+        });
+      });
+      otherParents.forEach(function (op) {
+        collectSubtree(op, toRemove, edgesToRemove);
+      });
+    }
+    if (!toRemove.size) return;
+
     var data = graph.getData();
     var keepNodes = (data.nodes || []).filter(function (n) { return !toRemove.has(n.id); });
     var keepEdges = (data.edges || []).filter(function (e) {
