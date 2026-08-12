@@ -223,6 +223,7 @@
         // 三行排布被展开节点及其关联（caller 上行/节点中间/callee 下行），
         // 其他已展开节点位置不动；不跑 force 避免覆盖布局
         arrangeLayers(id);
+        graph.draw(); // updateNodeData/addNodeData 后不自动渲染，须显式重绘
         tip.textContent = added > 0
           ? '展开 ' + newIds.length + ' 个邻居 · 双击可收起'
           : '该节点没有更多依赖';
