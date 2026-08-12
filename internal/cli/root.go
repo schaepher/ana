@@ -17,6 +17,8 @@ func Main(args []string) int {
 		return cmdInit(args[1:])
 	case "query":
 		return cmdQuery(args[1:])
+	case "serve":
+		return cmdServe(args[1:])
 	case "clean":
 		return cmdClean(args[1:])
 	case "help", "-h", "--help":
@@ -34,8 +36,9 @@ func usage() {
 
 用法:
   codeintel init --repo <path>     全量构建索引（生成 .codeintel/codeintel.db）
+  codeintel serve --repo <path>    启动图探索 Web 服务（AntV G6 前端，--addr 默认 :8090）
   codeintel query <symbol|name>    查询符号详情（含调用者/被调用者）
-  codeintel query callers <sym>    查询调用者（--depth N，默认 1，置信度阈值 0.85）
+  codeintel query callers <sym>    查询调用者（--depth N，默认 1，置信度阈值 0.8）
   codeintel query callees <sym>    查询被调用者（--depth N，默认 1）
   codeintel query impact <sym>     影响分析（--depth N，默认 3）
   codeintel clean --repo <path>    删除仓库的索引数据库

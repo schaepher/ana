@@ -40,18 +40,22 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, emit domai
 	}
 	packages.PrintErrors(pkgs) // 诊断信息打到 stderr，不中断
 
+	// 服务入口标记：函数若调用 net/http 或 grpc 包，标记 serves_http / serves_grpc
+	serviceFlags := map[domain.CanonicalID]map[string]bool{}
+
 	for _, pkg := range pkgs {
 		if !isInModule(pkg.PkgPath, repo.Module) {
 			continue // 仅处理项目内包
 		}
-		if err := a.processPackage(repo, pkg, emit); err != nil {
+		if err := a.processPackage(repo, pkg, emit, serviceFlags); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (a *Adapter) processPackage(repo *domain.Repository, pkg *packages.Package, emit domain.EmitFunc) error {
+func (a *Adapter) processPackage(repo *domain.Repository, pkg *packages.Package, emit domain.EmitFunc,
+	serviceFlags map[domain.CanonicalID]map[string]bool) error {
 	if err := ensurePackageNode(repo, pkg, emit); err != nil {
 		return err
 	}
@@ -73,7 +77,7 @@ func (a *Adapter) processPackage(repo *domain.Repository, pkg *packages.Package,
 	}
 
 	for _, f := range pkg.Syntax {
-		if err := a.processFile(repo, pkg, f, emit); err != nil {
+		if err := a.processFile(repo, pkg, f, emit, serviceFlags); err != nil {
 			return err
 		}
 	}
@@ -81,7 +85,8 @@ func (a *Adapter) processPackage(repo *domain.Repository, pkg *packages.Package,
 }
 
 // processFile 遍历单个 AST：定位每个调用点，连接调用者与被调用者。
-func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f *ast.File, emit domain.EmitFunc) error {
+func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f *ast.File, emit domain.EmitFunc,
+	serviceFlags map[domain.CanonicalID]map[string]bool) error {
 	filePath := relPath(repo.Path, pkg.Fset.PositionFor(f.Pos(), false).Filename)
 	if filePath == "" {
 		return nil
@@ -102,8 +107,8 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 			return true
 		}
 		callee, ok := resolveCallee(pkg.TypesInfo, call.Fun)
-		if !ok || callee.Pkg() == nil || !isInModule(callee.Pkg().Path(), repo.Module) {
-			return true // 内建/外部函数不建边
+		if !ok {
+			return true
 		}
 		callerDecl := findCallerDecl(stack)
 		if callerDecl == nil {
@@ -117,15 +122,47 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 		if callerID == "" {
 			return true
 		}
+		// 服务入口标记：调用 net/http / grpc 包的函数作为顶层入口。
+		// 注意：外部调用点随后会直接 return（不建 CALLS 边），因此标记
+		// fires 时必须立即 emit 节点，否则节点永远不会带上标记。
+		if callee.Pkg() != nil {
+			p := callee.Pkg().Path()
+			flags := serviceFlags[callerID]
+			if flags == nil {
+				flags = map[string]bool{}
+				serviceFlags[callerID] = flags
+			}
+			marked := false
+			if p == "net/http" || strings.HasPrefix(p, "net/http/") {
+				if !flags["serves_http"] {
+					flags["serves_http"] = true
+					marked = true
+				}
+			}
+			if p == "google.golang.org/grpc" || strings.HasPrefix(p, "google.golang.org/grpc/") {
+				if !flags["serves_grpc"] {
+					flags["serves_grpc"] = true
+					marked = true
+				}
+			}
+			if marked {
+				if err := emit(domain.Item{Node: nodeFor(repo, pkg, caller, callerID, callerKind, serviceFlags[callerID])}); err != nil {
+					return false
+				}
+			}
+		}
+		if callee.Pkg() == nil || !isInModule(callee.Pkg().Path(), repo.Module) {
+			return true // 内建/外部函数不建边
+		}
 		calleeID, calleeKind := fnID(callee)
 		if calleeID == "" || calleeID == callerID {
 			return true
 		}
 		// 保障两端节点存在（INSERT OR IGNORE，不覆盖 SCIP 的完整节点）
-		if err := emit(domain.Item{Node: nodeFor(repo, pkg, caller, callerID, callerKind)}); err != nil {
+		if err := emit(domain.Item{Node: nodeFor(repo, pkg, caller, callerID, callerKind, serviceFlags[callerID])}); err != nil {
 			return false
 		}
-		if err := emit(domain.Item{Node: nodeFor(repo, pkg, callee, calleeID, calleeKind)}); err != nil {
+		if err := emit(domain.Item{Node: nodeFor(repo, pkg, callee, calleeID, calleeKind, nil)}); err != nil {
 			return false
 		}
 		if err := emit(domain.Item{Fact: &domain.Fact{
@@ -199,7 +236,8 @@ func fnID(fn *types.Func) (domain.CanonicalID, domain.EntityKind) {
 
 // nodeFor 为函数/方法生成轻量节点（ID 与 SCIP 一致，行号/文件来自位置信息，
 // signature 由 go/types 生成，与 SCIP 节点通过 properties 合并）。
-func nodeFor(repo *domain.Repository, pkg *packages.Package, fn *types.Func, id domain.CanonicalID, kind domain.EntityKind) *domain.CodeEntity {
+func nodeFor(repo *domain.Repository, pkg *packages.Package, fn *types.Func, id domain.CanonicalID,
+	kind domain.EntityKind, extra map[string]bool) *domain.CodeEntity {
 	n := &domain.CodeEntity{ID: id, Kind: kind}
 	if fn != nil && fn.Pkg() != nil {
 		pos := pkg.Fset.PositionFor(fn.Pos(), false)
@@ -224,6 +262,9 @@ func nodeFor(repo *domain.Repository, pkg *packages.Package, fn *types.Func, id 
 		n.Properties = map[string]any{
 			// ObjectString 对方法包含接收者：func (s *Service) CreatePayment(req string) error
 			"signature": types.ObjectString(fn, types.RelativeTo(pkg.Types)),
+		}
+		for flag := range extra {
+			n.Properties[flag] = "true"
 		}
 	}
 	return n

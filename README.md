@@ -11,6 +11,8 @@
 - **调用图查询**：调用者（callers）与被调用者（callees），支持多深度遍历
 - **影响分析**：修改一个符号后，沿图遍历计算受影响范围（深度 ≤ 3）
 - **接口实现**：结构体/方法与接口的 IMPLEMENTS 关系
+- **图探索前端**（AntV G6）：初始展示顶层入口（main / HTTP 服务 / gRPC 服务），
+  点击节点双向展开依赖关系
 - **降级运行**：任一分析器失败不影响其余数据，构建报告标记状态
 
 ## 快速开始
@@ -36,6 +38,13 @@ go build -o codeintel ./cmd/codeintel
 codeintel init --repo /path/to/repo
 ```
 
+图探索（浏览器）：
+
+```shell
+codeintel serve --repo /path/to/repo --addr :8090
+# 打开 http://localhost:8090 —— 初始展示顶层入口，单击节点展开依赖
+```
+
 查询：
 
 ```shell
@@ -57,6 +66,7 @@ codeintel clean --repo /path/to/repo
 
 ```
 codeintel init --repo <path>    全量构建索引
+codeintel serve --repo <path>   启动图探索 Web 服务（AntV G6 前端，默认 :8090）
 codeintel query <子命令>         查询（symbol / callers / callees / impact）
 codeintel clean --repo <path>   删除索引数据库
 ```
@@ -92,7 +102,9 @@ internal/canonicalizer/ 实体解析（canonical ID 生成、SCIP 符号解析�
 internal/orchestrator/  构建编排（并行、超时、降级、报告）
 internal/infrastructure/
   scip/  ast/  git/  sqlite/   各适配器与仓储实现
-internal/cli/         init / query / clean 命令
+internal/server/      HTTP API（/api/roots、/api/expand）
+internal/cli/         init / serve / query / clean 命令
+assets/web/           AntV G6 前端页面（go:embed 嵌入二进制）
 docs/TD.md            系统设计文档（v2.0）
 ```
 

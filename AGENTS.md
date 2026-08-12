@@ -29,10 +29,14 @@ internal/canonicalizer/   Canonical ID 生成、SCIP symbol 解析（FromScipSym
 internal/orchestrator/    全量构建编排：并行适配器、独立超时 10min、分批 1000 条事务、降级报告
 internal/infrastructure/
   scip/                   调用 scip-go 生成 SCIP 索引 → 符号节点 + IMPLEMENTS 边（conf 1.0）
-  ast/                    go/packages AST 分析 → CALLS + IMPORTS 边（conf 0.8）
+  ast/                    go/packages AST 分析 → CALLS + IMPORTS 边（conf 0.8）+
+                          服务入口标记（serves_http / serves_grpc）
   git/                    git log → COMMIT 节点 + MODIFIED_BY 边（conf 1.0）
-  sqlite/                 nodes/edges/build_metadata 仓储；SaveBatchStats 分批提交
-internal/cli/             init / query / clean 命令
+  sqlite/                 nodes/edges/build_metadata 仓储；SaveBatchStats 分批提交；
+                          GetRoots / Expand（图探索）
+internal/server/          HTTP API：/api/roots（顶层入口）、/api/expand（点击展开）
+internal/cli/             init / serve / query / clean 命令
+assets/web/               AntV G6 v5 前端（go:embed 嵌入；index.html + app.js）
 ```
 
 ## 关键设计决策（修改前必读）
@@ -58,6 +62,18 @@ internal/cli/             init / query / clean 命令
 8. **scip-go 输出格式**：`-o <file> -q` 写文件（stdout 会混入进度日志）；
    occurrence range 为 3 值单行 `[line, start_char, end_char]`；
    子包的完整路径在 Namespace descriptor（反引号），`Package.Name` 只有 module 名。
+9. **服务入口标记**（图探索顶层）：AST 适配器检测函数是否调用 net/http 或
+   google.golang.org/grpc 包（含方法调用，如 `srv.ListenAndServe()`——注意方法选择器
+   在 `info.Selections` 而非 `info.Uses`，本实现用 Uses 解析 Sel 已验证可行），
+   写入节点 properties `serves_http` / `serves_grpc`。**坑**：外部包调用点不建 CALLS 边，
+   标记 fires 时必须立即 emit 节点，否则节点永远不带标记。
+10. **图探索 API**：`GetRoots` 返回 main 入口 + 服务入口（排除 `_test.go` 文件与
+    `<pkg>.test:` 包）；`Expand` 返回双向 calls/implements/imports 直接邻居（上限 500 边）。
+    前端在 assets/web/（G6 v5 UMD，CDN 引入），通过 addNodeData/addEdgeData 增量渲染，
+    节点复用去重由前端 seen 集合保证。
+11. **serve 运维坑**：`serve` 打开的是 .codeintel/codeintel.db；重建索引
+    （rm -rf .codeintel 或 init 清库）会留下持有已删除文件句柄的旧 serve 进程，
+    表现为 API 返回旧数据。改库后须重启 serve。
 
 ## 已知限制
 

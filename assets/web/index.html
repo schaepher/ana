@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>codeintel · 依赖探索</title>
+  <script src="https://unpkg.com/@antv/g6@5/dist/g6.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #f7f8fa; }
+    #header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 20px; background: #1f1f2e; color: #fff; height: 52px;
+    }
+    #header h1 { font-size: 16px; font-weight: 600; }
+    #header .legend { display: flex; gap: 14px; font-size: 12px; color: #c9c9d4; }
+    #header .legend span { display: flex; align-items: center; gap: 4px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    #container { position: absolute; top: 52px; left: 0; right: 0; bottom: 0; background: #fff; }
+    #tip {
+      position: absolute; top: 64px; left: 50%; transform: translateX(-50%);
+      background: rgba(31,31,46,.85); color: #fff; padding: 8px 16px; border-radius: 6px;
+      font-size: 13px; z-index: 10; pointer-events: none;
+    }
+    #info {
+      position: absolute; bottom: 16px; left: 16px; right: 16px;
+      background: rgba(255,255,255,.96); border: 1px solid #e5e6eb; border-radius: 8px;
+      padding: 10px 14px; font-size: 13px; z-index: 10; box-shadow: 0 2px 12px rgba(0,0,0,.08);
+      display: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    #info .label { color: #86909c; margin-right: 8px; }
+    #info .sig { color: #4e5969; }
+    .loading { opacity: .5; pointer-events: none; }
+  </style>
+</head>
+<body>
+  <div id="header">
+    <h1>codeintel · 依赖探索</h1>
+    <div class="legend">
+      <span><i class="dot" style="background:#eb2f96"></i>main 入口</span>
+      <span><i class="dot" style="background:#fa541c"></i>HTTP 服务</span>
+      <span><i class="dot" style="background:#f5222d"></i>gRPC 服务</span>
+      <span><i class="dot" style="background:#1677ff"></i>函数/方法</span>
+      <span><i class="dot" style="background:#52c41a"></i>结构体</span>
+      <span><i class="dot" style="background:#722ed1"></i>接口</span>
+      <span><i class="dot" style="background:#fa8c16"></i>包</span>
+    </div>
+  </div>
+  <div id="container"></div>
+  <div id="tip">初始展示顶层入口 · 单击节点展开依赖（实线=调用，虚线=实现，点线=导入）</div>
+  <div id="info"></div>
+  <script src="app.js"></script>
+</body>
+</html>

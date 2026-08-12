@@ -328,6 +328,81 @@ SELECT id FROM reach LIMIT 2000`
 	return scanNodes(nodeRows)
 }
 
+// GetRoots 返回顶层入口节点（前端初始视图）：
+//   - main 入口函数（排除测试包生成的 main，其 id 形如 <pkg>.test:main）
+//   - HTTP 服务入口（serves_http 标记）
+//   - gRPC 服务入口（serves_grpc 标记）
+// 测试文件（_test.go）中的符号不作为入口。
+func (r *Repo) GetRoots() ([]*domain.CodeEntity, error) {
+	rows, err := r.Query(`
+SELECT id, kind, name, file_path, line_start, line_end, properties FROM nodes
+WHERE (file_path IS NULL OR file_path NOT LIKE '%_test.go')
+  AND ((name = 'main' AND kind = 'function' AND id NOT LIKE '%.test:main')
+   OR json_extract(properties, '$.serves_http') = 'true'
+   OR json_extract(properties, '$.serves_grpc') = 'true')
+ORDER BY kind, name LIMIT 100`)
+	if err != nil {
+		return nil, fmt.Errorf("get roots: %w", err)
+	}
+	defer rows.Close()
+	return scanNodes(rows)
+}
+
+// Expand 返回节点的直接邻居（前端点击展开）：
+//   - 双向的 calls / implements / imports 边（含方向）
+//   - 邻居节点（去重）
+// 上限 500 条边防止超大数据拖垮前端。
+func (r *Repo) Expand(id domain.CanonicalID) (facts []*domain.Fact, nodes []*domain.CodeEntity, err error) {
+	rows, err := r.Query(`
+SELECT source_id, target_id, kind, tool_source, confidence, metadata
+FROM edges
+WHERE (source_id = ? OR target_id = ?) AND kind IN ('calls', 'implements', 'imports')
+LIMIT 500`, string(id), string(id))
+	if err != nil {
+		return nil, nil, fmt.Errorf("expand %s: %w", id, err)
+	}
+	defer rows.Close()
+	facts, err = scanFacts(rows)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(facts) == 0 {
+		return facts, nil, nil
+	}
+
+	// 收集邻居节点 id（去重，不含自身）
+	neighborIDs := make([]string, 0, len(facts)*2)
+	seen := map[string]bool{string(id): true}
+	for _, f := range facts {
+		for _, nid := range []string{string(f.SourceID), string(f.TargetID)} {
+			if !seen[nid] {
+				seen[nid] = true
+				neighborIDs = append(neighborIDs, nid)
+			}
+		}
+	}
+	if len(neighborIDs) == 0 {
+		return facts, nil, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(neighborIDs)), ",")
+	args := make([]any, len(neighborIDs))
+	for i, v := range neighborIDs {
+		args[i] = v
+	}
+	nodeRows, err := r.Query(
+		"SELECT id, kind, name, file_path, line_start, line_end, properties FROM nodes WHERE id IN ("+placeholders+")",
+		args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer nodeRows.Close()
+	nodes, err = scanNodes(nodeRows)
+	if err != nil {
+		return nil, nil, err
+	}
+	return facts, nodes, nil
+}
+
 // Counts 返回节点数与边数（构建报告用）。
 func (r *Repo) Counts() (nodes, edges int, err error) {
 	if err = r.QueryRow("SELECT COUNT(*) FROM nodes").Scan(&nodes); err != nil {
