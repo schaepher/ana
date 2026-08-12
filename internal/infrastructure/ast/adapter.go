@@ -385,12 +385,12 @@ func (a *Adapter) markHTTPHandlers(repo *domain.Repository, pkg *packages.Packag
 	return nil
 }
 
-// createObject 将初始化表达式（&T{} / T{} / new(T)）解析为对象：
-//   - 创建对象节点（kind=object，ID=obj:go:<pkg>:<func>:<line>:<col>）
-//   - initializes 边：初始化者函数 → struct 类型（与类型的关系）
+// createObject 将初始化表达式（&T{} / T{} / new(T)）解析为 struct 类型：
+//   - initializes 边：初始化者函数 → struct 类型（对象合并到类型节点，
+//     不建独立 object 节点，避免同一类型的实例在图里分开）
 //
-// 返回对象 ID；非 struct 初始化 / 外部类型 / 无 caller 时返回 false。
-// cache 以表达式 Pos 去重，同一表达式只建一个对象。
+// 返回类型 ID（作为实例的代表）；非 struct 初始化 / 外部类型 / 无 caller
+// 时返回 false。
 func (a *Adapter) createObject(pkg *packages.Package, expr ast.Expr, stack []ast.Node, emit domain.EmitFunc,
 	repo *domain.Repository, cache map[token.Pos]domain.CanonicalID) (domain.CanonicalID, bool) {
 	var t types.Type
@@ -414,7 +414,7 @@ func (a *Adapter) createObject(pkg *packages.Package, expr ast.Expr, stack []ast
 	}
 	callerDecl := findCallerDecl(stack)
 	if callerDecl == nil {
-		return "", false // 包级初始化，MVP 不追踪对象
+		return "", false // 包级初始化，MVP 不追踪
 	}
 	caller, ok := pkg.TypesInfo.Defs[callerDecl.Name].(*types.Func)
 	if !ok {
@@ -441,40 +441,25 @@ func (a *Adapter) createObject(pkg *packages.Package, expr ast.Expr, stack []ast
 	if structID == callerID {
 		return "", false
 	}
-	posInfo := pkg.Fset.PositionFor(expr.Pos(), false)
-	objID := domain.CanonicalID(fmt.Sprintf("obj:go:%s:%s:%d:%d",
-		pkg.PkgPath, callerDecl.Name.Name, posInfo.Line, posInfo.Column))
-
-	// 对象节点（properties 记录类型）
+	// 保障类型节点存在 + initializes 边（初始化者 → 类型）
+	tpos := pkg.Fset.PositionFor(named.Obj().Pos(), false)
 	_ = emit(domain.Item{Node: &domain.CodeEntity{
-		ID:        objID,
-		Kind:      domain.KindObject,
+		ID:        structID,
+		Kind:      domain.KindStruct,
 		Name:      named.Obj().Name(),
-		FilePath:  relPath(repo.Path, posInfo.Filename),
-		LineStart: posInfo.Line,
-		LineEnd:   posInfo.Line,
-		Properties: map[string]any{
-			"type": string(structID),
-		},
+		FilePath:  relPath(repo.Path, tpos.Filename),
+		LineStart: tpos.Line,
+		LineEnd:   tpos.Line,
 	}})
-	// initializes 边：初始化者 → 对象（对象由该函数创建）
 	_ = emit(domain.Item{Fact: &domain.Fact{
 		SourceID:   callerID,
-		TargetID:   objID,
+		TargetID:   structID,
 		Kind:       domain.FactInitializes,
 		ToolSource: domain.ToolCodeGraph,
 		Confidence: 0.8,
 	}})
-	// of_type 边：对象 → 其 struct 类型
-	_ = emit(domain.Item{Fact: &domain.Fact{
-		SourceID:   objID,
-		TargetID:   structID,
-		Kind:       domain.FactOfType,
-		ToolSource: domain.ToolCodeGraph,
-		Confidence: 1.0,
-	}})
-	cache[expr.Pos()] = objID
-	return objID, true
+	cache[expr.Pos()] = structID
+	return structID, true
 }
 
 // isRegisterServerName 判断函数名是否匹配 protoc 生成惯例 RegisterXxxServer。

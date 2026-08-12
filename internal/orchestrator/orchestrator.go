@@ -20,6 +20,7 @@ import (
 	"github.com/schaepher/codeintel/internal/domain"
 	"github.com/schaepher/codeintel/internal/infrastructure/ast"
 	"github.com/schaepher/codeintel/internal/infrastructure/git"
+	"github.com/schaepher/codeintel/internal/infrastructure/joern"
 	"github.com/schaepher/codeintel/internal/infrastructure/scip"
 	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
 	"github.com/schaepher/codeintel/internal/logging"
@@ -69,6 +70,7 @@ func New(repo *domain.Repository, db *sqlite.DB) *Orchestrator {
 			&scip.Adapter{},
 			&ast.Adapter{},
 			&git.Adapter{},
+			&joern.Adapter{},
 		},
 	}
 }

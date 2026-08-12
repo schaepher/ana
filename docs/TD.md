@@ -564,13 +564,12 @@ v2.0 设计树封闭后，MVP 实现过程中补充与调整的能力记录。�
 - **排除 `_test.go`**：scip-go `--skip-tests` + AST 适配器关闭 Tests 模式，
   测试符号（TestXxx、测试 main）不入图。
 - **对象追踪**（v2.1 补充）：struct 实例化（`&T{}` / `T{}` / 内建
-  `new(T)`）创建**对象节点**（kind=object，ID=`obj:go:<pkg>:<func>:
-  <line>:<col>`），并建立：
-  - `initializes`：初始化者函数 → 对象（conf 0.8）
-  - `of_type`：对象 → 其 struct 类型（conf 1.0）
-  - `uses`：对象的方法被调用（`x.Method()`，同一函数内变量追踪，
+  `new(T)`）的实例**合并到 struct 类型节点**（不建独立对象节点，同一
+  类型的实例在图里统一），建立：
+  - `initializes`：初始化者函数 → struct 类型（conf 0.8）
+  - `uses`：类型实例的方法被调用（`x.Method()`，同一函数内变量追踪，
     conf 0.8）
-  - `passes_to`：对象被传给其他函数（`f(x)` / `f(&T{})`，conf 0.8）
+  - `passes_to`：类型实例被传给其他函数（`f(x)` / `f(&T{})`，conf 0.8）
   构造函数 `newT()` 由 calls 边 + 其内部实例化递归覆盖。仅限 module 内
   struct（排除 map/slice 等复合字面量）；跨函数参数流暂不追踪。
 - **REFERENCES 引用边未实现**：scip-go 的定义 occurrence 只覆盖符号名
