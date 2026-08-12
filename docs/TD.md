@@ -1,0 +1,502 @@
+# Go Codebase Intelligence 系统设计文档 (v2.0 Final)
+
+**版本**：2.0 (设计树封闭)
+**状态**：已确认
+**目标**：为 AI Agent 提供大型 Go 代码库的结构化、语义化与历史感知能力，通过 MCP 协议暴露服务。
+**决策记录**：22 个决策点已全部确认，覆盖领域范围、架构风格、构建管道、融合策略、查询契约、向量与 LLM 集成、性能目标、安全与运维。
+
+---
+
+## 目录
+
+1. [术语表](#1-术语表)
+2. [架构概览](#2-架构概览)
+3. [核心领域模型](#3-核心领域模型)
+4. [基础设施与持久化](#4-基础设施与持久化)
+5. [工具集成与融合策略](#5-工具集成与融合策略)
+6. [操作流程](#6-操作流程)
+7. [MCP 工具契约](#7-mcp-工具契约)
+8. [LLM 集成](#8-llm-集成)
+9. [性能与降级](#9-性能与降级)
+10. [安全与运维](#10-安全与运维)
+11. [设计树决策记录](#11-设计树决策记录)
+
+---
+
+## 1. 术语表
+
+采用领域驱动设计（DDD）战术模式定义通用语言。
+
+| 术语 | DDD 模式 | 定义 | 系统体现 |
+| :--- | :--- | :--- | :--- |
+| **Codebase Intelligence** | 领域 | 代码库智能分析的目标领域 | 整个系统的业务范围 |
+| **Code Entity** | 聚合根 | 代码库中唯一可标识的概念：函数、结构体、文件、包等 | `nodes` 表记录 |
+| **Fact** | 实体 | 连接两个 Code Entity 的关系，有唯一性（源、目标、类型） | `edges` 表记录（如 CALLS, IMPORTS, MODIFIED_BY） |
+| **Canonical ID** | 值对象 | 内部唯一标识 Code Entity 的标准化字符串 | 格式：`symbol:go:<pkg_path>:<name>`，由 Canonicalizer 生成 |
+| **Source Range** | 值对象 | 代码在文件中的起始行与结束行 | `line_start` / `line_end` 列 |
+| **Confidence Score** | 值对象 | Fact 的可靠性，0.0~1.0 | `edges.confidence` 列，SCIP 为 1.0 |
+| **Code Graph** | 聚合 | 由 Code Entity、Fact 和元数据组成的内部图 | 整个 SQLite 数据库实例 |
+| **Index Orchestrator** | 领域服务 | 编排全量/增量构建流程的无状态服务 | 协调 Git Hook、工具调用顺序、批次提交 |
+| **Entity Resolution** | 领域服务 | 处理跨工具 ID 映射和冲突解决的规则引擎 | Canonicalizer 组件 |
+| **Impact Analysis** | 领域服务 | 基于图遍历计算代码变更影响范围的算法 | 深度 ≤3 的递归 CTE 查询 |
+| **MCP Tool Service** | 应用服务 | 对外暴露的 MCP 接口实现层 | 实现 explore_symbol 等工具 |
+| **Vector Repository** | 仓储 | 向量嵌入存储与检索 | `semble_vectors` 表 |
+| **Code Index Repository** | 仓储 | Node 和 Edge 的 CRUD 及图查询 | SQLite 的 nodes/edges 表 |
+| **Build Metadata** | 实体 | 记录每次构建（全量/增量）的执行状态 | `build_metadata` 表 |
+| **Build Completed** | 领域事件 | 一次构建成功或降级完成时触发 | 触发 MCP 服务热加载 |
+| **LLM Enrichment Requested** | 领域事件 | Agent 查询缺少语义摘要时触发 | 后台队列生成摘要 |
+| **Port** | 六边形架构端口 | 系统与外部工具交互的抽象接口 | IndexerPort, HistoryPort, LLMPort |
+| **Adapter** | 六边形架构适配器 | 特定外部工具的实现 | SCIPAdapter, CodeGraphAdapter 等 |
+
+---
+
+## 2. 架构概览
+
+系统严格遵循六边形架构，将核心领域与外部工具和交互机制隔离。
+
+### 2.1 设计原则
+
+- **工具不可知**：所有外部分析器通过 Port/Adapter 接入，核心领域不依赖具体实现。
+- **降级运行**：任何工具故障都不影响核心查询能力，总是返回部分结果而非错误。
+- **单一职责存储**：SQLite 单文件存储所有数据（图、向量、元数据），简化部署。
+- **只读 MCP**：外部 Agent 仅能查询，写操作（构建）由 CLI 或 Git Hook 触发。
+- **延迟加载**：LLM 摘要按需生成，不阻塞构建管道。
+
+### 2.2 容器级架构图 (PlantUML)
+
+```plantuml
+@startuml
+!include <C4/C4_Container>
+title Go Codebase Intelligence - 六边形架构与容器图
+
+Person(agent, "AI Agent", "使用 MCP/SSE 调用")
+
+System_Boundary(intelligence_system, "Codebase Intelligence System") {
+    Container(cli, "CLI Interface", "Go", "init 全量构建 / serve 守护进程")
+    Container(mcp_gateway, "MCP Gateway", "Go/SSE", "暴露标准工具集")
+    Container(context_engine, "Context Engine", "Go", "工具用例编排、超时控制、降级")
+    Container(canonicalizer, "Canonicalizer", "Go", "实体解析、冲突裁决、融合")
+
+    Container(adapter_scip, "SCIP Adapter", "Go/gopls", "符号权威 (Confidence=1.0)")
+    Container(adapter_cg, "CodeGraph Adapter", "Go", "调用图与依赖图")
+    Container(adapter_joern, "Joern Adapter", "Go + Joern CLI", "CFG/DFG")
+    Container(adapter_semble, "Semble Adapter", "Go/Python", "语义向量")
+    Container(adapter_git, "Git Adapter", "Go", "Git 历史与 Blame")
+    Container(llm_adapter, "LLM Adapter", "Go", "LLM 摘要生成")
+
+    ContainerDb(sqlite, "SQLite Database", "SQLite + sqlite-vec", "Nodes, Edges, Vectors, Metadata")
+}
+
+Rel(agent, mcp_gateway, "查询", "MCP/SSE")
+Rel(cli, canonicalizer, "触发构建")
+Rel(canonicalizer, sqlite, "读写融合结果")
+
+Rel(canonicalizer, adapter_scip, "并行", "SCIP 协议")
+Rel(canonicalizer, adapter_cg, "并行", "gRPC")
+Rel(canonicalizer, adapter_joern, "并行", "Overlord")
+Rel(canonicalizer, adapter_semble, "并行", "gRPC")
+Rel(canonicalizer, adapter_git, "并行", "libgit2")
+
+Rel(mcp_gateway, context_engine, "路由")
+Rel(context_engine, sqlite, "查询图/向量")
+Rel(context_engine, adapter_semble, "语义召回 (实时)")
+Rel(context_engine, adapter_git, "历史查询 (实时)")
+Rel(context_engine, llm_adapter, "异步触发摘要")
+
+Rel(adapter_git, canonicalizer, "Git Hook 增量触发")
+@enduml
+```
+
+### 2.3 ASCII 部署架构
+
+```
++------------------------------------------------------------------+
+|  AI Agent (Codex/Claude)                                         |
++------------------------------+-----------------------------------+
+                               | MCP/SSE
+                               v
++------------------------------+-----------------------------------+
+|  codeintel serve              |                                   |
+|  + MCP Gateway (SSE)        |                                   |
+|  + Context Engine           |                                   |
+|  + Canonicalizer (增量时)    |                                   |
++------------------------------+-----------------------------------+
+                               |
+                               v
++------------------------------+-----------------------------------+
+|  SQLite DB (WAL mode)        |  .codeintel/codeintel.db         |
+|  + sqlite-vec               |                                   |
++------------------------------+-----------------------------------+
+```
+
+- **部署形态**：单一 Go 二进制文件，无外部依赖（除工具适配器运行时，如 gopls, Joern）。
+- **多仓库**：每个仓库一个 `codeintel serve` 实例，数据库在仓库根 `.codeintel/` 下。
+
+---
+
+## 3. 核心领域模型
+
+### 3.1 聚合：Code Graph
+
+**聚合根**：`CodeEntity`
+
+属性：
+- `id` (Canonical ID): 值对象
+- `kind`: 枚举 (FILE, PACKAGE, FUNCTION, METHOD, STRUCT, INTERFACE, COMMIT)
+- `name`: 字符串
+- `file_path`: 文件路径
+- `line_start` / `line_end`: Source Range 值对象
+- `properties`: JSON，包含 `signature`, `doc_comment`, `llm_summary` 等
+
+**实体**：`Fact`
+
+属性：
+- `source_id` / `target_id`: CodeEntity.id
+- `kind`: 枚举 (CALLS, IMPORTS, DEPENDS_ON, IMPLEMENTS, MODIFIED_BY, REFERENCES, DATA_FLOWS_TO, TESTS)
+- `tool_source`: 字符串 (SCIP, CODEGRAPH, JOERN, GIT)
+- `confidence`: 0.0~1.0
+- `metadata`: JSON (如 `line_num`)
+
+**规约 (Specification)**：
+- **ImpactAnalysisSpecification**：深度 ≤3，仅返回 confidence ≥ 0.85 的边（默认）。
+
+### 3.2 领域事件
+
+1. **`BuildInitiated`**：全量或增量构建开始。
+2. **`FileDeltaProcessed`**：增量中单个文件处理完成，触发依赖包 stale 标记。
+3. **`LLMEnrichmentNeeded`**：摘要缺失，放入后台队列。
+4. **`BuildCompleted`**：构建结束，写入 `build_metadata`，通知 MCP 服务热更新。
+
+---
+
+## 4. 基础设施与持久化
+
+### 4.1 SQLite Schema
+
+```sql
+-- 节点表
+CREATE TABLE nodes (
+    id TEXT PRIMARY KEY,  -- Canonical ID
+    kind TEXT NOT NULL,
+    name TEXT NOT NULL,
+    file_path TEXT,
+    line_start INTEGER,
+    line_end INTEGER,
+    properties JSON,
+    created_at INTEGER DEFAULT (strftime('%s', 'now'))
+);
+
+-- 生成列与索引
+ALTER TABLE nodes ADD COLUMN signature_text TEXT 
+    GENERATED ALWAYS AS (json_extract(properties, '$.signature')) VIRTUAL;
+CREATE INDEX idx_nodes_file_kind ON nodes(file_path, kind) WHERE file_path IS NOT NULL;
+CREATE INDEX idx_nodes_name ON nodes(name);
+CREATE INDEX idx_nodes_signature ON nodes(signature_text);
+
+-- 边表
+CREATE TABLE edges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_id TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    tool_source TEXT NOT NULL,
+    confidence REAL NOT NULL DEFAULT 0.5,
+    metadata JSON,
+    FOREIGN KEY (source_id) REFERENCES nodes(id) ON DELETE CASCADE,
+    FOREIGN KEY (target_id) REFERENCES nodes(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_edges_source ON edges(source_id);
+CREATE INDEX idx_edges_target ON edges(target_id);
+CREATE INDEX idx_edges_kind ON edges(kind);
+CREATE INDEX idx_edges_confidence ON edges(confidence) WHERE confidence >= 0.8;
+
+-- 向量表 (sqlite-vec 扩展)
+CREATE VIRTUAL TABLE semble_vectors USING vec0(
+    id TEXT PRIMARY KEY,      -- = nodes.id
+    embedding FLOAT[768]
+);
+
+-- 构建元数据
+CREATE TABLE build_metadata (
+    build_id TEXT PRIMARY KEY,
+    commit_sha TEXT,
+    tool_name TEXT,           -- 'all' (全量) 或 'incremental'
+    status TEXT,              -- 'success', 'degraded', 'failed'
+    duration_ms INTEGER,
+    error_message TEXT,
+    timestamp INTEGER DEFAULT (strftime('%s', 'now'))
+);
+CREATE INDEX idx_build_commit ON build_metadata(commit_sha);
+```
+
+### 4.2 仓储接口 (Go 风格)
+
+```go
+type CodeRepository interface {
+    SaveNode(node *CodeEntity) error
+    SaveEdges(edges []*Fact) error
+    DeleteByFile(filePath string) error
+    GetSymbol(id CanonicalID) (*CodeEntity, error)
+    GetCallers(id CanonicalID, depth int, minConfidence float64) ([]*Fact, error)
+    GetCallees(id CanonicalID, depth int, minConfidence float64) ([]*Fact, error)
+    GetImpact(id CanonicalID, depth int) ([]*CodeEntity, error)
+}
+
+type VectorRepository interface {
+    Search(embedding []float32, limit int) ([]EntityScore, error)
+    Upsert(id string, embedding []float32) error
+}
+
+type BuildMetadataRepository interface {
+    Save(meta *BuildMetadata) error
+    GetLatest() (*BuildMetadata, error)
+}
+```
+
+---
+
+## 5. 工具集成与融合策略
+
+### 5.1 适配器与置信度
+
+| 工具 | 作用 | 置信度 | 数据种类 |
+| :--- | :--- | :--- | :--- |
+| SCIP (gopls) | 精确符号、引用、定义 | 1.0 | 符号表、引用边 |
+| CodeGraph | 调用图、包依赖 | 0.8 | 调用边、导入边 |
+| Joern | 控制流、数据流 | 0.7 | 数据流边 |
+| Git | 提交历史、blame | 1.0 | MODIFIED_BY 边 |
+| Semble | 语义向量 | N/A | 向量嵌入 |
+
+### 5.2 并行构建流程
+
+全量构建：
+1. Orchestrator 启动所有适配器 goroutine。
+2. 每个适配器有独立超时 (10 分钟)。
+3. 适配器流式返回原始数据到 Canonicalizer。
+4. Canonicalizer 实时处理：生成 Canonical ID，写入数据库（分批 1000 条事务）。
+5. 若某适配器超时或失败，其已提交数据保留，标记降级。
+6. 构建结束写入 `build_metadata`，status = degraded 如果至少一个失败，failed 如果 SCIP 或 Git 失败。
+
+增量构建：
+1. Git post-receive hook → HTTP POST 到 `codeintel serve`。
+2. Orchestrator 获取 `git diff --name-only`。
+3. 对每个变更文件：
+   - BEGIN TRANSACTION
+   - DELETE FROM nodes WHERE file_path = ?
+   - 并行调用适配器（仅针对该文件），提取数据。
+   - Canonicalizer 处理并插入新数据。
+   - 标记直接 import 此文件的包为 stale。
+   - COMMIT（即使 Joern/CodeGraph 失败也不回滚 SCIP 数据）。
+4. 异步处理 stale 包刷新（后台队列，1 分钟内完成）。
+
+### 5.3 实体解析与冲突裁决
+
+- **Canonical ID 生成**：`symbol:go:<import_path>:<name>`。对于函数/方法，name 含接收者标识。
+- **同义边合并**：若多个工具报告相同 source → target 且同 kind，保留最高置信度边，tool_source 标记为最高置信度工具。
+- **视角互补**：不同分析维度（如静态调用 vs 运行时数据流）的边共存，不视为冲突。
+- **真正冲突**：同一维度（如静态调用）结论矛盾时，取高置信度边，低置信度边不写入。
+
+---
+
+## 6. 操作流程
+
+### 6.1 全量构建 CLI
+
+```shell
+codeintel init --repo /path/to/repo
+```
+过程：见时序图（略）。最终输出构建报告：符号数、边数、降级状态、耗时。
+
+### 6.2 增量更新 (自动)
+
+- Git hook 调用：`POST http://localhost:<port>/incremental`
+- 负载：`{"ref": "refs/heads/main", "before": "...", "after": "..."}`
+- 守护进程异步执行增量构建，立即返回 202 Accepted。
+- 构建完成后触发 MCP 热更新（重新打开数据库或清除缓存）。
+
+### 6.3 Agent 查询流程 (MCP)
+
+1. Agent 发送工具调用。
+2. Context Engine 解析参数，设置 3 秒硬超时。
+3. 执行查询，如有必要触发 LLM 摘要异步生成。
+4. 返回结果，包含可能的部分数据和 `degraded` 标记。
+
+---
+
+## 7. MCP 工具契约
+
+### 7.1 `explore_symbol`
+
+**输入**：
+```json
+{
+  "symbol_id": "symbol:go:payment/service.go:CreatePayment",
+  "include_details": false
+}
+```
+
+**输出 (摘要层)**：
+```json
+{
+  "symbol": {
+    "id": "...",
+    "name": "CreatePayment",
+    "kind": "function",
+    "package_path": "payment",
+    "file": "payment/service.go",
+    "line_start": 42,
+    "line_end": 87,
+    "signature": "func (s *Service) CreatePayment(req Request) error",
+    "callers_count": 5,
+    "callees_count": 8,
+    "summary": "处理支付创建，验证请求并调用支付网关...",
+    "degraded": false
+  }
+}
+```
+
+**输出 (详情层)**：增加：
+```json
+{
+  "callers": [ { "id": "...", "name": "HandleRequest", "kind": "function", "file": "api/handler.go" } ],
+  "callees": [ ... ],
+  "tests": [ ... ]
+}
+```
+callee/caller 列表上限 50 条，超出则 `truncated: true`。
+
+### 7.2 `impact_analysis`
+
+**输入**：
+```json
+{
+  "symbol_id": "...",
+  "depth": 3,
+  "include_data_flow": true
+}
+```
+**输出**：
+```json
+{
+  "root": "...",
+  "total_affected": 12,
+  "nodes": [ ... ],
+  "edges": [ ... ],
+  "truncated": false,
+  "execution_time_ms": 280,
+  "degraded": false
+}
+```
+
+### 7.3 `trace_data_flow`
+
+- 完全依赖 Joern。若 Joern 数据缺失，返回空数据且 `degraded: true`。
+- 路径表示：`source_var -> node1 -> node2 -> sink_var`。
+
+### 7.4 `codebase_search`
+
+- 输入自然语言查询，通过 Semble 适配器实时向量化，从 `semble_vectors` 检索 Top 10 相似 Code Entity。
+- 返回 ID、name、file_path、相似度分数。
+
+### 7.5 `find_tests`
+
+- 基于 `TESTS` 边（隐式或命名约定反向追踪）。返回测试函数列表。
+
+---
+
+## 8. LLM 集成
+
+- **端口**：`LLMPort` 接口，`GenerateSummary(code *CodeEntity) (string, error)`。
+- **适配器**：初始实现对接 OpenAI 兼容 API，通过配置切换模型。
+- **触发**：查询时若 `llm_summary` 缺失，发布 `LLMEnrichmentNeeded` 事件，异步执行，不阻塞查询。
+- **缓存**：生成后写入 `properties.llm_summary`，后续直接返回。
+- **内容**：200 字内，包含核心职责、参数/返回值、副作用、领域语义。
+- **限制**：全量构建时不生成，仅按需。
+
+---
+
+## 9. 性能与降级
+
+### 9.1 性能目标
+
+| 操作 | 目标 | 硬超时 |
+| :--- | :--- | :--- |
+| explore_symbol (摘要) | <100ms | 3s |
+| explore_symbol (详情) | <300ms | 3s |
+| impact_analysis (depth 3) | <500ms | 3s |
+| codebase_search | <300ms | 3s |
+| 增量构建（单文件） | <1min | 5min (放弃降级) |
+| 全量构建 | 无硬性限制，10 万符号仓库约 5 分钟 | 适配器级 10min |
+
+### 9.2 降级策略矩阵
+
+| 场景 | 行为 |
+| :--- | :--- |
+| SCIP 失败 | 构建失败 (status=failed)，无法提供任何符号查询 |
+| Git 失败 | 构建降级，历史信息缺失，其他正常 |
+| CodeGraph 失败 | 构建降级，调用图缺失，影响分析基于 SCIP 引用 |
+| Joern 失败 | 构建降级，数据流/trace 不可用 |
+| Semble 失败 | 构建降级，语义搜索不可用 |
+| 查询超时 | 返回已收集的部分结果，标记 truncated |
+| 大文件 (>5000行) | Joern 降级为仅提取函数签名，跳过完整 CFG |
+
+---
+
+## 10. 安全与运维
+
+### 10.1 安全模型
+
+- **网络假设**：系统运行在受信内网，无内置认证。
+- **传输安全**：若需跨网络，依赖反向代理提供 TLS 和认证 (mTLS/API Key)。
+- **MCP 只读**：所有工具仅查询，无副作用。构建仅由 CLI 或本地 hook 触发。
+- **文件系统访问**：仅限仓库内，不遍历外部路径。
+
+### 10.2 部署运维
+
+- **多仓库隔离**：每个仓库一个 `serve` 实例，数据库在 `.codeintel/codeintel.db`。
+- **数据清理**：`codeintel clean` 删除数据库和缓存。
+- **版本迁移**：v1.0 前无自动迁移，需手动重建。检测 schema 版本不匹配时提示。
+- **日志**：结构化 JSON 输出到 stdout，`--verbose` 调整级别。
+- **仓库缓存路径**：`$XDG_CACHE_HOME/codeintel/repos/` 存放克隆仓库。
+
+---
+
+## 11. 设计树决策记录
+
+共 22 个决策点，分 5 轮确认：
+
+**第一轮 (基础层)**
+1. 领域范围：仅 Go 代码库，静态分析。
+2. 六边形架构：Port/Adapter 隔离外部工具。
+3. 存储：SQLite + sqlite-vec，无外部依赖。
+4. 部署：单一二进制，serve 同时提供 MCP 和增量接口。
+5. MCP 工具：5 个只读工具，不含原始 Git 接口。
+
+**第二轮 (构建与增量)**
+6. 全量构建：并行适配器，独立超时，失败标记降级。
+7. 增量构建：文件级全量替换，事务提交，stale 包异步刷新。
+8. 降级运行：MCP 工具永不抛错，返回部分结果 + degraded。
+
+**第三轮 (融合与查询)**
+9. 冲突解决：合并同边取最高置信度，不同视角共存。
+10. 置信度阈值：默认 0.85，Agent 可要求全量。
+11. explore_symbol 分层：摘要含 kind/pkg/signature，详情轻量引用。
+12. 构建元数据：每次构建一条记录，status 三态。
+
+**第四轮 (向量与 LLM)**
+13. 向量嵌入：构建时同步生成，粒度 = CodeEntity，ID 一对一。
+14. LLM 摘要：延迟生成，后台异步，LLMPort 抽象。
+15. 摘要内容：200 字，含职责/参数/副作用/领域语义。
+16. 性能目标：查询分档目标，3s 硬超时。
+17. 大文件：>5000 行 Joern 降级，详情列表截断 50 条。
+
+**第五轮 (运维与边界)**
+18. 故障处理：流式部分数据提交不回滚，无自动重试。
+19. 安全：受信环境，无认证，只读 MCP。
+20. 多仓库：单实例单仓库，多进程隔离。
+21. 版本迁移：v1.0 前重建，后续考虑迁移命令。
+22. 未覆盖项：日志、缓存路径作为实现细节。
+
+---
+
+**文档结束**。所有架构决策已达成共享理解，系统可进入开发阶段。

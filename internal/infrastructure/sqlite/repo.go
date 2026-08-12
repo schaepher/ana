@@ -1,0 +1,364 @@
+package sqlite
+
+import (
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+
+	"codeintel/internal/domain"
+)
+
+// 确保 DB 实现仓储接口
+var _ domain.CodeRepository = (*Repo)(nil)
+var _ domain.BuildMetadataRepository = (*Repo)(nil)
+
+// Repo 实现 CodeRepository / BuildMetadataRepository。
+type Repo struct {
+	*DB
+}
+
+// NewRepo 基于已打开的数据库创建仓储。
+func NewRepo(db *DB) *Repo { return &Repo{DB: db} }
+
+const insertNodeSQL = `
+INSERT INTO nodes (id, kind, name, file_path, line_start, line_end, properties)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    properties = json_patch(COALESCE(properties, '{}'), excluded.properties)`
+
+const insertEdgeSQL = `
+INSERT INTO edges (source_id, target_id, kind, tool_source, confidence, metadata)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT(source_id, target_id, kind) DO UPDATE SET
+    confidence = excluded.confidence,
+    tool_source = excluded.tool_source,
+    metadata = excluded.metadata
+WHERE excluded.confidence > edges.confidence`
+
+// saveBatchResult 记录批次写入的统计信息。
+type saveBatchResult struct {
+	// SkippedEdges 因外键冲突（端点节点不存在）被跳过的边数
+	SkippedEdges int
+}
+
+// SaveBatch 在单个事务中保存节点与边（节点必须先于边插入以满足外键）。
+func (r *Repo) SaveBatch(nodes []*domain.CodeEntity, edges []*domain.Fact) error {
+	_, err := r.SaveBatchStats(nodes, edges)
+	return err
+}
+
+// SaveBatchStats 与 SaveBatch 相同，但返回批次统计（跳过的外键冲突边数）。
+// 端点节点不存在的边（如 Git 追踪到 SCIP 未索引的文件）静默跳过，不中断构建。
+func (r *Repo) SaveBatchStats(nodes []*domain.CodeEntity, edges []*domain.Fact) (*saveBatchResult, error) {
+	result := &saveBatchResult{}
+	if len(nodes) == 0 && len(edges) == 0 {
+		return result, nil
+	}
+	tx, err := r.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	if len(nodes) > 0 {
+		stmt, err := tx.Prepare(insertNodeSQL)
+		if err != nil {
+			return nil, fmt.Errorf("prepare node insert: %w", err)
+		}
+		for _, n := range nodes {
+			props, err := marshalProps(n.Properties)
+			if err != nil {
+				stmt.Close()
+				return nil, fmt.Errorf("marshal properties of %s: %w", n.ID, err)
+			}
+			if _, err := stmt.Exec(string(n.ID), string(n.Kind), n.Name, n.FilePath,
+				n.LineStart, n.LineEnd, string(props)); err != nil {
+				stmt.Close()
+				return nil, fmt.Errorf("insert node %s: %w", n.ID, err)
+			}
+		}
+		stmt.Close()
+	}
+	if len(edges) > 0 {
+		stmt, err := tx.Prepare(insertEdgeSQL)
+		if err != nil {
+			return nil, fmt.Errorf("prepare edge insert: %w", err)
+		}
+		for _, e := range edges {
+			meta, err := json.Marshal(e.Metadata)
+			if err != nil {
+				stmt.Close()
+				return nil, fmt.Errorf("marshal metadata: %w", err)
+			}
+			if _, err := stmt.Exec(string(e.SourceID), string(e.TargetID), string(e.Kind),
+				e.ToolSource, e.Confidence, string(meta)); err != nil {
+				if isFKError(err) {
+					// 端点节点不存在（如 Git 追踪到未索引文件），跳过该边
+					result.SkippedEdges++
+					continue
+				}
+				stmt.Close()
+				return nil, fmt.Errorf("insert edge %s->%s (%s): %w", e.SourceID, e.TargetID, e.Kind, err)
+			}
+		}
+		stmt.Close()
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// marshalProps 序列化节点属性；nil 映射为空对象（json_patch 需要对象操作数）。
+func marshalProps(props map[string]any) ([]byte, error) {
+	if props == nil {
+		return []byte("{}"), nil
+	}
+	return json.Marshal(props)
+}
+
+// isFKError 判断是否为外键约束错误（SQLITE_CONSTRAINT_FOREIGNKEY = 787）。
+func isFKError(err error) bool {
+	var sqliteErr interface{ ErrorCode() int }
+	if errors.As(err, &sqliteErr) {
+		return sqliteErr.ErrorCode() == 787
+	}
+	return false
+}
+
+// SaveNode 保存单个节点（TD.md 4.2 接口）。
+func (r *Repo) SaveNode(node *domain.CodeEntity) error {
+	return r.SaveBatch([]*domain.CodeEntity{node}, nil)
+}
+
+// SaveEdges 保存边列表（TD.md 4.2 接口）。
+func (r *Repo) SaveEdges(edges []*domain.Fact) error {
+	return r.SaveBatch(nil, edges)
+}
+
+// DeleteByFile 删除某个文件的所有节点及其边（级联），用于增量构建。
+func (r *Repo) DeleteByFile(filePath string) error {
+	_, err := r.Exec("DELETE FROM nodes WHERE file_path = ?", filePath)
+	if err != nil {
+		return fmt.Errorf("delete nodes of file %s: %w", filePath, err)
+	}
+	return nil
+}
+
+// GetSymbol 按 Canonical ID 查询符号。
+func (r *Repo) GetSymbol(id domain.CanonicalID) (*domain.CodeEntity, error) {
+	return scanNode(r.QueryRow(
+		"SELECT id, kind, name, file_path, line_start, line_end, properties FROM nodes WHERE id = ?",
+		string(id)))
+}
+
+// GetSymbolByName 按名称查找：先精确匹配，无结果时退化为模糊匹配
+// （CLI 按名查找用）。
+func (r *Repo) GetSymbolByName(name string) ([]*domain.CodeEntity, error) {
+	// 精确匹配
+	rows, err := r.Query(
+		"SELECT id, kind, name, file_path, line_start, line_end, properties FROM nodes WHERE name = ? ORDER BY name LIMIT 50",
+		name)
+	if err != nil {
+		return nil, err
+	}
+	nodes, err := scanNodes(rows)
+	if err != nil || len(nodes) > 0 {
+		return nodes, err
+	}
+	// 模糊匹配（名称或 canonical ID 包含）
+	rows, err = r.Query(
+		"SELECT id, kind, name, file_path, line_start, line_end, properties FROM nodes WHERE name LIKE ? OR id LIKE ? ORDER BY name LIMIT 50",
+		"%"+name+"%", "%"+name+"%")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanNodes(rows)
+}
+
+func scanNode(row *sql.Row) (*domain.CodeEntity, error) {
+	n := &domain.CodeEntity{}
+	var props string
+	err := row.Scan(&n.ID, &n.Kind, &n.Name, &n.FilePath, &n.LineStart, &n.LineEnd, &props)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, domain.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if props != "" {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(props), &m); err == nil {
+			n.Properties = m
+		}
+	}
+	return n, nil
+}
+
+func scanNodes(rows *sql.Rows) ([]*domain.CodeEntity, error) {
+	var out []*domain.CodeEntity
+	for rows.Next() {
+		n := &domain.CodeEntity{}
+		var props string
+		if err := rows.Scan(&n.ID, &n.Kind, &n.Name, &n.FilePath, &n.LineStart, &n.LineEnd, &props); err != nil {
+			return nil, err
+		}
+		if props != "" {
+			var m map[string]any
+			if err := json.Unmarshal([]byte(props), &m); err == nil {
+				n.Properties = m
+			}
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
+// GetCallers 返回调用 id（或更上层）的边，深度 ≤ depth，置信度 ≥ minConfidence。
+// 递归 CTE 沿 source 方向向上遍历（TD.md ImpactAnalysisSpecification）。
+func (r *Repo) GetCallers(id domain.CanonicalID, depth int, minConfidence float64) ([]*domain.Fact, error) {
+	return r.walkEdges(string(id), depth, minConfidence, "callers")
+}
+
+// GetCallees 返回 id 调用（或更下层）的边，深度 ≤ depth，置信度 ≥ minConfidence。
+func (r *Repo) GetCallees(id domain.CanonicalID, depth int, minConfidence float64) ([]*domain.Fact, error) {
+	return r.walkEdges(string(id), depth, minConfidence, "callees")
+}
+
+// walkEdges 沿单向方向递归遍历 CALLS 边。
+//
+//	callers: edges 从 id 向上（e.target_id 为已到达节点）
+//	callees: edges 从 id 向下（e.source_id 为已到达节点）
+func (r *Repo) walkEdges(id string, depth int, minConfidence float64, dir string) ([]*domain.Fact, error) {
+	var anchor, other, walkCol string
+	if dir == "callers" {
+		anchor, other, walkCol = "target_id", "source_id", "src"
+	} else {
+		anchor, other, walkCol = "source_id", "target_id", "tgt"
+	}
+	q := fmt.Sprintf(`
+WITH RECURSIVE walk(src, tgt, kind, tool_source, confidence, metadata, d) AS (
+    SELECT source_id, target_id, kind, tool_source, confidence, metadata, 1
+    FROM edges WHERE %s = ? AND kind = 'calls' AND confidence >= ?
+    UNION
+    SELECT e.source_id, e.target_id, e.kind, e.tool_source, e.confidence, e.metadata, w.d + 1
+    FROM edges e JOIN walk w ON e.%s = w.%s
+    WHERE w.d < ? AND e.kind = 'calls' AND e.confidence >= ?
+)
+SELECT DISTINCT src, tgt, kind, tool_source, confidence, metadata FROM walk`,
+		anchor, other, walkCol)
+
+	rows, err := r.Query(q, id, minConfidence, depth, minConfidence)
+	if err != nil {
+		return nil, fmt.Errorf("walk %s of %s: %w", dir, id, err)
+	}
+	defer rows.Close()
+	return scanFacts(rows)
+}
+
+func scanFacts(rows *sql.Rows) ([]*domain.Fact, error) {
+	var out []*domain.Fact
+	for rows.Next() {
+		f := &domain.Fact{}
+		var meta string
+		if err := rows.Scan(&f.SourceID, &f.TargetID, &f.Kind, &f.ToolSource, &f.Confidence, &meta); err != nil {
+			return nil, err
+		}
+		if meta != "" {
+			var m map[string]any
+			if err := json.Unmarshal([]byte(meta), &m); err == nil {
+				f.Metadata = m
+			}
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// GetImpact 计算变更影响范围：从 id 出发沿任意方向遍历，深度 ≤ depth（TD.md 决策 10）。
+func (r *Repo) GetImpact(id domain.CanonicalID, depth int) ([]*domain.CodeEntity, error) {
+	q := `
+WITH RECURSIVE reach(id, d) AS (
+    SELECT target_id, 1 FROM edges WHERE source_id = ?
+    UNION
+    SELECT source_id, 1 FROM edges WHERE target_id = ?
+    UNION
+    SELECT e.target_id, r.d + 1 FROM edges e JOIN reach r ON e.source_id = r.id WHERE r.d < ?
+    UNION
+    SELECT e.source_id, r.d + 1 FROM edges e JOIN reach r ON e.target_id = r.id WHERE r.d < ?
+)
+SELECT id FROM reach LIMIT 2000`
+
+	rows, err := r.Query(q, string(id), string(id), depth, depth)
+	if err != nil {
+		return nil, fmt.Errorf("impact of %s: %w", id, err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var idStr string
+		if err := rows.Scan(&idStr); err != nil {
+			return nil, err
+		}
+		ids = append(ids, idStr)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	args := make([]any, len(ids))
+	for i, v := range ids {
+		args[i] = v
+	}
+	nodeRows, err := r.Query(
+		"SELECT id, kind, name, file_path, line_start, line_end, properties FROM nodes WHERE id IN ("+placeholders+")",
+		args...)
+	if err != nil {
+		return nil, err
+	}
+	defer nodeRows.Close()
+	return scanNodes(nodeRows)
+}
+
+// Counts 返回节点数与边数（构建报告用）。
+func (r *Repo) Counts() (nodes, edges int, err error) {
+	if err = r.QueryRow("SELECT COUNT(*) FROM nodes").Scan(&nodes); err != nil {
+		return 0, 0, err
+	}
+	if err = r.QueryRow("SELECT COUNT(*) FROM edges").Scan(&edges); err != nil {
+		return 0, 0, err
+	}
+	return nodes, edges, nil
+}
+
+// Save 保存构建元数据。
+func (r *Repo) Save(meta *domain.BuildMeta) error {
+	_, err := r.Exec(`INSERT OR REPLACE INTO build_metadata
+		(build_id, commit_sha, tool_name, status, duration_ms, error_message)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		meta.BuildID, meta.CommitSHA, meta.ToolName, meta.Status, meta.DurationMs, meta.ErrorMsg)
+	return err
+}
+
+// GetLatest 获取最近一次构建元数据。
+func (r *Repo) GetLatest() (*domain.BuildMeta, error) {
+	m := &domain.BuildMeta{}
+	err := r.QueryRow(`SELECT build_id, commit_sha, tool_name, status, duration_ms, error_message
+		FROM build_metadata ORDER BY timestamp DESC LIMIT 1`).
+		Scan(&m.BuildID, &m.CommitSHA, &m.ToolName, &m.Status, &m.DurationMs, &m.ErrorMsg)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, domain.ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return m, nil
+}
