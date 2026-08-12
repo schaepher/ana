@@ -20,6 +20,8 @@
   var expandedMap = new Map();
   // 顶层入口列表（搜索下拉框数据源）
   var allEntries = [];
+  // 展开树的根（用户选择的入口），收起后整树按层级重新布局
+  var entryRootId = null;
 
   var KIND_COLOR = {
     function: '#1677ff',
@@ -183,6 +185,7 @@
     entryList.style.display = 'none';
     entryInput.value = '';
     resetGraph();
+    entryRootId = e.id; // 展开树根
     addNode(e);
     graph.layout();
     tip.textContent = '已选择 ' + e.name + ' · 双击节点展开依赖';
@@ -350,23 +353,77 @@
     });
 
     graph.setData({ nodes: keepNodes, edges: keepEdges });
-    // 收起后只重绘不跑 force 布局（setData 保留节点坐标）；
-    // 若该节点是某展开节点的子节点，父节点位置可能被子节点展开移动，
-    // 重新对其三行排布恢复分层
-    var parent = parentOf(id);
-    if (parent) {
-      arrangeLayers(parent);
+    // 收起后对展开树按层级重新布局（根在上、逐层向下，每层水平均匀），
+    // 避免长链收起后远处节点漂移导致层次混乱
+    var root = treeRoot();
+    if (root) {
+      relayoutTree(root);
     }
     graph.draw();
   }
 
-  // parentOf 返回展开记录中包含 childId 的父节点（该子节点由谁展开）。
-  function parentOf(childId) {
+  // treeRoot 返回展开树根：优先用户选择的入口；否则取未被任何展开记录
+  // 包含为子节点的已展开节点。
+  function treeRoot() {
+    if (entryRootId && graph.getNodeData(entryRootId)) {
+      return entryRootId;
+    }
+    var asChild = new Set();
+    expandedMap.forEach(function (rec) {
+      rec.nodes.forEach(function (cid) { asChild.add(cid); });
+    });
     var found = null;
     expandedMap.forEach(function (rec, pid) {
-      if (!found && rec.nodes.indexOf(childId) >= 0) found = pid;
+      if (!found && !asChild.has(pid)) found = pid;
     });
     return found;
+  }
+
+  // relayoutTree 对展开树做层级布局：根在最上行，展开的子节点逐层向下，
+  // 每层节点水平均匀分布。未在展开树中的节点追加到最后一层。
+  function relayoutTree(rootId) {
+    var data = graph.getData();
+    if (!data.nodes.some(function (n) { return n.id === rootId; })) return;
+    var layers = [[rootId]];
+    var assigned = new Set([rootId]);
+    var frontier = [rootId];
+    while (frontier.length) {
+      var next = [];
+      frontier.forEach(function (pid) {
+        var rec = expandedMap.get(pid);
+        if (!rec) return;
+        rec.nodes.forEach(function (cid) {
+          if (assigned.has(cid)) return;
+          assigned.add(cid);
+          next.push(cid);
+        });
+      });
+      if (next.length) layers.push(next);
+      frontier = next;
+    }
+    // 未在展开树中的节点（如共享节点）追加到最后一层
+    var tail = [];
+    data.nodes.forEach(function (n) {
+      if (!assigned.has(n.id)) tail.push(n.id);
+    });
+    if (tail.length) {
+      layers.push(tail);
+    }
+    var w = container.clientWidth || 1200;
+    var h = container.clientHeight || 800;
+    var cx = w / 2;
+    var rowGap = 200;
+    var startY = 80;
+    var updates = [];
+    layers.forEach(function (ids, li) {
+      var y = startY + li * rowGap;
+      var spacing = Math.min(180, Math.max(90, (w - 120) / ids.length));
+      var x0 = cx - ((ids.length - 1) * spacing) / 2;
+      ids.forEach(function (nid, i) {
+        updates.push({ id: nid, style: { x: x0 + i * spacing, y: y } });
+      });
+    });
+    graph.updateNodeData(updates);
   }
 
   // collectCollapse 递归收集收起子树中应删除的节点与边：
