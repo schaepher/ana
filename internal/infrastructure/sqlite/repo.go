@@ -434,9 +434,9 @@ func (r *Repo) GetFrameworkStructs() ([]*domain.CodeEntity, error) {
 	logger := zap.L()
 	logger.Debug("enter (Repo).GetFrameworkStructs")
 	defer logger.Debug("exit (Repo).GetFrameworkStructs")
-	// 被"其他文件"调用过的方法（跨文件 CALLS 边）
+	// 被"其他文件"调用过的方法 → caller 所在文件（跨文件 CALLS 边，用于日志）
 	rows, err := r.Query(`
-SELECT DISTINCT e.target_id
+SELECT e.target_id, caller_n.file_path
 FROM edges e
 JOIN nodes caller_n ON caller_n.id = e.source_id
 JOIN nodes method_n ON method_n.id = e.target_id
@@ -449,27 +449,26 @@ WHERE e.kind = 'calls'
 	}
 	defer rows.Close()
 
-	called := map[string]bool{} // 有跨文件 caller 的 struct ID
+	calledBy := map[string]string{} // methodID → 跨文件 caller 文件
 	for rows.Next() {
-		var methodID string
-		if err := rows.Scan(&methodID); err != nil {
+		var methodID, callerFile string
+		if err := rows.Scan(&methodID, &callerFile); err != nil {
 			return nil, err
 		}
-		if sid, ok := structIDFromMethod(methodID); ok {
-			called[sid] = true
+		if _, ok := calledBy[methodID]; !ok {
+			calledBy[methodID] = callerFile
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
-	// 收集"带方法"的 struct（用户要求：带方法的 struct 才可能是框架回调，
-	// 纯字段的数据模型除外）
+	// 收集"带方法"的 struct：structID → 方法 ID 列表
 	methodRows, err := r.Query(`SELECT id FROM nodes WHERE kind = 'method'`)
 	if err != nil {
 		return nil, fmt.Errorf("framework structs methods: %w", err)
 	}
-	withMethods := map[string]bool{}
+	methodsOf := map[string][]string{} // structID → [methodID]
 	for methodRows.Next() {
 		var methodID string
 		if err := methodRows.Scan(&methodID); err != nil {
@@ -477,7 +476,7 @@ WHERE e.kind = 'calls'
 			return nil, err
 		}
 		if sid, ok := structIDFromMethod(methodID); ok {
-			withMethods[sid] = true
+			methodsOf[sid] = append(methodsOf[sid], methodID)
 		}
 	}
 	methodRows.Close()
@@ -485,48 +484,77 @@ WHERE e.kind = 'calls'
 		return nil, err
 	}
 
-	// 候选 struct：带方法 且 未被跨文件调用
-	var placeholders string
-	var args []any
-	add := func(sid string) {
-		if placeholders != "" {
-			placeholders += ","
-		}
-		placeholders += "?"
-		args = append(args, sid)
-	}
-	for sid := range withMethods {
-		if !called[sid] {
-			add(sid)
-		}
-	}
-	if len(args) == 0 {
-		return nil, nil
-	}
+	// 遍历所有 struct，逐个判定并打印原因
 	nodeRows, err := r.Query(`
 SELECT id, kind, name, file_path, line_start, line_end, properties FROM nodes
 WHERE kind = 'struct'
-  AND file_path IS NOT NULL
-  AND file_path NOT LIKE '%_test.go'
-  AND file_path NOT LIKE '../%'
-  AND id IN (`+placeholders+`)
-ORDER BY name LIMIT 300`, args...)
+ORDER BY name LIMIT 2000`)
 	if err != nil {
 		return nil, fmt.Errorf("framework structs query: %w", err)
 	}
 	defer nodeRows.Close()
-	nodes, err := scanNodes(nodeRows)
+	structs, err := scanNodes(nodeRows)
 	if err != nil {
 		return nil, err
 	}
-	// 标记 framework 属性（前端展示用）
-	for _, n := range nodes {
-		if n.Properties == nil {
-			n.Properties = map[string]any{}
+
+	var nodes []*domain.CodeEntity
+	for _, st := range structs {
+		short := shortStructID(st.ID)
+		switch {
+		case st.FilePath == "" || strings.HasSuffix(st.FilePath, "_test.go") || strings.HasPrefix(st.FilePath, "../"):
+			logger.Info("struct 未加入顶层（文件不在 module 内）",
+				zap.String("struct", short), zap.String("file", st.FilePath))
+			continue
+		case len(methodsOf[string(st.ID)]) == 0:
+			logger.Info("struct 未加入顶层（纯字段无方法）",
+				zap.String("struct", short), zap.String("file", st.FilePath))
+			continue
 		}
-		n.Properties["framework"] = "true"
+		// 检查方法是否被跨文件调用
+		called := false
+		for _, mid := range methodsOf[string(st.ID)] {
+			if callerFile, ok := calledBy[mid]; ok {
+				called = true
+				logger.Info("struct 未加入顶层（方法被其他文件调用）",
+					zap.String("struct", short),
+					zap.String("method", shortMethodID(mid)),
+					zap.String("caller_file", callerFile))
+			}
+		}
+		if called {
+			continue
+		}
+		logger.Info("struct 加入顶层（框架回调：方法无跨文件调用）",
+			zap.String("struct", short), zap.String("file", st.FilePath))
+		if st.Properties == nil {
+			st.Properties = map[string]any{}
+		}
+		st.Properties["framework"] = "true"
+		nodes = append(nodes, st)
 	}
 	return nodes, nil
+}
+
+// shortStructID 压缩 struct ID 便于日志（保留 pkg 末段与类型名）。
+func shortStructID(id domain.CanonicalID) string {
+	s := strings.TrimPrefix(string(id), "symbol:go:")
+	if i := strings.LastIndex(s, ":"); i >= 0 {
+		if j := strings.LastIndex(s[:i], "/"); j >= 0 {
+			return s[j+1:]
+		}
+		return s
+	}
+	return s
+}
+
+// shortMethodID 压缩方法 ID 便于日志（保留类型名与方法名）。
+func shortMethodID(id string) string {
+	s := strings.TrimPrefix(id, "symbol:go:")
+	if i := strings.Index(s, ":("); i >= 0 {
+		return s[i+1:]
+	}
+	return s
 }
 
 // structIDFromMethod 将方法 ID（symbol:go:<pkg>:(T).M）还原为所属 struct ID
