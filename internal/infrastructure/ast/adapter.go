@@ -52,20 +52,51 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, emit domai
 
 	// 服务入口标记：函数若调用 net/http 或 grpc 包，标记 serves_http / serves_grpc
 	serviceFlags := map[domain.CanonicalID]map[string]bool{}
+	// 预收集 .pb.go 中定义的 RegisterXxxServer（gRPC 注册函数）。
+	// 注意：不能用调用点所在包的 Fset 解析被调用函数的位置（跨包偏移
+	// 不匹配），须在各自包内收集。
+	registerServers := collectRegisterServers(pkgs, repo.Module)
 
 	for _, pkg := range pkgs {
 		if !isInModule(pkg.PkgPath, repo.Module) {
 			continue // 仅处理项目内包
 		}
-		if err := a.processPackage(repo, pkg, emit, serviceFlags); err != nil {
+		if err := a.processPackage(repo, pkg, emit, serviceFlags, registerServers); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
+// collectRegisterServers 遍历项目内包，收集定义在 .pb.go 中、函数名匹配
+// RegisterXxxServer 的注册函数（key: "pkgPath:funcName"）。
+func collectRegisterServers(pkgs []*packages.Package, module string) map[string]bool {
+	out := map[string]bool{}
+	for _, pkg := range pkgs {
+		if !isInModule(pkg.PkgPath, module) {
+			continue
+		}
+		for _, f := range pkg.Syntax {
+			file := pkg.Fset.PositionFor(f.Pos(), false).Filename
+			if !strings.HasSuffix(file, ".pb.go") {
+				continue
+			}
+			for _, decl := range f.Decls {
+				fn, ok := decl.(*ast.FuncDecl)
+				if !ok || fn.Recv != nil {
+					continue
+				}
+				if isRegisterServerName(fn.Name.Name) {
+					out[pkg.PkgPath+":"+fn.Name.Name] = true
+				}
+			}
+		}
+	}
+	return out
+}
+
 func (a *Adapter) processPackage(repo *domain.Repository, pkg *packages.Package, emit domain.EmitFunc,
-	serviceFlags map[domain.CanonicalID]map[string]bool) error {
+	serviceFlags map[domain.CanonicalID]map[string]bool, registerServers map[string]bool) error {
 	logger := zap.L()
 	logger.Debug("enter (Adapter).processPackage")
 	defer logger.Debug("exit (Adapter).processPackage")
@@ -90,7 +121,7 @@ func (a *Adapter) processPackage(repo *domain.Repository, pkg *packages.Package,
 	}
 
 	for _, f := range pkg.Syntax {
-		if err := a.processFile(repo, pkg, f, emit, serviceFlags); err != nil {
+		if err := a.processFile(repo, pkg, f, emit, serviceFlags, registerServers); err != nil {
 			return err
 		}
 	}
@@ -99,7 +130,7 @@ func (a *Adapter) processPackage(repo *domain.Repository, pkg *packages.Package,
 
 // processFile 遍历单个 AST：定位每个调用点，连接调用者与被调用者。
 func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f *ast.File, emit domain.EmitFunc,
-	serviceFlags map[domain.CanonicalID]map[string]bool) error {
+	serviceFlags map[domain.CanonicalID]map[string]bool, registerServers map[string]bool) error {
 	logger := zap.L()
 	logger.Debug("enter (Adapter).processFile")
 	defer logger.Debug("exit (Adapter).processFile")
@@ -161,6 +192,19 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 					marked = true
 				}
 			}
+			// gRPC 服务注册：protoc 生成的 RegisterXxxServer（定义在 .pb.go），
+			// 其第二个参数是服务实现，作为顶层服务入口
+			if registerServers[callee.Pkg().Path()+":"+callee.Name()] {
+				if !flags["serves_grpc"] {
+					flags["serves_grpc"] = true
+					marked = true
+				}
+				if impl := serviceImplNode(pkg, call, repo); impl != nil {
+					if err := emit(domain.Item{Node: impl}); err != nil {
+						return false
+					}
+				}
+			}
 			if marked {
 				if err := emit(domain.Item{Node: nodeFor(repo, pkg, caller, callerID, callerKind, serviceFlags[callerID])}); err != nil {
 					return false
@@ -194,6 +238,54 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 		return true
 	})
 	return nil
+}
+
+// isRegisterServerName 判断函数名是否匹配 protoc 生成惯例 RegisterXxxServer。
+func isRegisterServerName(name string) bool {
+	return len(name) > len("RegisterServer") &&
+		strings.HasPrefix(name, "Register") &&
+		strings.HasSuffix(name, "Server")
+}
+
+// serviceImplNode 提取 RegisterXxxServer 调用的第二个参数（服务实现），
+// 生成标记 serves_grpc 的节点（作为顶层服务入口）。参数形态支持：
+//
+//	pb.RegisterGreeterServer(s, &greeterImpl{})   // 复合字面量
+//	pb.RegisterGreeterServer(s, newGreeterServer()) // 构造函数
+//	pb.RegisterGreeterServer(s, impl)               // 变量
+//
+// 返回 nil 表示无法解析为项目内类型。
+func serviceImplNode(pkg *packages.Package, call *ast.CallExpr, repo *domain.Repository) *domain.CodeEntity {
+	if len(call.Args) < 2 {
+		return nil
+	}
+	t := pkg.TypesInfo.TypeOf(call.Args[1])
+	if t == nil {
+		return nil
+	}
+	if p, ok := t.(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	named, ok := t.(*types.Named)
+	if !ok {
+		return nil // 匿名/接口类型无法定位到具体实现
+	}
+	obj := named.Obj()
+	if obj.Pkg() == nil || !isInModule(obj.Pkg().Path(), repo.Module) {
+		return nil
+	}
+	pos := pkg.Fset.PositionFor(obj.Pos(), false)
+	return &domain.CodeEntity{
+		ID:        canonicalizer.GoSymbolID(obj.Pkg().Path(), obj.Name()),
+		Kind:      domain.KindStruct,
+		Name:      obj.Name(),
+		FilePath:  relPath(repo.Path, pos.Filename),
+		LineStart: pos.Line,
+		LineEnd:   pos.Line,
+		Properties: map[string]any{
+			"serves_grpc": "true",
+		},
+	}
 }
 
 // resolveCallee 将调用表达式解析为被调用的 *types.Func。
