@@ -74,6 +74,8 @@
   });
 
   graph.render();
+  // 调试/自动化钩子：暴露 graph 实例供 playwright 等检查布局
+  window.__codeintelGraph = graph;
   loadRoots();
 
   /* ---------- 数据加载 ---------- */
@@ -84,7 +86,8 @@
       .then(function (res) { return res.json(); })
       .then(function (data) {
         (data.nodes || []).forEach(addNode);
-        graph.draw();
+        // 注意：draw() 只渲染不布局，增量数据必须显式 layout() 否则节点堆在原点
+        graph.layout();
         var n = data.nodes ? data.nodes.length : 0;
         tip.textContent = n
           ? '已加载 ' + n + ' 个顶层入口 · 单击节点展开依赖'
@@ -108,7 +111,7 @@
         var added = 0;
         (data.neighbors || []).forEach(function (n) { if (addNode(n)) added++; });
         (data.edges || []).forEach(function (e) { if (addEdge(e)) added++; });
-        graph.draw();
+        graph.layout(); // 增量数据后必须显式布局，否则节点堆在原点
         tip.textContent = added > 0
           ? '展开 ' + (added / 2 | 0) + ' 个邻居 · 继续单击节点探索'
           : '该节点没有更多依赖';
@@ -129,8 +132,17 @@
   function addNode(n) {
     if (seenNodes.has(n.id)) return false;
     seenNodes.add(n.id);
+    // 预置网格初始位置：G6 v5 force 布局不处理孤立节点与增量新节点，
+    // 无初始位置的节点会堆在原点。force 对连通部分重排，孤立节点保留此位置。
+    // 固定列数避免 sqrt 回绕导致位置重叠。
+    var idx = seenNodes.size - 1;
+    var cols = 4;
     graph.addNodeData([{
       id: n.id,
+      style: {
+        x: 100 + (idx % cols) * 140,
+        y: 100 + Math.floor(idx / cols) * 140
+      },
       data: {
         label: shortLabel(n),
         kind: n.kind,

@@ -102,6 +102,10 @@ defer logger.Debug("exit <name>")
     `<pkg>.test:` 包）；`Expand` 返回双向 calls/implements/imports 直接邻居（上限 500 边）。
     前端在 assets/web/（G6 v5 UMD，CDN 引入），通过 addNodeData/addEdgeData 增量渲染，
     节点复用去重由前端 seen 集合保证。
+    **G6 v5 布局坑**（playwright 实测）：`draw()` 不触发布局，增量数据必须显式
+    `graph.layout()`；force 布局不处理孤立节点与增量新节点（位置留空会堆在原点）——
+    addNode 时必须预置网格初始位置（style.x/y，固定 4 列避免 sqrt 回绕重叠）。
+    位置读取用 `getNodeData(id).style.x/y`，`getData()` 读不到布局位置。
 11. **serve 运维坑**：`serve` 打开的是 .codeintel/codeintel.db；重建索引
     （rm -rf .codeintel 或 init 清库）会留下持有已删除文件句柄的旧 serve 进程，
     表现为 API 返回旧数据。改库后须重启 serve。
