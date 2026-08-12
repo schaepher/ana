@@ -8,16 +8,18 @@
   var container = document.getElementById('container');
   var tip = document.getElementById('tip');
   var info = document.getElementById('info');
+  var entryInput = document.getElementById('entry-input');
+  var entryList = document.getElementById('entry-list');
   var seenNodes = new Set();
   var seenEdges = new Set();
   var expanding = false;
   // 展开令牌：收起会使飞行中的展开回调失效，防止已删节点"复活"
   var expandToken = 0;
   // 展开记录：parentId → { nodes: 新增节点 id, edges: 新增边 key }（双击收起用）。
-  // 注意：邻居可能已在图中（roots 里的服务入口），其边也要记录才能完整收起。
+  // 注意：邻居可能已在图中，其边也要记录才能完整收起。
   var expandedMap = new Map();
-  // 顶层入口节点集合：展开顶层节点后聚焦（删除不关联节点）
-  var rootIds = new Set();
+  // 顶层入口列表（搜索下拉框数据源）
+  var allEntries = [];
 
   var KIND_COLOR = {
     function: '#1677ff',
@@ -123,27 +125,75 @@
   graph.render();
   // 调试/自动化钩子：暴露 graph 实例供 playwright 等检查布局
   window.__codeintelGraph = graph;
-  loadRoots();
+  loadEntries();
 
-  /* ---------- 数据加载 ---------- */
+  /* ---------- 入口选择（搜索下拉框） ---------- */
 
-  function loadRoots() {
-    tip.textContent = '加载顶层入口…';
+  // 加载全部顶层入口作为搜索数据源（不放入图中）
+  function loadEntries() {
     fetch('/api/roots')
       .then(function (res) { return res.json(); })
       .then(function (data) {
-        rootIds.clear();
-        (data.nodes || []).forEach(function (n) { rootIds.add(n.id); addNode(n); });
-        // 注意：draw() 只渲染不布局，增量数据必须显式 layout() 否则节点堆在原点
-        graph.layout();
-        var n = data.nodes ? data.nodes.length : 0;
-        tip.textContent = n
-          ? '已加载 ' + n + ' 个顶层入口 · 双击节点展开/收起依赖'
-          : '没有找到入口（先运行 codeintel init）';
+        allEntries = data.nodes || [];
+        tip.textContent = '已加载 ' + allEntries.length + ' 个顶层入口 · 搜索选择后双击展开依赖';
       })
       .catch(function (err) {
-        tip.textContent = '加载失败: ' + err.message;
+        tip.textContent = '加载入口列表失败: ' + err.message;
       });
+  }
+
+  // 输入过滤 → 渲染下拉列表
+  entryInput.addEventListener('input', function () {
+    var q = entryInput.value.trim().toLowerCase();
+    if (!q) {
+      entryList.style.display = 'none';
+      return;
+    }
+    var matched = allEntries.filter(function (e) {
+      return (e.name + ' ' + e.id + ' ' + (e.file || '') + ' ' + (e.flags || []).join(' '))
+        .toLowerCase().indexOf(q) >= 0;
+    }).slice(0, 50);
+    renderEntryList(matched);
+  });
+
+  entryInput.addEventListener('blur', function () {
+    setTimeout(function () { entryList.style.display = 'none'; }, 150);
+  });
+
+  function renderEntryList(items) {
+    if (!items.length) {
+      entryList.style.display = 'none';
+      return;
+    }
+    entryList.innerHTML = '';
+    items.forEach(function (e) {
+      var li = document.createElement('li');
+      li.textContent = entryLabel(e);
+      li.addEventListener('mousedown', function (evt) {
+        evt.preventDefault();
+        selectEntry(e);
+      });
+      entryList.appendChild(li);
+    });
+    entryList.style.display = 'block';
+  }
+
+  // 选择入口：清空图，仅展示该节点（双击展开依赖）
+  function selectEntry(e) {
+    entryList.style.display = 'none';
+    entryInput.value = '';
+    resetGraph();
+    addNode(e);
+    graph.layout();
+    tip.textContent = '已选择 ' + e.name + ' · 双击节点展开依赖';
+    info.style.display = 'none';
+  }
+
+  function entryLabel(e) {
+    var label = e.name;
+    if (e.file) label += ' · ' + e.file;
+    if (e.flags && e.flags.length) label += '  [' + e.flags.join(', ') + ']';
+    return label;
   }
 
   function expandNode(id) {
@@ -170,16 +220,12 @@
         if (newIds.length || newEdgeKeys.length) {
           expandedMap.set(id, { nodes: newIds, edges: newEdgeKeys });
         }
-        // 展开顶层节点后聚焦：删除与它不关联的节点，并按三行排布
-        // （arrangeLayers 已设置最终位置，不再跑 force 布局覆盖）
-        if (rootIds.has(id)) {
-          focusOn(id);
-        } else {
-          graph.layout(); // 非顶层展开：增量数据后显式布局
-        }
-        tip.textContent = rootIds.has(id)
-          ? '已聚焦 ' + id.split('/').pop() + ' 的依赖 · 双击收起返回入口'
-          : (added > 0 ? '展开 ' + newIds.length + ' 个邻居 · 双击可收起' : '该节点没有更多依赖');
+        // 三行排布被展开节点及其关联（caller 上行/节点中间/callee 下行），
+        // 其他已展开节点位置不动；不跑 force 避免覆盖布局
+        arrangeLayers(id);
+        tip.textContent = added > 0
+          ? '展开 ' + newIds.length + ' 个邻居 · 双击可收起'
+          : '该节点没有更多依赖';
         return data;
       })
       .then(function (data) { if (data.node) showInfo(data.node); })
@@ -190,34 +236,6 @@
         expanding = false;
         container.classList.remove('loading');
       });
-  }
-
-  // focusOn 聚焦：只保留 id 及其直接邻居（含相关边），删除其他节点，
-  // 并将邻居环形排列在 id 周围（避免保留旧布局中远离中心的坐标）。
-  // 展开顶层节点后调用，使探索视图聚焦于该入口的依赖。
-  function focusOn(id) {
-    var data = graph.getData();
-    var keep = new Set([id]);
-    (data.edges || []).forEach(function (e) {
-      if (e.source === id) keep.add(e.target);
-      if (e.target === id) keep.add(e.source);
-    });
-    var nodes = (data.nodes || []).filter(function (n) { return keep.has(n.id); });
-    var edges = (data.edges || []).filter(function (e) {
-      return keep.has(e.source) && keep.has(e.target);
-    });
-    seenNodes.clear();
-    nodes.forEach(function (n) { seenNodes.add(n.id); });
-    seenEdges.clear();
-    edges.forEach(function (e) {
-      seenEdges.add(e.source + '→' + e.target + '|' + ((e.data && e.data.kind) || ''));
-    });
-    // 清理非保留节点的展开记录
-    Array.from(expandedMap.keys()).forEach(function (k) {
-      if (!keep.has(k)) expandedMap.delete(k);
-    });
-    graph.setData({ nodes: nodes, edges: edges });
-    arrangeLayers(id); // 三行布局：caller 上行、节点中间、callee 下行
   }
 
   // arrangeLayers 三行排布被展开节点的关联：
@@ -291,12 +309,6 @@
   // removeEdgeData/removeNodeData 增量删除在批处理时可能引用已删节点
   // （"Node not found"），全量重建规避该坑。
   function collapseNode(id) {
-    // 顶层节点收起：回到入口视图（重新加载 roots）
-    if (rootIds.has(id)) {
-      resetGraph();
-      loadRoots();
-      return;
-    }
     var children = expandedMap.get(id);
     if (!children || children.size === 0) return;
 

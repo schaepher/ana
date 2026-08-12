@@ -16,6 +16,23 @@
     #header .legend { display: flex; gap: 14px; font-size: 12px; color: #c9c9d4; }
     #header .legend span { display: flex; align-items: center; gap: 4px; }
     .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    #search-box { position: relative; flex: 1; max-width: 420px; margin: 0 16px; }
+    #entry-input {
+      width: 100%; padding: 6px 12px; border-radius: 6px; border: 1px solid #43435c;
+      background: #2a2a3d; color: #fff; font-size: 13px; outline: none;
+    }
+    #entry-input:focus { border-color: #1677ff; }
+    #entry-list {
+      position: absolute; top: 100%; left: 0; right: 0; margin: 4px 0 0; padding: 4px 0;
+      background: #fff; border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.2);
+      max-height: 300px; overflow-y: auto; display: none; list-style: none; z-index: 20;
+    }
+    #entry-list li {
+      padding: 6px 12px; font-size: 12px; color: #333; cursor: pointer;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    #entry-list li:hover { background: #e6f0ff; }
+    #entry-list li .flags { color: #86909c; margin-left: 6px; }
     #container { position: absolute; top: 52px; left: 0; right: 0; bottom: 0; background: #fff; }
     #tip {
       position: absolute; top: 64px; left: 50%; transform: translateX(-50%);
@@ -36,14 +53,14 @@
 <body>
   <div id="header">
     <h1>codeintel · 依赖探索</h1>
+    <div id="search-box">
+      <input id="entry-input" type="text" placeholder="搜索顶层入口（main / 服务 / 框架回调）…" autocomplete="off">
+      <ul id="entry-list"></ul>
+    </div>
     <div class="legend">
       <span><i class="dot" style="background:#eb2f96"></i>main 入口</span>
       <span><i class="dot" style="background:#fa541c"></i>HTTP 服务</span>
       <span><i class="dot" style="background:#f5222d"></i>gRPC 服务</span>
-      <span><i class="dot" style="background:#1677ff"></i>函数/方法</span>
-      <span><i class="dot" style="background:#52c41a"></i>结构体</span>
-      <span><i class="dot" style="background:#722ed1"></i>接口</span>
-      <span><i class="dot" style="background:#fa8c16"></i>包</span>
       <span><i class="dot" style="background:#531dab"></i>框架回调</span>
       <span style="color:#aaa">—</span>
       <span><i class="dot" style="background:#1677ff"></i>选中节点出边</span>
@@ -52,7 +69,7 @@
     </div>
   </div>
   <div id="container"></div>
-  <div id="tip">初始展示顶层入口 · 单击节点查看出入边（蓝=出边，红=入边，其余黑色）· 双击展开/收起依赖</div>
+  <div id="tip">搜索并选择顶层入口后展示 · 双击节点展开/收起依赖 · 单击节点查看出入边</div>
   <div id="info"></div>
   <script src="app.js"></script>
 </body>
