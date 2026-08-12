@@ -37,9 +37,29 @@ func (s *Server) Handler() http.Handler {
 	defer logger.Debug("exit (Server).Handler")
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/roots", s.handleRoots)
+	mux.HandleFunc("/api/search", s.handleSearch)
 	mux.HandleFunc("/api/expand", s.handleExpand)
 	mux.Handle("/", http.FileServer(http.FS(s.web)))
 	return mux
+}
+
+// handleSearch 全库符号搜索（名称/ID/文件模糊匹配，上限 50）。
+func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query().Get("q")
+	if q == "" {
+		writeErr(w, http.StatusBadRequest, "missing q")
+		return
+	}
+	found, err := s.repo.GetSymbolByName(q)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	nodes := make([]NodeJSON, 0, len(found))
+	for _, n := range found {
+		nodes = append(nodes, nodeToJSON(n))
+	}
+	writeJSON(w, map[string]any{"nodes": nodes})
 }
 
 // NodeJSON 节点输出格式。

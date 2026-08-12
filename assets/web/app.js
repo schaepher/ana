@@ -145,19 +145,43 @@
       });
   }
 
-  // 输入过滤 → 渲染下拉列表
+  // 输入过滤（防抖 200ms）→ 本地入口 + 全库符号搜索合并渲染
+  var searchTimer = null;
+  var searchSeq = 0;
   entryInput.addEventListener('input', function () {
     var q = entryInput.value.trim().toLowerCase();
     if (!q) {
       entryList.style.display = 'none';
       return;
     }
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(function () { doSearch(q); }, 200);
+  });
+
+  function doSearch(q) {
+    var seq = ++searchSeq;
     var matched = allEntries.filter(function (e) {
       return (e.name + ' ' + e.id + ' ' + (e.file || '') + ' ' + (e.flags || []).join(' '))
         .toLowerCase().indexOf(q) >= 0;
-    }).slice(0, 50);
-    renderEntryList(matched);
-  });
+    });
+    // 全库符号搜索补充（入口之外的符号，如任意函数/方法）
+    fetch('/api/search?q=' + encodeURIComponent(q))
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (seq !== searchSeq) return; // 丢弃过期结果
+        var seen = new Set(matched.map(function (e) { return e.id; }));
+        (data.nodes || []).forEach(function (n) {
+          if (!seen.has(n.id)) {
+            seen.add(n.id);
+            matched.push(n);
+          }
+        });
+        renderEntryList(matched.slice(0, 50));
+      })
+      .catch(function () {
+        if (seq === searchSeq) renderEntryList(matched.slice(0, 50));
+      });
+  }
 
   entryInput.addEventListener('blur', function () {
     setTimeout(function () { entryList.style.display = 'none'; }, 150);
