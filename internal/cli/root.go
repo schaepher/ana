@@ -2,13 +2,14 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"go.uber.org/zap"
 	"os"
 )
 
-// Main 是 CLI 入口（cmd/codeintel 调用）。
-func Main(args []string) int {
+// Main 是 CLI 入口（cmd/codeintel 调用）。ctx 携带 root span（链路追踪）。
+func Main(ctx context.Context, args []string) int {
 	logger := zap.L()
 	logger.Debug("enter Main")
 	defer logger.Debug("exit Main")
@@ -18,11 +19,11 @@ func Main(args []string) int {
 	}
 	switch args[0] {
 	case "init":
-		return cmdInit(args[1:])
+		return cmdInit(ctx, args[1:])
 	case "query":
 		return cmdQuery(args[1:])
 	case "serve":
-		return cmdServe(args[1:])
+		return cmdServe(ctx, args[1:])
 	case "clean":
 		return cmdClean(args[1:])
 	case "help", "-h", "--help":

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -18,7 +19,7 @@ import (
 
 // cmdServe 实现 `codeintel serve --repo <path> [--addr :8090]`：
 // 提供图探索 HTTP 接口与前端页面（TD.md 2.3 中 serve 守护进程的 MVP 形态）。
-func cmdServe(args []string) int {
+func cmdServe(ctx context.Context, args []string) int {
 	logger := zap.L()
 	logger.Debug("enter cmdServe")
 	defer logger.Debug("exit cmdServe")
@@ -64,7 +65,7 @@ func cmdServe(args []string) int {
 
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           server.New(repo, webFS).Handler(),
+		Handler:           server.New(ctx, repo, webFS).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	fmt.Printf("codeintel serve 已启动: http://localhost%s  （仓库: %s）\n", *addr, abs)

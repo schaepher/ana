@@ -26,7 +26,10 @@ go build -o codeintel ./cmd/codeintel
 ```
 internal/domain/          领域模型：CodeEntity/Fact/CanonicalID、IndexerPort/CodeRepository 端口
 internal/canonicalizer/   Canonical ID 生成、SCIP symbol 解析（FromScipSymbol）
-internal/logging/         ctx ↔ *zap.Logger（WithLogger/FromContext），entrylog 注入的日志用
+internal/logging/         ctx ↔ *zap.Logger + OpenTelemetry 链路追踪初始化。
+                          Setup() 建 development logger（debug 级，stderr）与
+                          stdouttrace 导出器；FromContext 在 span context 有效时
+                          附加 trace_id/span_id 字段（entrylog 注入的日志用）
 internal/orchestrator/    全量构建编排：并行适配器、独立超时 10min、分批 1000 条事务、降级报告
 internal/infrastructure/
   scip/                   调用 scip-go 生成 SCIP 索引 → 符号节点 + IMPLEMENTS 边（conf 1.0）
@@ -40,6 +43,15 @@ internal/cli/             init / serve / query / clean 命令
 assets/web/               AntV G6 v5 前端（go:embed 嵌入；index.html + app.js）
 scripts/entrylog/         AST 日志注入工具（见下）
 ```
+
+## 链路追踪（OpenTelemetry）
+
+- 入口（main）创建 root span（`codeintel.main`），ctx 贯穿 `cli.Main` → cmdInit/cmdServe
+- `logging.FromContext(ctx)` 从 ctx 提取 span context，日志自动带 trace_id/span_id
+- serve 的 Server 持有带 span 的 ctx，handler 日志同链路
+- **坑**：`os.Exit` 不执行 defer——span.End 与 tp.Shutdown 必须在 os.Exit 前显式调用，
+  否则 span 不导出；`zap.NewDevelopment()` 返回双值需 `zap.Must` 包裹
+- 导出器为 stdout（PrettyPrint）；生产环境需替换为 OTLP 等
 
 ## entrylog 日志注入工具
 

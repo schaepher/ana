@@ -17,7 +17,7 @@ import (
 )
 
 // cmdInit 实现 `codeintel init --repo <path>`（TD.md 6.1）。
-func cmdInit(args []string) int {
+func cmdInit(ctx context.Context, args []string) int {
 	logger := zap.L()
 	logger.Debug("enter cmdInit")
 	defer logger.Debug("exit cmdInit")
@@ -53,7 +53,7 @@ func cmdInit(args []string) int {
 	defer db.Close()
 
 	orch := orchestrator.New(&domain.Repository{Path: abs, Module: module}, db)
-	result, err := orch.FullBuild(context.Background())
+	result, err := orch.FullBuild(ctx)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1

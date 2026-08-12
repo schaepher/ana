@@ -3,6 +3,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -10,26 +11,28 @@ import (
 
 	"github.com/schaepher/codeintel/internal/domain"
 	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
+	"github.com/schaepher/codeintel/internal/logging"
 	"go.uber.org/zap"
 )
 
 // Server 承载图查询 HTTP 接口。
 type Server struct {
+	ctx  context.Context // 携带 root span，handler 日志由此取带链路信息的 logger
 	repo *sqlite.Repo
 	web  fs.FS // 前端静态资源
 }
 
 // New 创建 Server。
-func New(repo *sqlite.Repo, webFS fs.FS) *Server {
-	logger := zap.L()
+func New(ctx context.Context, repo *sqlite.Repo, webFS fs.FS) *Server {
+	logger := logging.FromContext(ctx)
 	logger.Debug("enter New")
 	defer logger.Debug("exit New")
-	return &Server{repo: repo, web: webFS}
+	return &Server{ctx: ctx, repo: repo, web: webFS}
 }
 
 // Handler 返回 HTTP 处理器。
 func (s *Server) Handler() http.Handler {
-	logger := zap.L()
+	logger := logging.FromContext(s.ctx)
 	logger.Debug("enter (Server).Handler")
 	defer logger.Debug("exit (Server).Handler")
 	mux := http.NewServeMux()
@@ -80,7 +83,7 @@ func writeErr(w http.ResponseWriter, code int, msg string) {
 
 // handleRoots 返回顶层入口节点（main 入口 + HTTP/gRPC 服务入口）。
 func (s *Server) handleRoots(w http.ResponseWriter, r *http.Request) {
-	logger := zap.L()
+	logger := logging.FromContext(s.ctx)
 	logger.Debug("enter (Server).handleRoots")
 	defer logger.Debug("exit (Server).handleRoots")
 	roots, err := s.repo.GetRoots()
@@ -97,7 +100,7 @@ func (s *Server) handleRoots(w http.ResponseWriter, r *http.Request) {
 
 // handleExpand 返回某节点的一级邻居（双向）。
 func (s *Server) handleExpand(w http.ResponseWriter, r *http.Request) {
-	logger := zap.L()
+	logger := logging.FromContext(s.ctx)
 	logger.Debug("enter (Server).handleExpand")
 	defer logger.Debug("exit (Server).handleExpand")
 	id := r.URL.Query().Get("id")
