@@ -164,9 +164,6 @@ func nodeToJSON(n *domain.CodeEntity) NodeJSON {
 	if n.Name == "main" && n.Kind == domain.KindFunction {
 		j.Flags = append(j.Flags, "main")
 	}
-	if n.Name == "init" && n.Kind == domain.KindFunction {
-		j.Flags = append(j.Flags, "init")
-	}
 	if n.Property("framework") == "true" {
 		j.Flags = append(j.Flags, "framework")
 	}

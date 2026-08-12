@@ -28,7 +28,6 @@
   };
   var FLAG_COLOR = {
     main: '#eb2f96',
-    init: '#13c2c2',
     http: '#fa541c',
     grpc: '#f5222d',
     framework: '#531dab'

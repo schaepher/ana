@@ -384,7 +384,6 @@ SELECT id FROM reach LIMIT 2000`
 
 // GetRoots 返回顶层入口节点（前端初始视图）：
 //   - main 入口函数（排除测试包生成的 main，其 id 形如 <pkg>.test:main）
-//   - init 函数（框架注册常发生在 init() 中，作为入口展开）
 //   - HTTP 服务入口（serves_http 标记）
 //   - gRPC 服务入口（serves_grpc 标记）
 //   - 框架回调 struct：方法未被当前 module 其他文件调用（由框架调用）
@@ -401,7 +400,6 @@ WHERE file_path IS NOT NULL
   AND file_path NOT LIKE '%_test.go'
   AND file_path NOT LIKE '../%'
   AND ((name = 'main' AND kind = 'function' AND id NOT LIKE '%.test:main')
-   OR (name = 'init' AND kind = 'function' AND id NOT LIKE '%.test:init')
    OR json_extract(properties, '$.serves_http') = 'true'
    OR json_extract(properties, '$.serves_grpc') = 'true')
 ORDER BY kind, name LIMIT 200`)
