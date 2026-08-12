@@ -301,10 +301,35 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 				}
 			}
 		}
+		calleeID, calleeKind := fnID(callee)
+		// 函数作为参数传入（回调）：参数函数 → 接收函数（passes_to）。
+		// 接收者可为外部框架函数（如 net/http.HandleFunc），为其建轻量节点
+		// （file_path 为空），使"作为谁的参数"关系可见。须在外部函数
+		// 跳过逻辑之前处理。
+		if calleeID != "" && calleeID != callerID {
+			for _, arg := range call.Args {
+				fn := argFuncRef(pkg, arg)
+				if fn == nil || fn.Pkg() == nil || !isInModule(fn.Pkg().Path(), repo.Module) {
+					continue // 参数函数必须是项目内符号（有节点）
+				}
+				paramID, paramKind := fnID(fn)
+				if paramID == "" || paramID == calleeID {
+					continue
+				}
+				_ = emit(domain.Item{Node: nodeFor(repo, pkg, fn, paramID, paramKind, nil)})
+				_ = emit(domain.Item{Node: nodeFor(repo, pkg, callee, calleeID, calleeKind, nil)})
+				_ = emit(domain.Item{Fact: &domain.Fact{
+					SourceID:   paramID,
+					TargetID:   calleeID,
+					Kind:       domain.FactPassesTo,
+					ToolSource: domain.ToolCodeGraph,
+					Confidence: 0.8,
+				}})
+			}
+		}
 		if callee.Pkg() == nil || !isInModule(callee.Pkg().Path(), repo.Module) {
 			return true // 内建/外部函数不建边
 		}
-		calleeID, calleeKind := fnID(callee)
 		if calleeID == "" || calleeID == callerID {
 			return true
 		}
@@ -328,6 +353,35 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 		return true
 	})
 	return nil
+}
+
+// argFuncRef 将调用参数解析为函数引用（作为参数传入的回调）：
+//
+//	Ident（home）                          → 具名函数
+//	SelectorExpr（s.PageHome / pkg.F）     → 方法/包函数引用
+//	CallExpr（http.HandlerFunc(home)）     → 解包 HandlerFunc 包装
+//
+// 非函数引用（变量/字面量/匿名函数）返回 nil。
+func argFuncRef(pkg *packages.Package, arg ast.Expr) *types.Func {
+	var obj types.Object
+	switch a := arg.(type) {
+	case *ast.Ident:
+		obj = pkg.TypesInfo.Uses[a]
+	case *ast.SelectorExpr:
+		obj = pkg.TypesInfo.Uses[a.Sel]
+	case *ast.CallExpr:
+		// http.HandlerFunc(f) 包装解包
+		if sel, ok := a.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "HandlerFunc" && len(a.Args) == 1 {
+			if id, ok := a.Args[0].(*ast.Ident); ok {
+				obj = pkg.TypesInfo.Uses[id]
+			}
+		}
+	}
+	if obj == nil {
+		return nil
+	}
+	fn, _ := obj.(*types.Func)
+	return fn
 }
 
 // markHTTPHandlers 标记实现 net/http.Handler 接口（ServeHTTP 方法）的项目内
