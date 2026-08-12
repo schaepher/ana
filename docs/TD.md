@@ -20,6 +20,7 @@
 9. [性能与降级](#9-性能与降级)
 10. [安全与运维](#10-安全与运维)
 11. [设计树决策记录](#11-设计树决策记录)
+12. [实现补充记录（v2.1）](#12-实现补充记录v21)
 
 ---
 
@@ -500,3 +501,99 @@ callee/caller 列表上限 50 条，超出则 `truncated: true`。
 ---
 
 **文档结束**。所有架构决策已达成共享理解，系统可进入开发阶段。
+## 12. 实现补充记录（v2.1）
+
+v2.0 设计树封闭后，MVP 实现过程中补充与调整的能力记录。凡与 v2.0
+正文冲突处，以本节为准。
+
+### 12.1 新增 CLI 命令
+
+| 命令 | 说明 |
+| :--- | :--- |
+| `codeintel init --repo <path>` | 全量构建（v2.0 已有） |
+| `codeintel serve --repo <path> [--addr :8090]` | 图探索 Web 服务（HTTP API + 内嵌前端） |
+| `codeintel query symbol\|callers\|callees\|impact` | 符号与调用关系查询（CLI 验收要求，v2.0 未定义 CLI 查询） |
+| `codeintel clean --repo <path>` | 删除索引数据库 |
+| `codeintel version` | 输出编译时的 commit hash（Makefile ldflags 注入，兜底 debug.ReadBuildInfo） |
+
+### 12.2 顶层入口识别（roots）
+
+入口 = main 函数 + 服务入口 + 框架回调 struct，且必须落在当前 module
+内的文件（file_path 非空、非 `_test.go`、非仓库外路径）。
+
+1. **main 入口**：各 main 包的 main 函数（排除测试生成的 main）。
+2. **HTTP 服务入口**（`serves_http` 标记）：
+   - 函数调用 net/http 包（含 `srv.ListenAndServe()` 等方法调用）
+   - 实现 `http.Handler` 接口的类型（ServeHTTP 方法，值/指针接收者均可）
+   - `http.Handle` / `http.HandleFunc`（含 mux.Handle）的 handler 参数
+     （具名函数或 `http.HandlerFunc(f)` 包装）
+3. **gRPC 服务入口**（`serves_grpc` 标记）：
+   - 函数调用 google.golang.org/grpc 包
+   - 调用 `.pb.go` 中定义的 `RegisterXxxServer`（protoc 生成惯例）的函数
+   - **注册调用的第二个参数（服务实现）**：`&T{}` 复合字面量 /
+     `newT()` 构造函数 / 变量，解析为具体类型作为顶层服务入口
+4. **框架回调 struct**：带方法的 struct，其方法未被当前 module 其他
+   文件调用（无跨文件 CALLS 入边）→ 推测由框架注册/回调调用，作为顶层。
+   判定原因逐条输出 INFO 日志。
+5. **init() 不作为入口**（v2.0 曾计划，实现后移除：框架注册由 2-4 覆盖）。
+
+### 12.3 图探索前端（AntV G6 v5）
+
+- **交互**：单击选中节点（显示符号信息）；双击展开/收起依赖；
+  单击空白取消选中。
+- **聚焦模式**：展开顶层（roots 入口）节点后，删除与它不关联的节点，
+  仅保留它与其直接邻居；双击收起顶层节点回到入口视图（重新加载 roots）。
+- **三行布局**：展开后按三行排布——上行 = callers（calls 入边）、
+  中间行 = 节点本身 + 非 calls 关联（implements/imports 等）、
+  下行 = callees（calls 出边）。聚焦后不跑 force 布局（避免覆盖）。
+- **选中染色**：单击节点后，其出边蓝色 `#1677ff`、入边红色 `#f5222d`，
+  其他边及未选中时黑色。
+- **边样式**：实线=调用，虚线=实现，点线=导入；边上标注关系说明。
+- **G6 v5 已知坑**（playwright 实测）：
+  - `draw()` 不触发布局，增量数据须显式 `graph.layout()`
+  - force 布局不处理孤立节点与增量新节点 → addNode 预置网格初始位置
+  - `updateEdgeData`/`draw`/`setData` 不重算渲染期样式函数 →
+    染色用 setElementState 状态变化触发重渲染
+  - `removeEdgeData`+`removeNodeData` 批处理引用已删节点报
+    "Node not found" → 收起用 setData 全量重建
+  - 坐标转换 API 参数为数组：`getElementPosition(id)`、
+    `getClientByCanvas([x, y])` 返回 `[x, y, z]`
+
+### 12.4 索引范围与数据来源
+
+- **排除 `_test.go`**：scip-go `--skip-tests` + AST 适配器关闭 Tests 模式，
+  测试符号（TestXxx、测试 main）不入图。
+- **REFERENCES 引用边未实现**：scip-go 的定义 occurrence 只覆盖符号名
+  （不含函数体），引用无法归属到引用者，引用关系由 CALLS 边覆盖。
+- **signature 由 AST 适配器生成**（`types.ObjectString`）：SCIP v0.7.1
+  协议不输出 signature 字段。
+- **canonical ID**：`symbol:go:<import_path>:<name>`，方法统一
+  `(T).method`（值/指针接收者不区分）；文件 `file:<relpath>`，
+  提交 `commit:<sha>`，包名取路径末段。
+
+### 12.5 置信度阈值（设计矛盾修正）
+
+**查询阈值 0.8**。v2.0 决策 10 的 0.85 与 5.1 表（CodeGraph=0.8）矛盾：
+0.85 会把全部调用边过滤掉。调用边（conf 0.8）必须可见，故取 0.8。
+
+### 12.6 日志与链路追踪
+
+- **日志**：zap development logger，debug 级输出到 **stdout**。
+- **OpenTelemetry**：logging.Setup 初始化 TracerProvider（stdout 导出器）；
+  `logging.FromContext(ctx)` 在 span context 有效时自动附加
+  `trace_id`/`span_id` 字段；main 创建 root span 贯穿 CLI。
+- **entrylog 工具**：`scripts/entrylog`（AST 只读定位 + 纯文本插入），
+  为所有顶层函数/方法注入 `logger := zap.L()`（无 ctx）或
+  `logging.FromContext(ctx)`（有 ctx）+ enter/exit Debug 日志；
+  幂等可重跑；排除 `internal/logging` 自身与 scripts/。
+
+### 12.7 仍为降级项（v2.0 未实现）
+
+- MCP serve（explore_symbol 等 5 个工具）与 MCP 工具契约
+- 增量构建（Git Hook 触发、stale 包刷新）
+- Joern（数据流/CFG）、Semble（语义向量，sqlite-vec 表未建）
+- LLM 摘要（LLMPort 未接入）
+
+---
+
+**v2.1 补充结束**。后续变更继续追加本节。
