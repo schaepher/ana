@@ -121,6 +121,11 @@ defer logger.Debug("exit <name>")
     时才求值（读闭包 selectedId）；顺序颠倒时旧染色的异步绘制后完成覆盖新染色，
     大图中快速点击稳定复现（14 节点图 13/14 次出错），表现为切换节点后边色不重置、
     点空白才恢复。节点标签为两行：`dir/basename` + 符号名（nodeLabel）。
+    **剪枝规则**：展开节点时同向剪枝（pruneSiblings + rowClass）——只移除与展开
+    节点同侧的兄弟（展开 callee 保留 caller 顶行，反之亦然）；已展开兄弟保留；
+    rowClass 方向分类与三行布局一致（calls/initializes 出=down、implements/
+    imports 出=up、其余=mid）。曾为"移除全部兄弟"，会把唯一顶行 caller 剪掉
+    导致链路断头（用户反馈后修正）。
 11. **serve 运维坑**：`serve` 打开的是 .codeintel/codeintel.db；重建索引
     （rm -rf .codeintel 或 init 清库）会留下持有已删除文件句柄的旧 serve 进程，
     表现为 API 返回旧数据。改库后须重启 serve。

@@ -417,7 +417,9 @@
   }
 
   // pruneSiblings 展开节点后的剪枝（用 setData 全量重建）：
-  //   1. 节点有父：移除其兄弟节点（父的其他未展开子节点及其子树）
+  //   1. 节点有父：同向剪枝——只移除与展开节点同侧（同方向，见 rowClass）
+  //      的兄弟，另一侧保留（展开 callee 时保留 caller，链路顶行不消失）；
+  //      已展开的兄弟节点（有展开记录）保留；方向无法判断时按旧行为移除全部
   //   2. 节点无父（根）：移除其子节点的其他父节点（其他展开分支）
   function pruneSiblings(id) {
     var parent = parentOf(id);
@@ -426,9 +428,11 @@
     if (parent) {
       var rec = expandedMap.get(parent);
       if (!rec) return;
-      // 已展开的兄弟节点（有展开记录）保留，不移除其分支
+      var targetClass = rowClass(parent, id);
       var siblings = rec.nodes.filter(function (cid) {
-        return cid !== id && !expandedMap.has(cid);
+        if (cid === id || expandedMap.has(cid)) return false;
+        if (targetClass === null) return true; // 方向未知：按旧行为移除
+        return rowClass(parent, cid) === targetClass;
       });
       siblings.forEach(function (sid) {
         collectSubtree(sid, toRemove, edgesToRemove);
@@ -495,6 +499,31 @@
       if (!found && rec.nodes.indexOf(childId) >= 0) found = pid;
     });
     return found;
+  }
+
+  // rowClass 判断节点 other 相对中心节点 center 的布局方向（与 arrangeLayers
+  // 相同的分类）："up"=caller 行、"down"=callee 行、"mid"=中间行（对象关系
+  // uses/passes_to/of_type）；图中无边时返回 null。用于同向剪枝：展开节点时
+  // 只移除同侧兄弟。
+  function rowClass(center, other) {
+    var data = graph.getData();
+    var e = (data.edges || []).find(function (x) {
+      return (x.source === center && x.target === other) ||
+             (x.source === other && x.target === center);
+    });
+    if (!e) return null;
+    var kind = (e.data && e.data.kind) || '';
+    var down = e.source === center;
+    switch (kind) {
+      case 'calls':
+      case 'initializes':
+        return down ? 'down' : 'up';
+      case 'implements':
+      case 'imports':
+        return down ? 'up' : 'down';
+      default:
+        return 'mid';
+    }
   }
 
   // treeRoot 返回展开树根：优先用户选择的入口；否则取未被任何展开记录

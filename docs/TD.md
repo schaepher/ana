@@ -548,6 +548,13 @@ v2.0 设计树封闭后，MVP 实现过程中补充与调整的能力记录。�
   中间行 = 节点本身 + 非 calls 关联（implements/imports/initializes
   等）、下行 = callees（calls 出边）。展开后不跑 force 布局
   （避免覆盖三行位置），其他已展开节点位置不动。
+- **同向剪枝**（2026-08-13 修正）：展开节点时只移除与它同侧（同方向）
+  的兄弟——展开 callee 移除其他 callee（保留 caller，链路顶行不消失），
+  展开 caller 移除其他 caller（保留 callee）；已展开的兄弟保留；方向
+  无法判断时退回移除全部。方向分类与三行布局一致（rowClass：
+  calls/initializes 出=down，implements/imports 出=up，其余=mid）。
+  此前为"移除全部未展开兄弟"，展开 callee 会把唯一顶行 caller（如
+  cmdInit）也剪掉导致链路断头（用户实测反馈后修正）。
 - **选中染色**：单击节点后，其出边蓝色 `#1677ff`、入边红色 `#f5222d`，
   其他边及未选中时黑色。
 - **节点标签（两行）**：第一行文件所在目录 + basename（如
