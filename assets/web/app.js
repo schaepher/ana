@@ -247,9 +247,15 @@
         // 展开后移除兄弟节点（父节点的其他子节点及其展开子树），
         // 保留一条干净的链路
         pruneSiblings(id);
-        // 三行排布被展开节点及其关联（caller 上行/节点中间/callee 下行），
-        // 其他已展开节点位置不动；不跑 force 避免覆盖布局
-        arrangeLayers(id);
+        // 布局：有父的节点展开用整树层级布局（根最上、逐层向下），
+        // 避免多级链三行布局把每层父节点都排到同一行导致重叠；
+        // 根（无父）展开用三行排布（caller 上行/节点中间/callee 下行）
+        if (parentOf(id)) {
+          var root = treeRoot();
+          if (root) relayoutTree(root);
+        } else {
+          arrangeLayers(id);
+        }
         graph.draw(); // updateNodeData/addNodeData 后不自动渲染，须显式重绘
         tip.textContent = added > 0
           ? '展开 ' + newIds.length + ' 个邻居 · 双击可收起'
@@ -431,9 +437,18 @@
     keepEdges.forEach(function (e) {
       seenEdges.add(e.source + '→' + e.target + '|' + ((e.data && e.data.kind) || ''));
     });
-    // 清理被删除节点的展开记录
+    // 清理被删除节点的展开记录，并从父记录的 children 中移除已删节点
     Array.from(expandedMap.keys()).forEach(function (k) {
-      if (!keepNodes.some(function (n) { return n.id === k; })) expandedMap.delete(k);
+      if (!keepNodes.some(function (n) { return n.id === k; })) {
+        expandedMap.delete(k);
+        return;
+      }
+      var rec = expandedMap.get(k);
+      if (rec) {
+        rec.nodes = rec.nodes.filter(function (cid) {
+          return keepNodes.some(function (n) { return n.id === cid; });
+        });
+      }
     });
     graph.setData({ nodes: keepNodes, edges: keepEdges });
   }
@@ -480,6 +495,7 @@
   function relayoutTree(rootId) {
     var data = graph.getData();
     if (!data.nodes.some(function (n) { return n.id === rootId; })) return;
+    var nodeSet = new Set(data.nodes.map(function (n) { return n.id; }));
     var layers = [[rootId]];
     var assigned = new Set([rootId]);
     var frontier = [rootId];
@@ -489,7 +505,7 @@
         var rec = expandedMap.get(pid);
         if (!rec) return;
         rec.nodes.forEach(function (cid) {
-          if (assigned.has(cid)) return;
+          if (assigned.has(cid) || !nodeSet.has(cid)) return; // 已删节点跳过
           assigned.add(cid);
           next.push(cid);
         });
