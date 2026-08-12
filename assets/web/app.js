@@ -224,6 +224,9 @@
         if (newIds.length || newEdgeKeys.length) {
           expandedMap.set(id, { nodes: newIds, edges: newEdgeKeys });
         }
+        // 展开后移除兄弟节点（父节点的其他子节点及其展开子树），
+        // 保留一条干净的链路
+        pruneSiblings(id);
         // 三行排布被展开节点及其关联（caller 上行/节点中间/callee 下行），
         // 其他已展开节点位置不动；不跑 force 避免覆盖布局
         arrangeLayers(id);
@@ -361,6 +364,60 @@
       relayoutTree(root);
     }
     graph.draw();
+  }
+
+  // pruneSiblings 移除被展开节点的兄弟节点（父节点的其他子节点及其
+  // 递归展开子树），保留从根到当前节点的干净链路。用 setData 全量重建。
+  function pruneSiblings(id) {
+    var parent = parentOf(id);
+    if (!parent) return;
+    var rec = expandedMap.get(parent);
+    if (!rec) return;
+    var siblings = rec.nodes.filter(function (cid) { return cid !== id; });
+    if (!siblings.length) return;
+
+    var toRemove = new Set();
+    var edgesToRemove = new Set();
+    siblings.forEach(function (sid) {
+      collectSubtree(sid, toRemove, edgesToRemove);
+    });
+    var data = graph.getData();
+    var keepNodes = (data.nodes || []).filter(function (n) { return !toRemove.has(n.id); });
+    var keepEdges = (data.edges || []).filter(function (e) {
+      if (toRemove.has(e.source) || toRemove.has(e.target)) return false;
+      return !edgesToRemove.has(e.source + '→' + e.target + '|' + ((e.data && e.data.kind) || ''));
+    });
+    seenNodes.clear();
+    keepNodes.forEach(function (n) { seenNodes.add(n.id); });
+    seenEdges.clear();
+    keepEdges.forEach(function (e) {
+      seenEdges.add(e.source + '→' + e.target + '|' + ((e.data && e.data.kind) || ''));
+    });
+    // 清理被删除节点的展开记录
+    Array.from(expandedMap.keys()).forEach(function (k) {
+      if (!keepNodes.some(function (n) { return n.id === k; })) expandedMap.delete(k);
+    });
+    graph.setData({ nodes: keepNodes, edges: keepEdges });
+  }
+
+  // collectSubtree 递归收集节点及其展开子树（节点 + 边），并清理展开记录。
+  function collectSubtree(id, toRemove, edgesToRemove) {
+    var rec = expandedMap.get(id);
+    if (rec) {
+      rec.edges.forEach(function (k) { edgesToRemove.add(k); });
+      rec.nodes.forEach(function (cid) { collectSubtree(cid, toRemove, edgesToRemove); });
+      expandedMap.delete(id);
+    }
+    toRemove.add(id);
+  }
+
+  // parentOf 返回展开记录中包含 childId 的父节点（该子节点由谁展开）。
+  function parentOf(childId) {
+    var found = null;
+    expandedMap.forEach(function (rec, pid) {
+      if (!found && rec.nodes.indexOf(childId) >= 0) found = pid;
+    });
+    return found;
   }
 
   // treeRoot 返回展开树根：优先用户选择的入口；否则取未被任何展开记录
