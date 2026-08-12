@@ -16,6 +16,8 @@
   // 展开记录：parentId → { nodes: 新增节点 id, edges: 新增边 key }（双击收起用）。
   // 注意：邻居可能已在图中（roots 里的服务入口），其边也要记录才能完整收起。
   var expandedMap = new Map();
+  // 顶层入口节点集合：展开顶层节点后聚焦（删除不关联节点）
+  var rootIds = new Set();
 
   var KIND_COLOR = {
     function: '#1677ff',
@@ -121,7 +123,8 @@
     fetch('/api/roots')
       .then(function (res) { return res.json(); })
       .then(function (data) {
-        (data.nodes || []).forEach(addNode);
+        rootIds.clear();
+        (data.nodes || []).forEach(function (n) { rootIds.add(n.id); addNode(n); });
         // 注意：draw() 只渲染不布局，增量数据必须显式 layout() 否则节点堆在原点
         graph.layout();
         var n = data.nodes ? data.nodes.length : 0;
@@ -158,10 +161,12 @@
         if (newIds.length || newEdgeKeys.length) {
           expandedMap.set(id, { nodes: newIds, edges: newEdgeKeys });
         }
+        // 展开顶层节点后聚焦：删除与它不关联的节点（仅保留它与其直接邻居）
+        if (rootIds.has(id)) focusOn(id);
         graph.layout(); // 增量数据后必须显式布局，否则节点堆在原点
-        tip.textContent = added > 0
-          ? '展开 ' + newIds.length + ' 个邻居 · 双击可收起'
-          : '该节点没有更多依赖';
+        tip.textContent = rootIds.has(id)
+          ? '已聚焦 ' + id.split('/').pop() + ' 的依赖 · 双击收起返回入口'
+          : (added > 0 ? '展开 ' + newIds.length + ' 个邻居 · 双击可收起' : '该节点没有更多依赖');
         return data;
       })
       .then(function (data) { if (data.node) showInfo(data.node); })
@@ -174,12 +179,55 @@
       });
   }
 
+  // focusOn 聚焦：只保留 id 及其直接邻居（含相关边），删除其他节点。
+  // 展开顶层节点后调用，使探索视图聚焦于该入口的依赖。
+  function focusOn(id) {
+    var data = graph.getData();
+    var keep = new Set([id]);
+    (data.edges || []).forEach(function (e) {
+      if (e.source === id) keep.add(e.target);
+      if (e.target === id) keep.add(e.source);
+    });
+    var nodes = (data.nodes || []).filter(function (n) { return keep.has(n.id); });
+    var edges = (data.edges || []).filter(function (e) {
+      return keep.has(e.source) && keep.has(e.target);
+    });
+    seenNodes.clear();
+    nodes.forEach(function (n) { seenNodes.add(n.id); });
+    seenEdges.clear();
+    edges.forEach(function (e) {
+      seenEdges.add(e.source + '→' + e.target + '|' + ((e.data && e.data.kind) || ''));
+    });
+    // 清理非保留节点的展开记录
+    Array.from(expandedMap.keys()).forEach(function (k) {
+      if (!keep.has(k)) expandedMap.delete(k);
+    });
+    graph.setData({ nodes: nodes, edges: edges });
+  }
+
+  // resetGraph 清空图数据与全部状态（收起顶层节点后回到入口视图）。
+  function resetGraph() {
+    expandToken++;
+    if (typeof graph.stopLayout === 'function') graph.stopLayout();
+    seenNodes.clear();
+    seenEdges.clear();
+    expandedMap.clear();
+    selectedId = null;
+    graph.setData({ nodes: [], edges: [] });
+  }
+
   // collapseNode 收起节点的展开分支（递归）：删除子节点中只与该节点
   // 相连的（孤儿）节点；仍被其他节点引用的共享节点保留（但其与收起
   // 节点的边一并删除）。实现上用 setData 全量重建——G6 v5 的
   // removeEdgeData/removeNodeData 增量删除在批处理时可能引用已删节点
   // （"Node not found"），全量重建规避该坑。
   function collapseNode(id) {
+    // 顶层节点收起：回到入口视图（重新加载 roots）
+    if (rootIds.has(id)) {
+      resetGraph();
+      loadRoots();
+      return;
+    }
     var children = expandedMap.get(id);
     if (!children || children.size === 0) return;
 
@@ -316,8 +364,9 @@
     var id = evt.target.id;
     if (!id) return;
     if (expandedMap.has(id)) {
-      collapseNode(id);
+      // 先取名字：顶层节点收起会清空图，之后再查会找不到节点
       var name = nodeById(id);
+      collapseNode(id);
       tip.textContent = '已收起' + (name ? ' ' + name.name : '') + ' · 双击可重新展开';
     } else {
       expandNode(id);
