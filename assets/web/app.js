@@ -179,7 +179,8 @@
       });
   }
 
-  // focusOn 聚焦：只保留 id 及其直接邻居（含相关边），删除其他节点。
+  // focusOn 聚焦：只保留 id 及其直接邻居（含相关边），删除其他节点，
+  // 并将邻居环形排列在 id 周围（避免保留旧布局中远离中心的坐标）。
   // 展开顶层节点后调用，使探索视图聚焦于该入口的依赖。
   function focusOn(id) {
     var data = graph.getData();
@@ -203,6 +204,34 @@
       if (!keep.has(k)) expandedMap.delete(k);
     });
     graph.setData({ nodes: nodes, edges: edges });
+    arrangeAround(id); // 环形布局：邻居围绕被展开节点
+  }
+
+  // arrangeAround 将节点环形排列：id 居中，其直接邻居围绕（均匀角度）。
+  // 不跑 force 布局，避免旧坐标影响（focusOn 后不调用 graph.layout）。
+  function arrangeAround(id) {
+    var data = graph.getData();
+    if (!data.nodes.some(function (n) { return n.id === id; })) return;
+    var w = container.clientWidth || 1200;
+    var h = container.clientHeight || 800;
+    var cx = w / 2;
+    var cy = h / 2;
+    var neighbors = [];
+    (data.edges || []).forEach(function (e) {
+      if (e.source === id && neighbors.indexOf(e.target) < 0) neighbors.push(e.target);
+      else if (e.target === id && neighbors.indexOf(e.source) < 0) neighbors.push(e.source);
+    });
+    var radius = Math.min(w, h) / 2 - 100;
+    if (neighbors.length > 12) radius = Math.min(w, h) / 2 - 60; // 多邻居时半径取大
+    var updates = [{ id: id, style: { x: cx, y: cy } }];
+    neighbors.forEach(function (nid, i) {
+      var angle = -Math.PI / 2 + (2 * Math.PI * i) / Math.max(neighbors.length, 1);
+      updates.push({
+        id: nid,
+        style: { x: cx + radius * Math.cos(angle), y: cy + radius * Math.sin(angle) }
+      });
+    });
+    graph.updateNodeData(updates);
   }
 
   // resetGraph 清空图数据与全部状态（收起顶层节点后回到入口视图）。
