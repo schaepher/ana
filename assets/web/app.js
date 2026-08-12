@@ -213,11 +213,31 @@
       .then(function (data) {
         // 期间发生了收起/其他展开：放弃本次结果，避免已删节点复活
         if (myToken !== expandToken) return data;
+        // 展开时过滤"其他父"：已有父的节点展开后，caller 方向只保留父，
+        // 其他入边节点（潜在父）不展示，只保留子节点方向
+        var parent = parentOf(id);
+        var neighbors = data.neighbors || [];
+        var edges = data.edges || [];
+        if (parent) {
+          var blocked = new Set();
+          neighbors = neighbors.filter(function (n) {
+            if (n.id === parent) return true;
+            var e = edges.find(function (x) {
+              return (x.source === id && x.target === n.id) || (x.source === n.id && x.target === id);
+            });
+            if (e && e.direction === 'in') { blocked.add(n.id); return false; }
+            return true;
+          });
+          edges = edges.filter(function (e) {
+            var other = e.source === id ? e.target : e.source;
+            return !blocked.has(other);
+          });
+        }
         var added = 0;
         var newIds = [];
         var newEdgeKeys = [];
-        (data.neighbors || []).forEach(function (n) { if (addNode(n)) { added++; newIds.push(n.id); } });
-        (data.edges || []).forEach(function (e) {
+        neighbors.forEach(function (n) { if (addNode(n)) { added++; newIds.push(n.id); } });
+        edges.forEach(function (e) {
           var key = e.source + '→' + e.target + '|' + e.kind;
           if (addEdge(e)) { added++; newEdgeKeys.push(key); }
         });
