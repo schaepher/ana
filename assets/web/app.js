@@ -86,7 +86,7 @@
         labelBackground: true,
         labelBackgroundFill: 'rgba(255,255,255,.85)',
         labelBackgroundRadius: 3,
-        labelFontSize: 12,
+        labelFontSize: 10,
         cursor: 'pointer'
       },
       state: {
@@ -605,7 +605,7 @@
         y: 100 + Math.floor(idx / cols) * 140
       },
       data: {
-        label: shortLabel(n),
+        label: nodeLabel(n),
         kind: n.kind,
         flags: n.flags || [],
         full: n
@@ -644,13 +644,17 @@
     info.style.display = 'none';
   });
 
-  // 选中节点：先更新 selectedId 再触发状态变化重渲染。
-  // G6 v5 中 setElementState 的状态变化会触发全图样式函数重新求值，
-  // 边据此按新选中节点染色（updateEdgeData/draw 都不会重算样式函数）。
+  // 选中节点：先更新 selectedId 再触发状态变化重渲染（与 clearSelection
+  // 相同的顺序原则）。G6 v5 的 setElementState 是异步绘制（内部 await
+  // element.draw），且绘制时才会重算样式函数（读闭包 selectedId）：若先
+  // 调用 setElementState(旧节点, []) 再更新 selectedId，前一次异步绘制
+  // 会按旧选中节点染色并在之后完成，覆盖新染色——表现为直接点其他节点时
+  // 边色不重置。先更新参照变量，保证每次重渲染都按新选中节点求值。
   function selectNode(id) {
     if (selectedId === id) return;
-    if (selectedId) graph.setElementState(selectedId, []);
+    var prev = selectedId;
     selectedId = id;
+    if (prev) graph.setElementState(prev, []);
     graph.setElementState(id, ['selected']);
   }
 
@@ -699,10 +703,19 @@
 
   /* ---------- 工具 ---------- */
 
-  function shortLabel(n) {
+  // nodeLabel 两行节点标签：
+  //   第一行：文件所在目录 + basename（如 orchestrator/orchestrator.go）
+  //   第二行：符号名
+  // 无文件信息的节点（如 commit）只显示单行符号名。
+  function nodeLabel(n) {
     var name = n.name || '';
-    // 方法名 (T).m 已短；包节点显示包名
-    return name;
+    var f = n.file || '';
+    var parts = f.split('/');
+    var line1 = parts.length >= 2
+      ? parts[parts.length - 2] + '/' + parts[parts.length - 1]
+      : f;
+    if (!line1) return name;
+    return line1 + '\n' + name;
   }
 
   function escapeHtml(s) {

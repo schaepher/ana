@@ -116,6 +116,11 @@ defer logger.Debug("exit <name>")
     收起用 setData 全量重建（G6 v5 removeEdgeData/removeNodeData 增量删除在批处理
     时引用已删节点报 "Node not found"）；展开令牌（expandToken）使收起时飞行中的
     展开回调失效，防止已删节点复活。
+    **选中染色坑**（2026-08-13 实测）：选中切换必须先更新 selectedId 再调用
+    setElementState——该 API 异步绘制（内部 await element.draw），样式函数在绘制
+    时才求值（读闭包 selectedId）；顺序颠倒时旧染色的异步绘制后完成覆盖新染色，
+    大图中快速点击稳定复现（14 节点图 13/14 次出错），表现为切换节点后边色不重置、
+    点空白才恢复。节点标签为两行：`dir/basename` + 符号名（nodeLabel）。
 11. **serve 运维坑**：`serve` 打开的是 .codeintel/codeintel.db；重建索引
     （rm -rf .codeintel 或 init 清库）会留下持有已删除文件句柄的旧 serve 进程，
     表现为 API 返回旧数据。改库后须重启 serve。

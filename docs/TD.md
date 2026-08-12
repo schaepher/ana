@@ -550,6 +550,15 @@ v2.0 设计树封闭后，MVP 实现过程中补充与调整的能力记录。�
   （避免覆盖三行位置），其他已展开节点位置不动。
 - **选中染色**：单击节点后，其出边蓝色 `#1677ff`、入边红色 `#f5222d`，
   其他边及未选中时黑色。
+- **节点标签（两行）**：第一行文件所在目录 + basename（如
+  `orchestrator/orchestrator.go`），第二行符号名；无文件信息节点
+  （commit 等）单行显示符号名。字号 10。
+- **G6 v5 setElementState 异步绘制坑**（2026-08-13 实测）：选中切换
+  （A→B）必须先更新 selectedId 再调用 setElementState。setElementState
+  内部 await element.draw，样式函数在绘制时才求值（读闭包 selectedId）：
+  若先 setElementState(旧节点,[]) 再更新 selectedId，旧染色的异步绘制
+  后完成并覆盖新染色——大图中快速点击稳定复现（14 节点图 13/14 次出错），
+  点空白才重置。
 - **边样式**：实线=调用，虚线=实现，点线=导入；边上标注关系说明。
 - **G6 v5 已知坑**（playwright 实测）：
   - `draw()` 不触发布局，增量数据须显式 `graph.layout()`
