@@ -26,6 +26,8 @@ func Main(ctx context.Context, args []string) int {
 		return cmdServe(ctx, args[1:])
 	case "clean":
 		return cmdClean(args[1:])
+	case "version", "--version", "-v":
+		return cmdVersion(args[1:])
 	case "help", "-h", "--help":
 		usage()
 		return 0
@@ -50,6 +52,7 @@ func usage() {
   codeintel query callees <sym>    查询被调用者（--depth N，默认 1）
   codeintel query impact <sym>     影响分析（--depth N，默认 3）
   codeintel clean --repo <path>    删除仓库的索引数据库
+  codeintel version                输出编译时的 commit hash
 
 符号可用 canonical ID（symbol:go:<pkg>:<name>）或名称精确/模糊查找。
 `)
