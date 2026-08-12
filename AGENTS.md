@@ -130,6 +130,11 @@ defer logger.Debug("exit <name>")
     为上一行，其余一律下一行（implements/imports 在三行布局中是上行依赖，
     但链视图中是节点自身子项，排下一行），每行水平居中。入口节点首次选择
     显式置于画布正中（addNode 网格位置在左上角，force 不移动孤立节点）。
+    **信息栏**：右侧常驻 320px 侧边栏（#sidepanel），单击节点复用
+    /api/expand 渲染分组信息（基本/文档注释/提交/关系按类型）。**坑**：
+    G6 v5 给容器设内联 position:relative 会覆盖样式表的 absolute——
+    侧边布局必须用外层 wrapper（#main-area 绝对定位 right:320px，
+    容器 100% 填充），否则 right 不生效且节点会被面板遮挡不可点。
 11. **serve 运维坑**：`serve` 打开的是 .codeintel/codeintel.db；重建索引
     （rm -rf .codeintel 或 init 清库）会留下持有已删除文件句柄的旧 serve 进程，
     表现为 API 返回旧数据。改库后须重启 serve。

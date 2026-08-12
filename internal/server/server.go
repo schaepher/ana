@@ -64,13 +64,16 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 // NodeJSON 节点输出格式。
 type NodeJSON struct {
-	ID        string   `json:"id"`
-	Name      string   `json:"name"`
-	Kind      string   `json:"kind"`
-	File      string   `json:"file,omitempty"`
-	Line      int      `json:"line,omitempty"`
-	Signature string   `json:"signature,omitempty"`
-	Flags     []string `json:"flags,omitempty"` // main / http / grpc
+	ID         string   `json:"id"`
+	Name       string   `json:"name"`
+	Kind       string   `json:"kind"`
+	File       string   `json:"file,omitempty"`
+	Line       int      `json:"line,omitempty"`
+	Signature  string   `json:"signature,omitempty"`
+	Flags      []string `json:"flags,omitempty"` // main / http / grpc
+	DocComment string   `json:"docComment,omitempty"` // properties.doc_comment
+	Message    string   `json:"message,omitempty"`    // commit 说明
+	Date       string   `json:"date,omitempty"`       // commit 时间
 }
 
 // EdgeJSON 边输出格式；direction: "out"=该节点依赖对方，"in"=对方依赖该节点。
@@ -193,5 +196,8 @@ func nodeToJSON(n *domain.CodeEntity) NodeJSON {
 	if n.Property("serves_grpc") == "true" {
 		j.Flags = append(j.Flags, "grpc")
 	}
+	j.DocComment = n.Property("doc_comment")
+	j.Message = n.Property("message")
+	j.Date = n.Property("date")
 	return j
 }

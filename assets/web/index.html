@@ -33,20 +33,35 @@
     }
     #entry-list li:hover { background: #e6f0ff; }
     #entry-list li .flags { color: #86909c; margin-left: 6px; }
-    #container { position: absolute; top: 52px; left: 0; right: 0; bottom: 0; background: #fff; }
+    /* G6 v5 会给 #container 设内联 position:relative，故外层 #main-area
+       承担定位（右侧让出 320px 给信息栏），容器内部 100% 填充 */
+    #main-area { position: absolute; top: 52px; left: 0; right: 320px; bottom: 0; background: #fff; }
+    #container { width: 100%; height: 100%; }
     #tip {
-      position: absolute; top: 64px; left: 50%; transform: translateX(-50%);
+      position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
       background: rgba(31,31,46,.85); color: #fff; padding: 8px 16px; border-radius: 6px;
       font-size: 13px; z-index: 10; pointer-events: none;
     }
-    #info {
-      position: absolute; bottom: 16px; left: 16px; right: 16px;
-      background: rgba(255,255,255,.96); border: 1px solid #e5e6eb; border-radius: 8px;
-      padding: 10px 14px; font-size: 13px; z-index: 10; box-shadow: 0 2px 12px rgba(0,0,0,.08);
-      display: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    #sidepanel {
+      position: absolute; top: 52px; right: 0; bottom: 0; width: 320px;
+      background: #fff; border-left: 1px solid #e5e6eb;
+      display: flex; flex-direction: column;
     }
-    #info .label { color: #86909c; margin-right: 8px; }
-    #info .sig { color: #4e5969; }
+    #panel-head {
+      padding: 10px 14px; border-bottom: 1px solid #e5e6eb;
+      font-size: 14px; font-weight: 600; color: #1f1f2e;
+    }
+    #panel-body { flex: 1; overflow-y: auto; padding: 12px 14px; font-size: 12px; color: #4e5969; }
+    #panel-body h3 { font-size: 12px; color: #86909c; margin: 14px 0 6px; font-weight: 600; }
+    #panel-body h3:first-child { margin-top: 0; }
+    #panel-body .kv { display: flex; gap: 8px; margin: 3px 0; line-height: 1.6; }
+    #panel-body .kv .k { color: #86909c; flex: 0 0 52px; }
+    #panel-body .kv .v { flex: 1; word-break: break-all; }
+    #panel-body .rel { display: flex; gap: 6px; align-items: baseline; margin: 4px 0; }
+    #panel-body .rel .dir { color: #86909c; font-weight: 600; }
+    #panel-body .rel .name { color: #1f1f2e; font-weight: 500; }
+    #panel-body .rel .loc { color: #86909c; font-size: 11px; word-break: break-all; }
+    #panel-body .doc { line-height: 1.7; white-space: pre-wrap; }
     .loading { opacity: .5; pointer-events: none; }
   </style>
 </head>
@@ -68,9 +83,14 @@
       <span><i class="dot" style="background:#000"></i>默认</span>
     </div>
   </div>
-  <div id="container"></div>
-  <div id="tip">搜索并选择顶层入口后展示 · 双击节点展开/收起依赖 · 单击节点查看出入边</div>
-  <div id="info"></div>
+  <div id="main-area">
+    <div id="tip">搜索并选择顶层入口后展示 · 双击节点展开/收起依赖 · 单击节点查看出入边</div>
+    <div id="container"></div>
+  </div>
+  <aside id="sidepanel">
+    <div id="panel-head">节点信息</div>
+    <div id="panel-body"><p class="doc">单击节点查看详细信息</p></div>
+  </aside>
   <script src="app.js"></script>
 </body>
 </html>

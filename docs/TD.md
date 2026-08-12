@@ -544,8 +544,18 @@ v2.0 设计树封闭后，MVP 实现过程中补充与调整的能力记录。�
   "展开顶层节点后删除其他节点"的聚焦逻辑（v2.1 曾实现，后移除）。
   入口节点首次选择后置于**画布正中**（addNode 网格预置位置在左上角，
   force 布局不移动孤立节点，须显式 updateNodeData 居中）。
-- **交互**：单击选中节点（显示符号信息）；双击展开/收起依赖；
-  单击空白取消选中。
+- **交互**：单击选中节点（右侧信息栏展示详情）；双击展开/收起依赖；
+  单击空白取消选中并复位信息栏。
+- **右侧节点信息栏**（常驻侧边栏，320px）：单击节点后分组展示——
+  基本信息（名称/类型/文件/签名/标记/ID）、文档注释
+  （properties.doc_comment）、提交信息（commit 节点的 message/date）、
+  关系（按类型分组：调用/实现/导入/初始化/使用/传给/类型/数据流，
+  每条显示方向 →/←、对方节点、位置行号——出边行号在节点自身文件，
+  入边在对方文件）。数据复用 /api/expand（node+edges+neighbors），
+  后端 NodeJSON 补充 doc_comment/message/date 字段。
+  **布局坑**：G6 v5 会给容器设内联 `position:relative`，覆盖样式表的
+  absolute 定位，`right:320px` 不收缩宽度——需外层 #main-area 承担
+  定位让出右侧空间（容器 100% 填充）。
 - **三行布局**：展开后按三行排布——上行 = callers（calls 入边）、
   中间行 = 节点本身 + 非 calls 关联（implements/imports/initializes
   等）、下行 = callees（calls 出边）。展开后不跑 force 布局

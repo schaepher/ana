@@ -57,7 +57,8 @@
     initializes: '初始化',
     uses: '使用',
     passes_to: '传给',
-    of_type: '类型'
+    of_type: '类型',
+    data_flows_to: '数据流'
   };
   var EDGE_OUT_COLOR = '#1677ff';
   var EDGE_IN_COLOR = '#f5222d';
@@ -219,7 +220,7 @@
     graph.updateNodeData([{ id: e.id, style: { x: w / 2, y: h / 2 } }]);
     graph.layout();
     tip.textContent = '已选择 ' + e.name + ' · 双击节点展开依赖';
-    info.style.display = 'none';
+    closePanel();
   }
 
   function entryLabel(e) {
@@ -291,7 +292,7 @@
           : '该节点没有更多依赖';
         return data;
       })
-      .then(function (data) { if (data.node) showInfo(data.node); })
+      .then(function (data) { if (data.node) renderNodePanel(data); })
       .catch(function (err) {
         tip.textContent = '展开失败: ' + err.message;
       })
@@ -688,19 +689,18 @@
 
   /* ---------- 交互 ---------- */
 
-  // 单击节点：选中并以它为参照染色（出边蓝/入边红），显示符号信息
+  // 单击节点：选中并以它为参照染色（出边蓝/入边红），右侧信息栏展示详情
   graph.on('node:click', function (evt) {
     var id = evt.target.id;
     if (!id) return;
     selectNode(id);
-    var n = nodeById(id);
-    if (n) showInfo(n);
+    showNodePanel(id);
   });
 
-  // 单击空白：取消选中，边恢复黑色
+  // 单击空白：取消选中，边恢复黑色，关闭信息栏
   graph.on('canvas:click', function () {
     clearSelection();
-    info.style.display = 'none';
+    closePanel();
   });
 
   // 选中节点：先更新 selectedId 再触发状态变化重渲染（与 clearSelection
@@ -745,19 +745,111 @@
     return d && d.data ? d.data.full : null;
   }
 
-  function showInfo(n) {
-    if (!n) return;
-    var parts = [];
-    parts.push('<span class="label">' + escapeHtml(n.name) + '</span>');
-    if (n.kind) parts.push('<span class="label">[' + n.kind + ']</span>');
-    if (n.file) {
-      parts.push('<span class="label">' + escapeHtml(n.file) + (n.line ? ':' + n.line : '') + '</span>');
+  /* ---------- 右侧节点信息栏 ---------- */
+
+  var panel = document.getElementById('sidepanel');
+  var panelBody = document.getElementById('panel-body');
+
+  var KIND_LABEL = {
+    function: '函数', method: '方法', struct: '结构体', interface: '接口',
+    package: '包', file: '文件', commit: '提交', object: '对象'
+  };
+  var FLAG_LABEL = { main: 'main 入口', http: 'HTTP 服务', grpc: 'gRPC 服务', framework: '框架回调' };
+  // 关系分组展示顺序（未知 kind 追加在最后）
+  var REL_ORDER = ['calls', 'implements', 'imports', 'initializes', 'uses', 'passes_to', 'of_type', 'data_flows_to'];
+
+  // showNodePanel 单击节点：复用 /api/expand 取节点的完整关系后渲染信息栏
+  function showNodePanel(id) {
+    fetch('/api/expand?id=' + encodeURIComponent(id))
+      .then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+      })
+      .then(function (data) { renderNodePanel(data); })
+      .catch(function (err) {
+        panelBody.innerHTML = '<p class="doc">加载节点信息失败: ' + escapeHtml(err.message) + '</p>';
+      });
+  }
+
+  // renderNodePanel 渲染信息栏，分组：基本信息 / 文档注释 / 提交信息 /
+  // 关系（按类型分组，出方向在前，每条显示方向、对方节点与位置行号）
+  function renderNodePanel(data) {
+    var node = data.node;
+    if (!node) return;
+    var edges = data.edges || [];
+    var byId = {};
+    (data.neighbors || []).forEach(function (n) { byId[n.id] = n; });
+    var html = [];
+
+    // 基本信息
+    var basic = [];
+    basic.push(kv('名称', node.name));
+    basic.push(kv('类型', KIND_LABEL[node.kind] || node.kind));
+    if (node.file) basic.push(kv('文件', node.file + (node.line ? ':' + node.line : '')));
+    if (node.signature) basic.push(kv('签名', node.signature));
+    if (node.flags && node.flags.length) {
+      basic.push(kv('标记', node.flags.map(function (f) { return FLAG_LABEL[f] || f; }).join('、')));
     }
-    if (n.signature) parts.push('<span class="sig">' + escapeHtml(n.signature) + '</span>');
-    if (parts.length) {
-      info.innerHTML = parts.join(' ');
-      info.style.display = 'block';
+    basic.push(kv('ID', node.id));
+    html.push('<h3>基本信息</h3>' + basic.join(''));
+
+    // 文档注释
+    if (node.docComment) html.push('<h3>文档注释</h3><p class="doc">' + escapeHtml(node.docComment) + '</p>');
+
+    // 提交信息（commit 节点）
+    if (node.message) {
+      var c = [kv('说明', node.message)];
+      if (node.date) c.push(kv('时间', node.date));
+      html.push('<h3>提交信息</h3>' + c.join(''));
     }
+
+    // 关系：按类型分组
+    var byKind = {};
+    var restOrder = [];
+    edges.forEach(function (e) {
+      if (!byKind[e.kind]) {
+        byKind[e.kind] = [];
+        if (REL_ORDER.indexOf(e.kind) < 0) restOrder.push(e.kind);
+      }
+      var other = e.source === node.id ? e.target : e.source;
+      var otherNode = byId[other];
+      byKind[e.kind].push({
+        dir: e.source === node.id ? '出' : '入',
+        name: otherNode ? otherNode.name : other,
+        loc: locOf(e, node, otherNode)
+      });
+    });
+    REL_ORDER.concat(restOrder).forEach(function (kind) {
+      var items = byKind[kind];
+      if (!items || !items.length) return;
+      items.sort(function (a, b) { return a.dir === b.dir ? 0 : (a.dir === '出' ? -1 : 1); });
+      var lis = items.map(function (g) {
+        var loc = g.loc ? ' · ' + escapeHtml(g.loc) : '';
+        return '<div class="rel"><span class="dir">' + (g.dir === '出' ? '→' : '←') + '</span>' +
+          '<span class="name">' + escapeHtml(g.name) + '</span>' +
+          '<span class="loc">' + loc + '</span></div>';
+      });
+      html.push('<h3>' + (EDGE_KIND_LABEL[kind] || kind) + '（' + items.length + '）</h3>' + lis.join(''));
+    });
+
+    panelBody.innerHTML = html.join('');
+  }
+
+  // locOf 关系的位置：出边的行号在节点自身文件，入边在对方文件
+  function locOf(e, node, otherNode) {
+    var f = e.source === node.id ? node.file : (otherNode ? otherNode.file : '');
+    if (!e.line) return f;
+    return f ? f + ':' + e.line : '';
+  }
+
+  // kv 键值行
+  function kv(k, v) {
+    return '<div class="kv"><span class="k">' + k + '</span><span class="v">' + escapeHtml(String(v)) + '</span></div>';
+  }
+
+  // resetPanel 无选中时信息栏显示提示（信息栏为常驻侧边栏，不清空画布）
+  function closePanel() {
+    panelBody.innerHTML = '<p class="doc">单击节点查看详细信息</p>';
   }
 
   /* ---------- 工具 ---------- */
