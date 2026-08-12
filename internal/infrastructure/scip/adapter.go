@@ -151,7 +151,7 @@ func (a *Adapter) processDocument(repo *domain.Repository, doc *scip.Document, e
 
 	// 发出节点（带行范围；scip-go 的 range 为单行 [start_line, start_char, end_char]）
 	for _, si := range defs {
-		if si.occ != nil {
+		if si.occ != nil && len(si.occ.Range) > 0 {
 			si.node.LineStart = int(si.occ.Range[0]) + 1
 			si.node.LineEnd = si.node.LineStart
 		}

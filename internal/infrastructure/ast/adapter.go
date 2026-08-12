@@ -271,13 +271,18 @@ func nodeFor(repo *domain.Repository, pkg *packages.Package, fn *types.Func, id 
 }
 
 // ensurePackageNode 保障包节点存在（SCIP 已建则跳过）。
+// 注意：加载失败/无源码的包（pkg.Syntax 为空，如编译错误的包或测试变体）
+// 仍会创建节点，只是不带 file_path，避免 index out of range。
 func ensurePackageNode(repo *domain.Repository, pkg *packages.Package, emit domain.EmitFunc) error {
-	return emit(domain.Item{Node: &domain.CodeEntity{
-		ID:       packageID(pkg.PkgPath),
-		Kind:     domain.KindPackage,
-		Name:     pathBase(pkg.PkgPath),
-		FilePath: relPath(repo.Path, pkg.Fset.PositionFor(pkg.Syntax[0].Pos(), false).Filename),
-	}})
+	n := &domain.CodeEntity{
+		ID:   packageID(pkg.PkgPath),
+		Kind: domain.KindPackage,
+		Name: pathBase(pkg.PkgPath),
+	}
+	if len(pkg.Syntax) > 0 {
+		n.FilePath = relPath(repo.Path, pkg.Fset.PositionFor(pkg.Syntax[0].Pos(), false).Filename)
+	}
+	return emit(domain.Item{Node: n})
 }
 
 func packageID(pkgPath string) domain.CanonicalID {
