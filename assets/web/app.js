@@ -373,7 +373,10 @@
     if (!parent) return;
     var rec = expandedMap.get(parent);
     if (!rec) return;
-    var siblings = rec.nodes.filter(function (cid) { return cid !== id; });
+    // 已展开的兄弟节点（有展开记录）保留，不移除其分支
+    var siblings = rec.nodes.filter(function (cid) {
+      return cid !== id && !expandedMap.has(cid);
+    });
     if (!siblings.length) return;
 
     var toRemove = new Set();
