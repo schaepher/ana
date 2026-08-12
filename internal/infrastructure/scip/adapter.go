@@ -20,6 +20,8 @@ import (
 
 	"github.com/schaepher/codeintel/internal/canonicalizer"
 	"github.com/schaepher/codeintel/internal/domain"
+	"github.com/schaepher/codeintel/internal/logging"
+	"go.uber.org/zap"
 )
 
 // Adapter 是 SCIP 索引适配器。
@@ -30,10 +32,18 @@ type Adapter struct {
 var _ domain.IndexerPort = (*Adapter)(nil)
 
 // Name 实现 IndexerPort。
-func (a *Adapter) Name() string { return "scip" }
+func (a *Adapter) Name() string {
+	logger := zap.L()
+	logger.Debug("enter (Adapter).Name")
+	defer logger.Debug("exit (Adapter).Name")
+	return "scip"
+}
 
 // Index 在仓库上执行全量 SCIP 索引并流式产出节点与边。
 func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, emit domain.EmitFunc) error {
+	logger := logging.FromContext(ctx)
+	logger.Debug("enter (Adapter).Index")
+	defer logger.Debug("exit (Adapter).Index")
 	bin, err := a.resolveBin()
 	if err != nil {
 		return err
@@ -68,6 +78,9 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, emit domai
 }
 
 func (a *Adapter) resolveBin() (string, error) {
+	logger := zap.L()
+	logger.Debug("enter (Adapter).resolveBin")
+	defer logger.Debug("exit (Adapter).resolveBin")
 	if a.BinPath != "" {
 		return a.BinPath, nil
 	}
@@ -97,6 +110,9 @@ func (a *Adapter) resolveBin() (string, error) {
 
 // processDocument 处理单个 SCIP document：符号节点（含定义行范围）+ IMPLEMENTS 边。
 func (a *Adapter) processDocument(repo *domain.Repository, doc *scip.Document, emit domain.EmitFunc) error {
+	logger := zap.L()
+	logger.Debug("enter (Adapter).processDocument")
+	defer logger.Debug("exit (Adapter).processDocument")
 	filePath := doc.RelativePath
 
 	// FILE 节点：ID 为 file:<relpath>
@@ -197,5 +213,8 @@ func (a *Adapter) processDocument(repo *domain.Repository, doc *scip.Document, e
 
 // isInModule 判断 importPath 是否属于被索引 module（自身或子包）。
 func isInModule(importPath, module string) bool {
+	logger := zap.L()
+	logger.Debug("enter isInModule")
+	defer logger.Debug("exit isInModule")
 	return importPath == module || strings.HasPrefix(importPath, module+"/")
 }

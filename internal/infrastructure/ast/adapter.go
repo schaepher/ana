@@ -16,6 +16,8 @@ import (
 
 	"github.com/schaepher/codeintel/internal/canonicalizer"
 	"github.com/schaepher/codeintel/internal/domain"
+	"github.com/schaepher/codeintel/internal/logging"
+	"go.uber.org/zap"
 )
 
 // Adapter 是基于 go/packages 的调用图分析器。
@@ -24,14 +26,22 @@ type Adapter struct{}
 var _ domain.IndexerPort = (*Adapter)(nil)
 
 // Name 实现 IndexerPort。
-func (a *Adapter) Name() string { return "codegraph" }
+func (a *Adapter) Name() string {
+	logger := zap.L()
+	logger.Debug("enter (Adapter).Name")
+	defer logger.Debug("exit (Adapter).Name")
+	return "codegraph"
+}
 
 // Index 加载仓库全部包并产出 CALLS / IMPORTS 边。
 func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, emit domain.EmitFunc) error {
+	logger := logging.FromContext(ctx)
+	logger.Debug("enter (Adapter).Index")
+	defer logger.Debug("exit (Adapter).Index")
 	cfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
 			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps,
-		Dir:  repo.Path,
+		Dir:   repo.Path,
 		Tests: true,
 	}
 	pkgs, err := packages.Load(cfg, "./...")
@@ -56,6 +66,9 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, emit domai
 
 func (a *Adapter) processPackage(repo *domain.Repository, pkg *packages.Package, emit domain.EmitFunc,
 	serviceFlags map[domain.CanonicalID]map[string]bool) error {
+	logger := zap.L()
+	logger.Debug("enter (Adapter).processPackage")
+	defer logger.Debug("exit (Adapter).processPackage")
 	if err := ensurePackageNode(repo, pkg, emit); err != nil {
 		return err
 	}
@@ -87,6 +100,9 @@ func (a *Adapter) processPackage(repo *domain.Repository, pkg *packages.Package,
 // processFile 遍历单个 AST：定位每个调用点，连接调用者与被调用者。
 func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f *ast.File, emit domain.EmitFunc,
 	serviceFlags map[domain.CanonicalID]map[string]bool) error {
+	logger := zap.L()
+	logger.Debug("enter (Adapter).processFile")
+	defer logger.Debug("exit (Adapter).processFile")
 	filePath := relPath(repo.Path, pkg.Fset.PositionFor(f.Pos(), false).Filename)
 	if filePath == "" {
 		return nil
@@ -182,6 +198,9 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 
 // resolveCallee 将调用表达式解析为被调用的 *types.Func。
 func resolveCallee(info *types.Info, fun ast.Expr) (*types.Func, bool) {
+	logger := zap.L()
+	logger.Debug("enter resolveCallee")
+	defer logger.Debug("exit resolveCallee")
 	var id *ast.Ident
 	switch f := fun.(type) {
 	case *ast.Ident:
@@ -201,6 +220,9 @@ func resolveCallee(info *types.Info, fun ast.Expr) (*types.Func, bool) {
 
 // findCallerDecl 返回调用点所属的最近函数声明。
 func findCallerDecl(stack []ast.Node) *ast.FuncDecl {
+	logger := zap.L()
+	logger.Debug("enter findCallerDecl")
+	defer logger.Debug("exit findCallerDecl")
 	for i := len(stack) - 1; i >= 0; i-- {
 		if fd, ok := stack[i].(*ast.FuncDecl); ok {
 			return fd
@@ -212,6 +234,9 @@ func findCallerDecl(stack []ast.Node) *ast.FuncDecl {
 // fnID 计算函数/方法的 canonical ID 与领域种类。
 // 返回值 (id, kind, ok)。
 func fnID(fn *types.Func) (domain.CanonicalID, domain.EntityKind) {
+	logger := zap.L()
+	logger.Debug("enter fnID")
+	defer logger.Debug("exit fnID")
 	if fn == nil || fn.Pkg() == nil {
 		return "", ""
 	}
@@ -238,6 +263,9 @@ func fnID(fn *types.Func) (domain.CanonicalID, domain.EntityKind) {
 // signature 由 go/types 生成，与 SCIP 节点通过 properties 合并）。
 func nodeFor(repo *domain.Repository, pkg *packages.Package, fn *types.Func, id domain.CanonicalID,
 	kind domain.EntityKind, extra map[string]bool) *domain.CodeEntity {
+	logger := zap.L()
+	logger.Debug("enter nodeFor")
+	defer logger.Debug("exit nodeFor")
 	n := &domain.CodeEntity{ID: id, Kind: kind}
 	if fn != nil && fn.Pkg() != nil {
 		pos := pkg.Fset.PositionFor(fn.Pos(), false)
@@ -274,6 +302,9 @@ func nodeFor(repo *domain.Repository, pkg *packages.Package, fn *types.Func, id 
 // 注意：加载失败/无源码的包（pkg.Syntax 为空，如编译错误的包或测试变体）
 // 仍会创建节点，只是不带 file_path，避免 index out of range。
 func ensurePackageNode(repo *domain.Repository, pkg *packages.Package, emit domain.EmitFunc) error {
+	logger := zap.L()
+	logger.Debug("enter ensurePackageNode")
+	defer logger.Debug("exit ensurePackageNode")
 	n := &domain.CodeEntity{
 		ID:   packageID(pkg.PkgPath),
 		Kind: domain.KindPackage,
@@ -286,10 +317,16 @@ func ensurePackageNode(repo *domain.Repository, pkg *packages.Package, emit doma
 }
 
 func packageID(pkgPath string) domain.CanonicalID {
+	logger := zap.L()
+	logger.Debug("enter packageID")
+	defer logger.Debug("exit packageID")
 	return canonicalizer.GoSymbolID(pkgPath, pathBase(pkgPath))
 }
 
 func pathBase(p string) string {
+	logger := zap.L()
+	logger.Debug("enter pathBase")
+	defer logger.Debug("exit pathBase")
 	if i := strings.LastIndex(p, "/"); i >= 0 {
 		return p[i+1:]
 	}
@@ -298,6 +335,9 @@ func pathBase(p string) string {
 
 // relPath 将绝对路径转为仓库相对路径；仓库外文件返回空串。
 func relPath(repoPath, abs string) string {
+	logger := zap.L()
+	logger.Debug("enter relPath")
+	defer logger.Debug("exit relPath")
 	if abs == "" {
 		return ""
 	}
@@ -309,5 +349,8 @@ func relPath(repoPath, abs string) string {
 }
 
 func isInModule(pkgPath, module string) bool {
+	logger := zap.L()
+	logger.Debug("enter isInModule")
+	defer logger.Debug("exit isInModule")
 	return pkgPath == module || strings.HasPrefix(pkgPath, module+"/")
 }

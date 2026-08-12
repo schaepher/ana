@@ -9,6 +9,7 @@ import (
 	"github.com/scip-code/scip/bindings/go/scip"
 
 	"github.com/schaepher/codeintel/internal/domain"
+	"go.uber.org/zap"
 )
 
 // GoSymbol 解析后的 Go 符号身份。
@@ -20,12 +21,18 @@ type GoSymbol struct {
 
 // GoSymbolID 生成 canonical ID：symbol:go:<import_path>:<name>。
 func GoSymbolID(importPath, name string) domain.CanonicalID {
+	logger := zap.L()
+	logger.Debug("enter GoSymbolID")
+	defer logger.Debug("exit GoSymbolID")
 	return domain.CanonicalID("symbol:go:" + importPath + ":" + name)
 }
 
 // MethodName 将接收者类型名与方法名规范化为 canonical 方法名。
 // 与 scip-go 一致：值/指针接收者统一为 (T).method 形式。
 func MethodName(recvTypeName, method string) string {
+	logger := zap.L()
+	logger.Debug("enter MethodName")
+	defer logger.Debug("exit MethodName")
 	recv := recvTypeName
 	if len(recv) > 0 && recv[0] == '*' {
 		recv = recv[1:]
@@ -46,6 +53,9 @@ func MethodName(recvTypeName, method string) string {
 //	desc[1] Type + desc[2] Term   → 接口方法（Payer#CreatePayment.）
 //	"local N"                      → 局部符号（跳过）
 func FromScipSymbol(sym string) (GoSymbol, error) {
+	logger := zap.L()
+	logger.Debug("enter FromScipSymbol")
+	defer logger.Debug("exit FromScipSymbol")
 	if len(sym) >= 6 && sym[:6] == "local " {
 		return GoSymbol{}, fmt.Errorf("local symbol: %s", sym)
 	}
@@ -89,6 +99,9 @@ func FromScipSymbol(sym string) (GoSymbol, error) {
 // ScipKindToDomainKind 将 SCIP 符号种类映射为领域种类。
 // Variable/Constant/Field/Local/TypeParameter 等不在图中建节点。
 func ScipKindToDomainKind(k scip.SymbolInformation_Kind) (domain.EntityKind, bool) {
+	logger := zap.L()
+	logger.Debug("enter ScipKindToDomainKind")
+	defer logger.Debug("exit ScipKindToDomainKind")
 	switch k {
 	case scip.SymbolInformation_Package:
 		return domain.KindPackage, true

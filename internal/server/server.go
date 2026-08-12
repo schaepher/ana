@@ -10,6 +10,7 @@ import (
 
 	"github.com/schaepher/codeintel/internal/domain"
 	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
+	"go.uber.org/zap"
 )
 
 // Server 承载图查询 HTTP 接口。
@@ -20,11 +21,17 @@ type Server struct {
 
 // New 创建 Server。
 func New(repo *sqlite.Repo, webFS fs.FS) *Server {
+	logger := zap.L()
+	logger.Debug("enter New")
+	defer logger.Debug("exit New")
 	return &Server{repo: repo, web: webFS}
 }
 
 // Handler 返回 HTTP 处理器。
 func (s *Server) Handler() http.Handler {
+	logger := zap.L()
+	logger.Debug("enter (Server).Handler")
+	defer logger.Debug("exit (Server).Handler")
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/roots", s.handleRoots)
 	mux.HandleFunc("/api/expand", s.handleExpand)
@@ -53,6 +60,9 @@ type EdgeJSON struct {
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
+	logger := zap.L()
+	logger.Debug("enter writeJSON")
+	defer logger.Debug("exit writeJSON")
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		fmt.Printf("write json: %v\n", err)
@@ -60,6 +70,9 @@ func writeJSON(w http.ResponseWriter, v any) {
 }
 
 func writeErr(w http.ResponseWriter, code int, msg string) {
+	logger := zap.L()
+	logger.Debug("enter writeErr")
+	defer logger.Debug("exit writeErr")
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
@@ -67,6 +80,9 @@ func writeErr(w http.ResponseWriter, code int, msg string) {
 
 // handleRoots 返回顶层入口节点（main 入口 + HTTP/gRPC 服务入口）。
 func (s *Server) handleRoots(w http.ResponseWriter, r *http.Request) {
+	logger := zap.L()
+	logger.Debug("enter (Server).handleRoots")
+	defer logger.Debug("exit (Server).handleRoots")
 	roots, err := s.repo.GetRoots()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
@@ -81,6 +97,9 @@ func (s *Server) handleRoots(w http.ResponseWriter, r *http.Request) {
 
 // handleExpand 返回某节点的一级邻居（双向）。
 func (s *Server) handleExpand(w http.ResponseWriter, r *http.Request) {
+	logger := zap.L()
+	logger.Debug("enter (Server).handleExpand")
+	defer logger.Debug("exit (Server).handleExpand")
 	id := r.URL.Query().Get("id")
 	if id == "" {
 		writeErr(w, http.StatusBadRequest, "missing id")
@@ -128,6 +147,9 @@ func (s *Server) handleExpand(w http.ResponseWriter, r *http.Request) {
 
 // nodeToJSON 转换节点为前端格式；roots 场景补充入口标记。
 func nodeToJSON(n *domain.CodeEntity) NodeJSON {
+	logger := zap.L()
+	logger.Debug("enter nodeToJSON")
+	defer logger.Debug("exit nodeToJSON")
 	j := NodeJSON{
 		ID:        string(n.ID),
 		Name:      n.Name,

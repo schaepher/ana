@@ -3,11 +3,15 @@ package cli
 
 import (
 	"fmt"
+	"go.uber.org/zap"
 	"os"
 )
 
 // Main 是 CLI 入口（cmd/codeintel 调用）。
 func Main(args []string) int {
+	logger := zap.L()
+	logger.Debug("enter Main")
+	defer logger.Debug("exit Main")
 	if len(args) < 1 {
 		usage()
 		return 2
@@ -32,6 +36,9 @@ func Main(args []string) int {
 }
 
 func usage() {
+	logger := zap.L()
+	logger.Debug("enter usage")
+	defer logger.Debug("exit usage")
 	fmt.Fprint(os.Stderr, `codeintel - Go 代码库智能索引与查询（MVP）
 
 用法:

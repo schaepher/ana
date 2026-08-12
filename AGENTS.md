@@ -26,6 +26,7 @@ go build -o codeintel ./cmd/codeintel
 ```
 internal/domain/          领域模型：CodeEntity/Fact/CanonicalID、IndexerPort/CodeRepository 端口
 internal/canonicalizer/   Canonical ID 生成、SCIP symbol 解析（FromScipSymbol）
+internal/logging/         ctx ↔ *zap.Logger（WithLogger/FromContext），entrylog 注入的日志用
 internal/orchestrator/    全量构建编排：并行适配器、独立超时 10min、分批 1000 条事务、降级报告
 internal/infrastructure/
   scip/                   调用 scip-go 生成 SCIP 索引 → 符号节点 + IMPLEMENTS 边（conf 1.0）
@@ -37,7 +38,25 @@ internal/infrastructure/
 internal/server/          HTTP API：/api/roots（顶层入口）、/api/expand（点击展开）
 internal/cli/             init / serve / query / clean 命令
 assets/web/               AntV G6 v5 前端（go:embed 嵌入；index.html + app.js）
+scripts/entrylog/         AST 日志注入工具（见下）
 ```
+
+## entrylog 日志注入工具
+
+`go run ./scripts/entrylog -dir <module 根>`：为所有顶层函数/方法注入
+
+```go
+logger := zap.L()                 // 无 ctx 参数
+logger := logging.FromContext(ctx) // 有 ctx 参数（从 ctx 取 logger，缺失回退全局）
+logger.Debug("enter <name>")
+defer logger.Debug("exit <name>")
+```
+
+- 幂等（已注入跳过）、函数内有 logger 标识符时跳过、排除 _test.go
+- 必须跳过 `internal/logging`（FromContext 注入自身会无限递归）与 `scripts/`
+- **实现要点**：AST 只读定位 + 纯文本插入（format.Node 全量重写会把游离注释
+  重排进调用表达式中间——踩过坑）；单行函数体 `{ return x }` 需拆行
+  （Lbrace 后插入 + Rbrace 前补换行）；import 缺失时文本补入
 
 ## 关键设计决策（修改前必读）
 

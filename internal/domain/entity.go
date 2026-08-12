@@ -4,6 +4,10 @@ package domain
 
 import "errors"
 
+import (
+	"go.uber.org/zap"
+)
+
 // ErrNotFound 查询不到记录时的哨兵错误。
 var ErrNotFound = errors.New("not found")
 
@@ -60,6 +64,9 @@ type CodeEntity struct {
 
 // Property 读取 properties 中的字符串字段。
 func (e *CodeEntity) Property(key string) string {
+	logger := zap.L()
+	logger.Debug("enter (CodeEntity).Property")
+	defer logger.Debug("exit (CodeEntity).Property")
 	if e.Properties == nil {
 		return ""
 	}
@@ -70,10 +77,20 @@ func (e *CodeEntity) Property(key string) string {
 }
 
 // Signature 返回符号签名（如 "func (s *Service) CreatePayment(req Request) error"）。
-func (e *CodeEntity) Signature() string { return e.Property("signature") }
+func (e *CodeEntity) Signature() string {
+	logger := zap.L()
+	logger.Debug("enter (CodeEntity).Signature")
+	defer logger.Debug("exit (CodeEntity).Signature")
+	return e.Property("signature")
+}
 
 // DocComment 返回符号文档注释。
-func (e *CodeEntity) DocComment() string { return e.Property("doc_comment") }
+func (e *CodeEntity) DocComment() string {
+	logger := zap.L()
+	logger.Debug("enter (CodeEntity).DocComment")
+	defer logger.Debug("exit (CodeEntity).DocComment")
+	return e.Property("doc_comment")
+}
 
 // Fact 实体：连接两个 Code Entity 的关系，唯一性由 (source, target, kind) 决定。
 type Fact struct {

@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"github.com/schaepher/codeintel/internal/domain"
+	"github.com/schaepher/codeintel/internal/logging"
+	"go.uber.org/zap"
 )
 
 // Adapter 是 Git 历史适配器。
@@ -21,10 +23,18 @@ type Adapter struct {
 var _ domain.IndexerPort = (*Adapter)(nil)
 
 // Name 实现 IndexerPort。
-func (a *Adapter) Name() string { return "git" }
+func (a *Adapter) Name() string {
+	logger := zap.L()
+	logger.Debug("enter (Adapter).Name")
+	defer logger.Debug("exit (Adapter).Name")
+	return "git"
+}
 
 // Index 扫描仓库最近提交，为每个变更文件建立 MODIFIED_BY 边。
 func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, emit domain.EmitFunc) error {
+	logger := logging.FromContext(ctx)
+	logger.Debug("enter (Adapter).Index")
+	defer logger.Debug("exit (Adapter).Index")
 	max := a.MaxCommits
 	if max <= 0 {
 		max = 200
@@ -53,9 +63,9 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, emit domai
 				msg = parts[2]
 			}
 			cur = &domain.CodeEntity{
-				ID:       domain.CanonicalID("commit:" + sha),
-				Kind:     domain.KindCommit,
-				Name:     shortSHA(sha),
+				ID:        domain.CanonicalID("commit:" + sha),
+				Kind:      domain.KindCommit,
+				Name:      shortSHA(sha),
 				LineStart: 0,
 				LineEnd:   0,
 			}
@@ -93,6 +103,9 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, emit domai
 }
 
 func shortSHA(sha string) string {
+	logger := zap.L()
+	logger.Debug("enter shortSHA")
+	defer logger.Debug("exit shortSHA")
 	if len(sha) > 12 {
 		return sha[:12]
 	}
@@ -101,6 +114,9 @@ func shortSHA(sha string) string {
 
 // normalizePath 处理 git 输出的 rename 标记（"old => new" 与引号包裹）。
 func normalizePath(p string) string {
+	logger := zap.L()
+	logger.Debug("enter normalizePath")
+	defer logger.Debug("exit normalizePath")
 	if i := strings.Index(p, "=>"); i >= 0 {
 		p = p[i+2:]
 	}

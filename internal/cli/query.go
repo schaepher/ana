@@ -10,6 +10,7 @@ import (
 
 	"github.com/schaepher/codeintel/internal/domain"
 	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
+	"go.uber.org/zap"
 )
 
 // MinConfidence 调用关系查询默认置信度阈值。
@@ -19,6 +20,9 @@ const MinConfidence = 0.8
 
 // cmdQuery 实现 `codeintel query ...`。
 func cmdQuery(args []string) int {
+	logger := zap.L()
+	logger.Debug("enter cmdQuery")
+	defer logger.Debug("exit cmdQuery")
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "error: query 需要一个子命令（symbol/callers/callees/impact）")
 		return 2
@@ -69,6 +73,9 @@ func cmdQuery(args []string) int {
 
 // parseQueryFlags 手动解析 query 子命令的参数，支持 flags 与位置参数任意顺序。
 func parseQueryFlags(args []string) (repoPath string, depth int, positional []string) {
+	logger := zap.L()
+	logger.Debug("enter parseQueryFlags")
+	defer logger.Debug("exit parseQueryFlags")
 	repoPath = "."
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -94,6 +101,9 @@ func parseQueryFlags(args []string) (repoPath string, depth int, positional []st
 
 // resolveSymbol 将用户输入解析为符号：canonical ID 直接命中，否则按名称查找。
 func resolveSymbol(repo *sqlite.Repo, input string) (*domain.CodeEntity, error) {
+	logger := zap.L()
+	logger.Debug("enter resolveSymbol")
+	defer logger.Debug("exit resolveSymbol")
 	if strings.HasPrefix(input, "symbol:") || strings.HasPrefix(input, "file:") || strings.HasPrefix(input, "commit:") {
 		n, err := repo.GetSymbol(domain.CanonicalID(input))
 		if err == nil {
@@ -118,6 +128,9 @@ func resolveSymbol(repo *sqlite.Repo, input string) (*domain.CodeEntity, error) 
 }
 
 func joinIDs(nodes []*domain.CodeEntity) string {
+	logger := zap.L()
+	logger.Debug("enter joinIDs")
+	defer logger.Debug("exit joinIDs")
 	ids := make([]string, 0, len(nodes))
 	for _, n := range nodes {
 		ids = append(ids, string(n.ID))
@@ -127,6 +140,9 @@ func joinIDs(nodes []*domain.CodeEntity) string {
 
 // querySymbol 输出符号摘要（对齐 TD.md 7.1 explore_symbol 摘要层）。
 func querySymbol(repo *sqlite.Repo, input string) int {
+	logger := zap.L()
+	logger.Debug("enter querySymbol")
+	defer logger.Debug("exit querySymbol")
 	n, err := resolveSymbol(repo, input)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -167,6 +183,9 @@ func querySymbol(repo *sqlite.Repo, input string) int {
 
 // queryGraph 输出 callers/callees/impact 查询结果。
 func queryGraph(repo *sqlite.Repo, sub, input string, depth int) int {
+	logger := zap.L()
+	logger.Debug("enter queryGraph")
+	defer logger.Debug("exit queryGraph")
 	n, err := resolveSymbol(repo, input)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -205,6 +224,9 @@ func queryGraph(repo *sqlite.Repo, sub, input string, depth int) int {
 // printFacts 打印边列表；endpoint 为 "source" 时显示边左端（调用者场景），
 // 否则显示右端（被调用者场景）。
 func printFacts(facts []*domain.Fact, endpoint string, limit int) {
+	logger := zap.L()
+	logger.Debug("enter printFacts")
+	defer logger.Debug("exit printFacts")
 	truncated := len(facts) > limit
 	if truncated {
 		facts = facts[:limit]
@@ -223,6 +245,9 @@ func printFacts(facts []*domain.Fact, endpoint string, limit int) {
 
 // shortID 压缩 canonical ID 显示：保留 pkg 末段与符号名。
 func shortID(id domain.CanonicalID) string {
+	logger := zap.L()
+	logger.Debug("enter shortID")
+	defer logger.Debug("exit shortID")
 	s := string(id)
 	prefix := "symbol:go:"
 	if !strings.HasPrefix(s, prefix) {
@@ -242,6 +267,9 @@ func shortID(id domain.CanonicalID) string {
 
 // printNodes 打印节点列表。
 func printNodes(nodes []*domain.CodeEntity) {
+	logger := zap.L()
+	logger.Debug("enter printNodes")
+	defer logger.Debug("exit printNodes")
 	sorted := make([]*domain.CodeEntity, len(nodes))
 	copy(sorted, nodes)
 	sort.Slice(sorted, func(i, j int) bool {

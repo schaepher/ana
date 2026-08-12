@@ -26,8 +26,8 @@ func TestFromScipSymbol(t *testing.T) {
 			wantName: "FullBuild",
 		},
 		{
-			symbol:   "scip-go gomod example.com/mtest . `example.com/mtest`/global.",
-			wantErr:  true, // 变量不建节点
+			symbol:  "scip-go gomod example.com/mtest . `example.com/mtest`/global.",
+			wantErr: true, // 变量不建节点
 		},
 		{
 			symbol:   "scip-go gomod example.com/mtest . `example.com/mtest`/Service#",

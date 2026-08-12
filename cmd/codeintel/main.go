@@ -5,8 +5,12 @@ import (
 	"os"
 
 	"github.com/schaepher/codeintel/internal/cli"
+	"go.uber.org/zap"
 )
 
 func main() {
+	logger := zap.L()
+	logger.Debug("enter main")
+	defer logger.Debug("exit main")
 	os.Exit(cli.Main(os.Args[1:]))
 }

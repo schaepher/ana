@@ -13,10 +13,14 @@ import (
 	"github.com/schaepher/codeintel/internal/domain"
 	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
 	"github.com/schaepher/codeintel/internal/orchestrator"
+	"go.uber.org/zap"
 )
 
 // cmdInit 实现 `codeintel init --repo <path>`（TD.md 6.1）。
 func cmdInit(args []string) int {
+	logger := zap.L()
+	logger.Debug("enter cmdInit")
+	defer logger.Debug("exit cmdInit")
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
 	repoPath := fs.String("repo", "", "仓库根目录（含 go.mod）")
 	fs.Parse(args)
@@ -90,6 +94,9 @@ func cmdInit(args []string) int {
 
 // readGoModule 读取 go.mod 的 module 行。
 func readGoModule(repoPath string) (string, error) {
+	logger := zap.L()
+	logger.Debug("enter readGoModule")
+	defer logger.Debug("exit readGoModule")
 	data, err := os.ReadFile(filepath.Join(repoPath, "go.mod"))
 	if err != nil {
 		return "", fmt.Errorf("read go.mod (repo must be a Go module): %w", err)
@@ -109,6 +116,9 @@ func readGoModule(repoPath string) (string, error) {
 
 // resolveRepo 从参数解析仓库路径（默认当前目录），并验证存在 go.mod。
 func resolveRepo(repoPath string) (string, string, error) {
+	logger := zap.L()
+	logger.Debug("enter resolveRepo")
+	defer logger.Debug("exit resolveRepo")
 	if repoPath == "" {
 		repoPath = "."
 	}
@@ -125,6 +135,9 @@ func resolveRepo(repoPath string) (string, string, error) {
 
 // ensureGoEnv 检查 go 与 scip-go 可用（供诊断信息使用）。
 func ensureGoEnv() error {
+	logger := zap.L()
+	logger.Debug("enter ensureGoEnv")
+	defer logger.Debug("exit ensureGoEnv")
 	if _, err := exec.LookPath("go"); err != nil {
 		return fmt.Errorf("go not found in PATH")
 	}

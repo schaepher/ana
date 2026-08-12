@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/schaepher/codeintel/internal/domain"
+	"go.uber.org/zap"
 )
 
 // 确保 DB 实现仓储接口
@@ -20,7 +21,12 @@ type Repo struct {
 }
 
 // NewRepo 基于已打开的数据库创建仓储。
-func NewRepo(db *DB) *Repo { return &Repo{DB: db} }
+func NewRepo(db *DB) *Repo {
+	logger := zap.L()
+	logger.Debug("enter NewRepo")
+	defer logger.Debug("exit NewRepo")
+	return &Repo{DB: db}
+}
 
 const insertNodeSQL = `
 INSERT INTO nodes (id, kind, name, file_path, line_start, line_end, properties)
@@ -45,6 +51,9 @@ type saveBatchResult struct {
 
 // SaveBatch 在单个事务中保存节点与边（节点必须先于边插入以满足外键）。
 func (r *Repo) SaveBatch(nodes []*domain.CodeEntity, edges []*domain.Fact) error {
+	logger := zap.L()
+	logger.Debug("enter (Repo).SaveBatch")
+	defer logger.Debug("exit (Repo).SaveBatch")
 	_, err := r.SaveBatchStats(nodes, edges)
 	return err
 }
@@ -52,6 +61,9 @@ func (r *Repo) SaveBatch(nodes []*domain.CodeEntity, edges []*domain.Fact) error
 // SaveBatchStats 与 SaveBatch 相同，但返回批次统计（跳过的外键冲突边数）。
 // 端点节点不存在的边（如 Git 追踪到 SCIP 未索引的文件）静默跳过，不中断构建。
 func (r *Repo) SaveBatchStats(nodes []*domain.CodeEntity, edges []*domain.Fact) (*saveBatchResult, error) {
+	logger := zap.L()
+	logger.Debug("enter (Repo).SaveBatchStats")
+	defer logger.Debug("exit (Repo).SaveBatchStats")
 	result := &saveBatchResult{}
 	if len(nodes) == 0 && len(edges) == 0 {
 		return result, nil
@@ -113,6 +125,9 @@ func (r *Repo) SaveBatchStats(nodes []*domain.CodeEntity, edges []*domain.Fact) 
 
 // marshalProps 序列化节点属性；nil 映射为空对象（json_patch 需要对象操作数）。
 func marshalProps(props map[string]any) ([]byte, error) {
+	logger := zap.L()
+	logger.Debug("enter marshalProps")
+	defer logger.Debug("exit marshalProps")
 	if props == nil {
 		return []byte("{}"), nil
 	}
@@ -121,6 +136,9 @@ func marshalProps(props map[string]any) ([]byte, error) {
 
 // isFKError 判断是否为外键约束错误（SQLITE_CONSTRAINT_FOREIGNKEY = 787）。
 func isFKError(err error) bool {
+	logger := zap.L()
+	logger.Debug("enter isFKError")
+	defer logger.Debug("exit isFKError")
 	var sqliteErr interface{ ErrorCode() int }
 	if errors.As(err, &sqliteErr) {
 		return sqliteErr.ErrorCode() == 787
@@ -130,16 +148,25 @@ func isFKError(err error) bool {
 
 // SaveNode 保存单个节点（TD.md 4.2 接口）。
 func (r *Repo) SaveNode(node *domain.CodeEntity) error {
+	logger := zap.L()
+	logger.Debug("enter (Repo).SaveNode")
+	defer logger.Debug("exit (Repo).SaveNode")
 	return r.SaveBatch([]*domain.CodeEntity{node}, nil)
 }
 
 // SaveEdges 保存边列表（TD.md 4.2 接口）。
 func (r *Repo) SaveEdges(edges []*domain.Fact) error {
+	logger := zap.L()
+	logger.Debug("enter (Repo).SaveEdges")
+	defer logger.Debug("exit (Repo).SaveEdges")
 	return r.SaveBatch(nil, edges)
 }
 
 // DeleteByFile 删除某个文件的所有节点及其边（级联），用于增量构建。
 func (r *Repo) DeleteByFile(filePath string) error {
+	logger := zap.L()
+	logger.Debug("enter (Repo).DeleteByFile")
+	defer logger.Debug("exit (Repo).DeleteByFile")
 	_, err := r.Exec("DELETE FROM nodes WHERE file_path = ?", filePath)
 	if err != nil {
 		return fmt.Errorf("delete nodes of file %s: %w", filePath, err)
@@ -149,6 +176,9 @@ func (r *Repo) DeleteByFile(filePath string) error {
 
 // GetSymbol 按 Canonical ID 查询符号。
 func (r *Repo) GetSymbol(id domain.CanonicalID) (*domain.CodeEntity, error) {
+	logger := zap.L()
+	logger.Debug("enter (Repo).GetSymbol")
+	defer logger.Debug("exit (Repo).GetSymbol")
 	return scanNode(r.QueryRow(
 		"SELECT id, kind, name, file_path, line_start, line_end, properties FROM nodes WHERE id = ?",
 		string(id)))
@@ -157,6 +187,9 @@ func (r *Repo) GetSymbol(id domain.CanonicalID) (*domain.CodeEntity, error) {
 // GetSymbolByName 按名称查找：先精确匹配，无结果时退化为模糊匹配
 // （CLI 按名查找用）。
 func (r *Repo) GetSymbolByName(name string) ([]*domain.CodeEntity, error) {
+	logger := zap.L()
+	logger.Debug("enter (Repo).GetSymbolByName")
+	defer logger.Debug("exit (Repo).GetSymbolByName")
 	// 精确匹配
 	rows, err := r.Query(
 		"SELECT id, kind, name, file_path, line_start, line_end, properties FROM nodes WHERE name = ? ORDER BY name LIMIT 50",
@@ -180,6 +213,9 @@ func (r *Repo) GetSymbolByName(name string) ([]*domain.CodeEntity, error) {
 }
 
 func scanNode(row *sql.Row) (*domain.CodeEntity, error) {
+	logger := zap.L()
+	logger.Debug("enter scanNode")
+	defer logger.Debug("exit scanNode")
 	n := &domain.CodeEntity{}
 	var props string
 	err := row.Scan(&n.ID, &n.Kind, &n.Name, &n.FilePath, &n.LineStart, &n.LineEnd, &props)
@@ -199,6 +235,9 @@ func scanNode(row *sql.Row) (*domain.CodeEntity, error) {
 }
 
 func scanNodes(rows *sql.Rows) ([]*domain.CodeEntity, error) {
+	logger := zap.L()
+	logger.Debug("enter scanNodes")
+	defer logger.Debug("exit scanNodes")
 	var out []*domain.CodeEntity
 	for rows.Next() {
 		n := &domain.CodeEntity{}
@@ -220,11 +259,17 @@ func scanNodes(rows *sql.Rows) ([]*domain.CodeEntity, error) {
 // GetCallers 返回调用 id（或更上层）的边，深度 ≤ depth，置信度 ≥ minConfidence。
 // 递归 CTE 沿 source 方向向上遍历（TD.md ImpactAnalysisSpecification）。
 func (r *Repo) GetCallers(id domain.CanonicalID, depth int, minConfidence float64) ([]*domain.Fact, error) {
+	logger := zap.L()
+	logger.Debug("enter (Repo).GetCallers")
+	defer logger.Debug("exit (Repo).GetCallers")
 	return r.walkEdges(string(id), depth, minConfidence, "callers")
 }
 
 // GetCallees 返回 id 调用（或更下层）的边，深度 ≤ depth，置信度 ≥ minConfidence。
 func (r *Repo) GetCallees(id domain.CanonicalID, depth int, minConfidence float64) ([]*domain.Fact, error) {
+	logger := zap.L()
+	logger.Debug("enter (Repo).GetCallees")
+	defer logger.Debug("exit (Repo).GetCallees")
 	return r.walkEdges(string(id), depth, minConfidence, "callees")
 }
 
@@ -233,6 +278,9 @@ func (r *Repo) GetCallees(id domain.CanonicalID, depth int, minConfidence float6
 //	callers: edges 从 id 向上（e.target_id 为已到达节点）
 //	callees: edges 从 id 向下（e.source_id 为已到达节点）
 func (r *Repo) walkEdges(id string, depth int, minConfidence float64, dir string) ([]*domain.Fact, error) {
+	logger := zap.L()
+	logger.Debug("enter (Repo).walkEdges")
+	defer logger.Debug("exit (Repo).walkEdges")
 	var anchor, other, walkCol string
 	if dir == "callers" {
 		anchor, other, walkCol = "target_id", "source_id", "src"
@@ -260,6 +308,9 @@ SELECT DISTINCT src, tgt, kind, tool_source, confidence, metadata FROM walk`,
 }
 
 func scanFacts(rows *sql.Rows) ([]*domain.Fact, error) {
+	logger := zap.L()
+	logger.Debug("enter scanFacts")
+	defer logger.Debug("exit scanFacts")
 	var out []*domain.Fact
 	for rows.Next() {
 		f := &domain.Fact{}
@@ -280,6 +331,9 @@ func scanFacts(rows *sql.Rows) ([]*domain.Fact, error) {
 
 // GetImpact 计算变更影响范围：从 id 出发沿任意方向遍历，深度 ≤ depth（TD.md 决策 10）。
 func (r *Repo) GetImpact(id domain.CanonicalID, depth int) ([]*domain.CodeEntity, error) {
+	logger := zap.L()
+	logger.Debug("enter (Repo).GetImpact")
+	defer logger.Debug("exit (Repo).GetImpact")
 	q := `
 WITH RECURSIVE reach(id, d) AS (
     SELECT target_id, 1 FROM edges WHERE source_id = ?
@@ -332,8 +386,12 @@ SELECT id FROM reach LIMIT 2000`
 //   - main 入口函数（排除测试包生成的 main，其 id 形如 <pkg>.test:main）
 //   - HTTP 服务入口（serves_http 标记）
 //   - gRPC 服务入口（serves_grpc 标记）
+//
 // 测试文件（_test.go）中的符号不作为入口。
 func (r *Repo) GetRoots() ([]*domain.CodeEntity, error) {
+	logger := zap.L()
+	logger.Debug("enter (Repo).GetRoots")
+	defer logger.Debug("exit (Repo).GetRoots")
 	rows, err := r.Query(`
 SELECT id, kind, name, file_path, line_start, line_end, properties FROM nodes
 WHERE (file_path IS NULL OR file_path NOT LIKE '%_test.go')
@@ -351,8 +409,12 @@ ORDER BY kind, name LIMIT 100`)
 // Expand 返回节点的直接邻居（前端点击展开）：
 //   - 双向的 calls / implements / imports 边（含方向）
 //   - 邻居节点（去重）
+//
 // 上限 500 条边防止超大数据拖垮前端。
 func (r *Repo) Expand(id domain.CanonicalID) (facts []*domain.Fact, nodes []*domain.CodeEntity, err error) {
+	logger := zap.L()
+	logger.Debug("enter (Repo).Expand")
+	defer logger.Debug("exit (Repo).Expand")
 	rows, err := r.Query(`
 SELECT source_id, target_id, kind, tool_source, confidence, metadata
 FROM edges
@@ -405,6 +467,9 @@ LIMIT 500`, string(id), string(id))
 
 // Counts 返回节点数与边数（构建报告用）。
 func (r *Repo) Counts() (nodes, edges int, err error) {
+	logger := zap.L()
+	logger.Debug("enter (Repo).Counts")
+	defer logger.Debug("exit (Repo).Counts")
 	if err = r.QueryRow("SELECT COUNT(*) FROM nodes").Scan(&nodes); err != nil {
 		return 0, 0, err
 	}
@@ -416,6 +481,9 @@ func (r *Repo) Counts() (nodes, edges int, err error) {
 
 // Save 保存构建元数据。
 func (r *Repo) Save(meta *domain.BuildMeta) error {
+	logger := zap.L()
+	logger.Debug("enter (Repo).Save")
+	defer logger.Debug("exit (Repo).Save")
 	_, err := r.Exec(`INSERT OR REPLACE INTO build_metadata
 		(build_id, commit_sha, tool_name, status, duration_ms, error_message)
 		VALUES (?, ?, ?, ?, ?, ?)`,
@@ -425,6 +493,9 @@ func (r *Repo) Save(meta *domain.BuildMeta) error {
 
 // GetLatest 获取最近一次构建元数据。
 func (r *Repo) GetLatest() (*domain.BuildMeta, error) {
+	logger := zap.L()
+	logger.Debug("enter (Repo).GetLatest")
+	defer logger.Debug("exit (Repo).GetLatest")
 	m := &domain.BuildMeta{}
 	err := r.QueryRow(`SELECT build_id, commit_sha, tool_name, status, duration_ms, error_message
 		FROM build_metadata ORDER BY timestamp DESC LIMIT 1`).

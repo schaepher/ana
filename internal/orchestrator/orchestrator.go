@@ -22,6 +22,8 @@ import (
 	"github.com/schaepher/codeintel/internal/infrastructure/git"
 	"github.com/schaepher/codeintel/internal/infrastructure/scip"
 	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
+	"github.com/schaepher/codeintel/internal/logging"
+	"go.uber.org/zap"
 )
 
 // 常量
@@ -57,6 +59,9 @@ type Orchestrator struct {
 
 // New 创建 Orchestrator，默认挂载 MVP 适配器（SCIP/AST/Git）。
 func New(repo *domain.Repository, db *sqlite.DB) *Orchestrator {
+	logger := zap.L()
+	logger.Debug("enter New")
+	defer logger.Debug("exit New")
 	return &Orchestrator{
 		Repo:     repo,
 		RepoImpl: sqlite.NewRepo(db),
@@ -70,6 +75,9 @@ func New(repo *domain.Repository, db *sqlite.DB) *Orchestrator {
 
 // FullBuild 执行全量构建并返回报告（TD.md 5.2 并行流程）。
 func (o *Orchestrator) FullBuild(ctx context.Context) (*BuildResult, error) {
+	logger := logging.FromContext(ctx)
+	logger.Debug("enter (Orchestrator).FullBuild")
+	defer logger.Debug("exit (Orchestrator).FullBuild")
 	start := time.Now()
 
 	// 清空旧数据（全量重建语义）
@@ -190,10 +198,18 @@ type batchT struct {
 	edges []*domain.Fact
 }
 
-func newBatch() *batchT { return &batchT{} }
+func newBatch() *batchT {
+	logger := zap.L()
+	logger.Debug("enter newBatch")
+	defer logger.Debug("exit newBatch")
+	return &batchT{}
+}
 
 // flush 将当前批次写入数据库。
 func (o *Orchestrator) flush(b *batchT, mu *sync.Mutex, skipped *int) error {
+	logger := zap.L()
+	logger.Debug("enter (Orchestrator).flush")
+	defer logger.Debug("exit (Orchestrator).flush")
 	if len(b.nodes) == 0 && len(b.edges) == 0 {
 		return nil
 	}
@@ -210,14 +226,25 @@ func (o *Orchestrator) flush(b *batchT, mu *sync.Mutex, skipped *int) error {
 }
 
 // GetRepo 返回仓储（查询命令共用）。
-func (o *Orchestrator) GetRepo() *sqlite.Repo { return o.RepoImpl }
+func (o *Orchestrator) GetRepo() *sqlite.Repo {
+	logger := zap.L()
+	logger.Debug("enter (Orchestrator).GetRepo")
+	defer logger.Debug("exit (Orchestrator).GetRepo")
+	return o.RepoImpl
+}
 
 func newBuildID() string {
+	logger := zap.L()
+	logger.Debug("enter newBuildID")
+	defer logger.Debug("exit newBuildID")
 	h := sha256.Sum256([]byte(fmt.Sprintf("%d", time.Now().UnixNano())))
 	return hex.EncodeToString(h[:8])
 }
 
 func headCommitSHA(repoPath string) string {
+	logger := zap.L()
+	logger.Debug("enter headCommitSHA")
+	defer logger.Debug("exit headCommitSHA")
 	if _, err := os.Stat(filepath.Join(repoPath, ".git")); err != nil {
 		return ""
 	}

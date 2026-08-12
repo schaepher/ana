@@ -13,11 +13,15 @@ import (
 	"github.com/schaepher/codeintel/internal/domain"
 	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
 	"github.com/schaepher/codeintel/internal/server"
+	"go.uber.org/zap"
 )
 
 // cmdServe 实现 `codeintel serve --repo <path> [--addr :8090]`：
 // 提供图探索 HTTP 接口与前端页面（TD.md 2.3 中 serve 守护进程的 MVP 形态）。
 func cmdServe(args []string) int {
+	logger := zap.L()
+	logger.Debug("enter cmdServe")
+	defer logger.Debug("exit cmdServe")
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	repoPath := fs.String("repo", ".", "仓库根目录（须已运行 codeintel init）")
 	addr := fs.String("addr", ":8090", "HTTP 监听地址")

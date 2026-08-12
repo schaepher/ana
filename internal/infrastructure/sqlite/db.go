@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	_ "github.com/mattn/go-sqlite3"
+	"go.uber.org/zap"
 )
 
 // SchemaVersion 数据库 schema 版本（PRAGMA user_version）。
@@ -66,6 +67,9 @@ CREATE INDEX IF NOT EXISTS idx_build_commit ON build_metadata(commit_sha);
 
 // Open 打开（或创建）仓库根目录下的 .codeintel/codeintel.db，并校验 schema 版本。
 func Open(repoPath string) (*DB, error) {
+	logger := zap.L()
+	logger.Debug("enter Open")
+	defer logger.Debug("exit Open")
 	dir := filepath.Join(repoPath, ".codeintel")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create .codeintel dir: %w", err)
@@ -94,6 +98,9 @@ type DB struct {
 }
 
 func (db *DB) init() error {
+	logger := zap.L()
+	logger.Debug("enter (DB).init")
+	defer logger.Debug("exit (DB).init")
 	// 检查 schema 版本
 	var v int
 	if err := db.QueryRow("PRAGMA user_version").Scan(&v); err != nil {
@@ -115,4 +122,9 @@ func (db *DB) init() error {
 }
 
 // RepoPath 返回数据库所属仓库路径。
-func (db *DB) RepoPath() string { return db.repoPath }
+func (db *DB) RepoPath() string {
+	logger := zap.L()
+	logger.Debug("enter (DB).RepoPath")
+	defer logger.Debug("exit (DB).RepoPath")
+	return db.repoPath
+}

@@ -3,12 +3,16 @@ package cli
 import (
 	"flag"
 	"fmt"
+	"go.uber.org/zap"
 	"os"
 	"path/filepath"
 )
 
 // cmdClean 实现 `codeintel clean --repo <path>`（TD.md 10.2 数据清理）。
 func cmdClean(args []string) int {
+	logger := zap.L()
+	logger.Debug("enter cmdClean")
+	defer logger.Debug("exit cmdClean")
 	fs := flag.NewFlagSet("clean", flag.ExitOnError)
 	repoPath := fs.String("repo", ".", "仓库根目录")
 	force := fs.Bool("force", false, "不提示直接删除")
