@@ -127,6 +127,7 @@
   graph.render();
   // 调试/自动化钩子：暴露 graph 实例供 playwright 等检查布局
   window.__codeintelGraph = graph;
+  window.__codeintelExpanded = expandedMap;
   loadEntries();
 
   /* ---------- 入口选择（搜索下拉框） ---------- */
