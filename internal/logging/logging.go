@@ -53,7 +53,10 @@ func FromContext(ctx context.Context) *zap.Logger {
 //
 // 返回 TracerProvider 供入口创建 root span，退出时须 Shutdown。
 func Setup(serviceName string) (*sdktrace.TracerProvider, error) {
-	zap.ReplaceGlobals(zap.Must(zap.NewDevelopment()))
+	// 日志（含 debug 级）输出到 stdout
+	devCfg := zap.NewDevelopmentConfig()
+	devCfg.OutputPaths = []string{"stdout"}
+	zap.ReplaceGlobals(zap.Must(devCfg.Build()))
 
 	exporter, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
 	if err != nil {
