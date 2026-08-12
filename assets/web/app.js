@@ -777,7 +777,12 @@
       })
       .then(function (data) {
         modalTitle.textContent = data.file + ':' + data.line;
-        modalCode.textContent = data.code;
+        if (window.hljs) {
+          // 语法高亮（Go）：hljs.highlight 输出已转义的安全 HTML
+          modalCode.innerHTML = hljs.highlight(data.code, { language: 'go' }).value;
+        } else {
+          modalCode.textContent = data.code; // CDN 未加载时降级纯文本
+        }
         modal.classList.remove('hidden');
       })
       .catch(function (err) {

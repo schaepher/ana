@@ -143,7 +143,8 @@ defer logger.Debug("exit <name>")
     **源码弹窗**：函数/方法节点信息栏 Source Code 按钮 → /api/source。
     后端按需读文件 + go/parser 提取声明区间（LineStart 精确 → 行范围
     → 名称三级匹配，容忍文件修改后行号漂移）；仅 function/method，
-    路径解析须验证仍在仓库根内（防目录穿越）。
+    路径解析须验证仍在仓库根内（防目录穿越）。前端 highlight.js
+    （CDN github.min.css 主题）Go 高亮，hljs 未加载时降级 textContent。
 11. **serve 运维坑**：`serve` 打开的是 .codeintel/codeintel.db；重建索引
     （rm -rf .codeintel 或 init 清库）会留下持有已删除文件句柄的旧 serve 进程，
     表现为 API 返回旧数据。改库后须重启 serve。

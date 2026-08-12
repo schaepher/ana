@@ -559,6 +559,8 @@ v2.0 设计树封闭后，MVP 实现过程中补充与调整的能力记录。�
   go/parser 定位声明提取源码区间（匹配策略：LineStart 精确 → 行范围
   包含 → 名称匹配（方法名 (T).m 解析接收者），文件修改后行号漂移仍可
   定位）；只允许 function/method 且防目录穿越（解析结果必须在仓库根内）。
+  前端用 highlight.js（CDN，GitHub 主题）Go 语法高亮，CDN 未加载时
+  降级纯文本。
   **布局坑**：G6 v5 会给容器设内联 `position:relative`，覆盖样式表的
   absolute 定位，`right:320px` 不收缩宽度——需外层 #main-area 承担
   定位让出右侧空间（容器 100% 填充）。
