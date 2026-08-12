@@ -86,12 +86,9 @@ func mustLookPath(bin string) string {
 
 // ---------- JSON 结构（joern-slice data-flow 输出） ----------
 
-// sliceOutput 顶层结构：DataFlowSlice
+// sliceOutput 顶层结构：单条 DataFlowSlice（数据流图：REACHING_DEF 边集合）
 type sliceOutput struct {
-	DataFlowSlice []slice `json:"dataFlowSlice"`
-}
-
-type slice struct {
+	Type  string      `json:"$type"`
 	Nodes []sliceNode `json:"nodes"`
 	Edges []sliceEdge `json:"edges"`
 }
@@ -114,8 +111,13 @@ type sliceEdge struct {
 	Label string `json:"label"`
 }
 
-// parseSlices 解析数据流切片 JSON 并产出 DATA_FLOWS_TO 边。
-// 每条切片路径：起点节点所在方法 → 终点节点所在方法（metadata 记录路径）。
+// parseSlices 解析数据流切片 JSON：
+//   - 方法内 REACHING_DEF 边聚合为数据流路径，写入方法节点
+//     properties.data_flows（trace_data_flow 查询用）
+//   - 跨方法边产出 DATA_FLOWS_TO 边（起点方法 → 终点方法）
+//
+// 注：gosrc2cpg 当前只产出方法内数据流（REACHING_DEF 均为同方法），
+// 跨方法参数流需 Joern 交互式数据流分析，MVP 不接入。
 func parseSlices(repo *domain.Repository, path string, emit domain.EmitFunc) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -125,113 +127,100 @@ func parseSlices(repo *domain.Repository, path string, emit domain.EmitFunc) err
 	if err := json.Unmarshal(data, &out); err != nil {
 		return fmt.Errorf("parse joern slices: %w", err)
 	}
-	for _, s := range out.DataFlowSlice {
-		if len(s.Nodes) < 2 {
+	byID := map[int64]sliceNode{}
+	for _, n := range out.Nodes {
+		byID[n.ID] = n
+	}
+
+	// 方法内路径聚合：methodID → 有序变量序列（源 → 汇）
+	type flowEntry struct {
+		ref      methodRef
+		segments []string
+	}
+	methodFlows := map[domain.CanonicalID]*flowEntry{}
+	emitted := map[string]bool{}
+
+	for _, e := range out.Edges {
+		srcNode, ok1 := byID[e.Src]
+		dstNode, ok2 := byID[e.Dst]
+		if !ok1 || !ok2 {
 			continue
 		}
-		// 路径按 edges 顺序整理（nodes 集合无序，用 edges 重建顺序）
-		pathNodes := orderNodes(s)
-		if len(pathNodes) < 2 {
+		srcRef, ok1 := methodRefFor(repo, srcNode)
+		dstRef, ok2 := methodRefFor(repo, dstNode)
+		if !ok1 || !ok2 {
 			continue
 		}
-		first, last := pathNodes[0], pathNodes[len(pathNodes)-1]
-		src, ok1 := methodIDFor(repo, first)
-		dst, ok2 := methodIDFor(repo, last)
-		if !ok1 || !ok2 || src == dst {
+		if srcRef.ID == dstRef.ID {
+			// 方法内数据流：记录路径片段（去重）
+			fe := methodFlows[srcRef.ID]
+			if fe == nil {
+				fe = &flowEntry{ref: srcRef}
+				methodFlows[srcRef.ID] = fe
+			}
+			seg := strings.TrimSpace(srcNode.Code)
+			if seg == "" {
+				seg = strings.TrimSpace(dstNode.Code)
+			}
+			if seg != "" && (len(fe.segments) == 0 || fe.segments[len(fe.segments)-1] != seg) {
+				fe.segments = append(fe.segments, seg)
+			}
 			continue
 		}
-		pathText := flowPathText(pathNodes)
+		// 跨方法数据流：DATA_FLOWS_TO 边
+		key := string(srcRef.ID) + "|" + string(dstRef.ID) + "|" + strings.TrimSpace(srcNode.Code)
+		if emitted[key] {
+			continue
+		}
+		emitted[key] = true
+		_ = emit(domain.Item{Node: nodeFromRef(srcRef)})
+		_ = emit(domain.Item{Node: nodeFromRef(dstRef)})
 		if err := emit(domain.Item{Fact: &domain.Fact{
-			SourceID:   src,
-			TargetID:   dst,
+			SourceID:   srcRef.ID,
+			TargetID:   dstRef.ID,
 			Kind:       domain.FactDataFlowsTo,
 			ToolSource: domain.ToolJoern,
 			Confidence: 0.7,
 			Metadata: map[string]any{
-				"path":     pathText,
-				"source":   first.Code,
-				"sink":     last.Code,
-				"line_num": first.LineNumber,
+				"source":   strings.TrimSpace(srcNode.Code),
+				"sink":     strings.TrimSpace(dstNode.Code),
+				"line_num": srcNode.LineNumber,
 			},
 		}}); err != nil {
 			return err
 		}
 	}
+
+	// 方法内数据流路径写入节点 properties.data_flows（一次聚合后 emit，
+	// 避免 json_patch 数组互相覆盖）
+	for _, fe := range methodFlows {
+		if len(fe.segments) < 2 {
+			continue
+		}
+		n := nodeFromRef(fe.ref)
+		n.Properties = map[string]any{
+			"data_flows": []string{strings.Join(fe.segments, " -> ")},
+		}
+		_ = emit(domain.Item{Node: n})
+	}
 	return nil
 }
 
-// orderNodes 用 edges 把切片节点整理成路径顺序（起点为无入边的节点）。
-func orderNodes(s slice) []sliceNode {
-	byID := map[int64]sliceNode{}
-	for _, n := range s.Nodes {
-		byID[n.ID] = n
-	}
-	hasIn := map[int64]bool{}
-	for _, e := range s.Edges {
-		hasIn[e.Dst] = true
-	}
-	// 找起点（无入边）
-	var start int64
-	for _, n := range s.Nodes {
-		if !hasIn[n.ID] {
-			start = n.ID
-			break
-		}
-	}
-	if start == 0 {
-		return nil
-	}
-	var ordered []sliceNode
-	cur := start
-	for {
-		n, ok := byID[cur]
-		if !ok {
-			break
-		}
-		ordered = append(ordered, n)
-		// 找下一跳
-		next := int64(0)
-		for _, e := range s.Edges {
-			if e.Src == cur {
-				next = e.Dst
-				break
-			}
-		}
-		if next == 0 {
-			break
-		}
-		cur = next
-	}
-	return ordered
+// methodRef 是切片节点定位到的方法引用（ID + 节点信息）。
+type methodRef struct {
+	ID       domain.CanonicalID
+	Name     string
+	Kind     domain.EntityKind
+	FilePath string
+	Line     int
 }
 
-// flowPathText 生成 source_var -> ... -> sink_var 路径文本（TD.md 7.3）。
-func flowPathText(nodes []sliceNode) string {
-	parts := make([]string, 0, len(nodes))
-	for _, n := range nodes {
-		parts = append(parts, flowVarName(n))
-	}
-	return strings.Join(parts, " -> ")
-}
-
-// flowVarName 提取路径节点的变量显示名（优先 code，去掉多余空白）。
-func flowVarName(n sliceNode) string {
-	code := strings.TrimSpace(n.Code)
-	if code == "" {
-		return n.Name
-	}
-	if len(code) > 60 {
-		return code[:60]
-	}
-	return code
-}
-
-// methodIDFor 将切片节点定位到方法 canonical ID。
-// 用 parentFile（相对路径）推导包路径 + parentMethod 匹配方法名。
-func methodIDFor(repo *domain.Repository, n sliceNode) (domain.CanonicalID, bool) {
+// methodRefFor 将切片节点定位到方法：用 parentFile（相对路径）推导包路径
+// + parentMethod 匹配方法名。parentMethod 形如 "main.process" / "(S).Foo"。
+func methodRefFor(repo *domain.Repository, n sliceNode) (methodRef, bool) {
 	file := n.ParentFile
 	if file == "" {
-		return "", false
+		return methodRef{}, false
 	}
 	// 相对仓库根
 	rel := strings.TrimPrefix(filepath.ToSlash(file), "./")
@@ -244,25 +233,45 @@ func methodIDFor(repo *domain.Repository, n sliceNode) (domain.CanonicalID, bool
 	pkgPath := repo.Module + "/" + dir
 	pkgPath = strings.TrimSuffix(pkgPath, "/")
 
-	// parentMethod 形如 "main" / "(S).Foo" / "pkg.Func"（Joern 输出待实测）
 	m := n.ParentMethod
 	if i := strings.LastIndex(m, "."); i >= 0 && !strings.HasPrefix(m, "(") {
 		m = m[i+1:]
 	}
 	if m == "" {
-		return "", false
+		return methodRef{}, false
 	}
-	name := m
+	ref := methodRef{
+		FilePath: rel,
+		Line:     n.LineNumber,
+		Kind:     domain.KindFunction,
+	}
 	if strings.HasPrefix(m, "(") {
-		// (T).M → T.M 规范：提取 T 与 M
+		// (T).M → (T).M 规范：提取 T 与 M
 		if j := strings.Index(m, ")."); j >= 0 {
 			t := strings.TrimPrefix(m[1:j], "*")
-			name = canonicalizer.MethodName(t, m[j+2:])
+			ref.Name = canonicalizer.MethodName(t, m[j+2:])
+			ref.Kind = domain.KindMethod
+		} else {
+			return methodRef{}, false
 		}
+	} else {
+		ref.Name = m
 	}
-	id := canonicalizer.GoSymbolID(pkgPath, name)
-	if string(id) == "" {
-		return "", false
+	ref.ID = canonicalizer.GoSymbolID(pkgPath, ref.Name)
+	if string(ref.ID) == "" {
+		return methodRef{}, false
 	}
-	return id, true
+	return ref, true
+}
+
+// nodeFromRef 为方法引用生成轻量节点（UPSERT 合并，不覆盖 SCIP 节点）。
+func nodeFromRef(ref methodRef) *domain.CodeEntity {
+	return &domain.CodeEntity{
+		ID:        ref.ID,
+		Kind:      ref.Kind,
+		Name:      ref.Name,
+		FilePath:  ref.FilePath,
+		LineStart: ref.Line,
+		LineEnd:   ref.Line,
+	}
 }

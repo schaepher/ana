@@ -632,6 +632,33 @@ LIMIT 500`, string(id), string(id))
 	return facts, nodes, nil
 }
 
+// GetDataFlows 返回符号的数据流信息：
+//   - 方法内路径（properties.data_flows，来自 Joern REACHING_DEF 聚合）
+//   - 跨方法 DATA_FLOWS_TO 边
+func (r *Repo) GetDataFlows(id domain.CanonicalID) (flows []string, facts []*domain.Fact, err error) {
+	n, err := r.GetSymbol(id)
+	if err != nil {
+		return nil, nil, err
+	}
+	if arr, ok := n.Properties["data_flows"].([]any); ok {
+		for _, v := range arr {
+			if s, ok := v.(string); ok {
+				flows = append(flows, s)
+			}
+		}
+	}
+	rows, err := r.Query(`
+SELECT source_id, target_id, kind, tool_source, confidence, metadata
+FROM edges WHERE (source_id = ? OR target_id = ?) AND kind = 'data_flows_to' LIMIT 200`,
+		string(id), string(id))
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	facts, err = scanFacts(rows)
+	return flows, facts, err
+}
+
 // Counts 返回节点数与边数（构建报告用）。
 func (r *Repo) Counts() (nodes, edges int, err error) {
 	logger := zap.L()
