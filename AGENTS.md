@@ -27,7 +27,7 @@ go build -o codeintel ./cmd/codeintel
 internal/domain/          领域模型：CodeEntity/Fact/CanonicalID、IndexerPort/CodeRepository 端口
 internal/canonicalizer/   Canonical ID 生成、SCIP symbol 解析（FromScipSymbol）
 internal/logging/         ctx ↔ *zap.Logger + OpenTelemetry 链路追踪初始化。
-                          Setup() 建 development logger（debug 级，stderr）与
+                          Setup() 建 development logger（debug 级，stdout）与
                           stdouttrace 导出器；FromContext 在 span context 有效时
                           附加 trace_id/span_id 字段（entrylog 注入的日志用）
 internal/orchestrator/    全量构建编排：并行适配器、独立超时 10min、分批 1000 条事务、降级报告
@@ -102,7 +102,7 @@ defer logger.Debug("exit <name>")
    写入节点 properties `serves_http` / `serves_grpc`。**坑**：外部包调用点不建 CALLS 边，
    标记 fires 时必须立即 emit 节点，否则节点永远不带标记。
 10. **图探索 API**：`GetRoots` 返回 main 入口 + 服务入口（排除 `_test.go` 文件与
-    `<pkg>.test:` 包）；`Expand` 返回双向 calls/implements/imports 直接邻居（上限 500 边）。
+    `<pkg>.test:` 包）；`Expand` 返回双向 calls/implements/imports/initializes 直接邻居（上限 500 边）。
     前端在 assets/web/（G6 v5 UMD，CDN 引入），通过 addNodeData/addEdgeData 增量渲染，
     节点复用去重由前端 seen 集合保证。
     **G6 v5 布局坑**（playwright 实测）：`draw()` 不触发布局，增量数据必须显式
