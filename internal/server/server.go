@@ -20,14 +20,15 @@ type Server struct {
 	ctx  context.Context // 携带 root span，handler 日志由此取带链路信息的 logger
 	repo *sqlite.Repo
 	web  fs.FS // 前端静态资源
+	root string // 仓库根目录（/api/source 读源码用）
 }
 
 // New 创建 Server。
-func New(ctx context.Context, repo *sqlite.Repo, webFS fs.FS) *Server {
+func New(ctx context.Context, repo *sqlite.Repo, webFS fs.FS, repoRoot string) *Server {
 	logger := logging.FromContext(ctx)
 	logger.Debug("enter New")
 	defer logger.Debug("exit New")
-	return &Server{ctx: ctx, repo: repo, web: webFS}
+	return &Server{ctx: ctx, repo: repo, web: webFS, root: repoRoot}
 }
 
 // Handler 返回 HTTP 处理器。
@@ -39,6 +40,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/roots", s.handleRoots)
 	mux.HandleFunc("/api/search", s.handleSearch)
 	mux.HandleFunc("/api/expand", s.handleExpand)
+	mux.HandleFunc("/api/source", s.handleSource)
 	mux.Handle("/", http.FileServer(http.FS(s.web)))
 	return mux
 }

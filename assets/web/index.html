@@ -69,6 +69,34 @@
     }
     #panel-body table.fields th { color: #86909c; font-weight: 600; }
     #panel-body table.fields td.ftype { color: #1677ff; font-family: ui-monospace, Menlo, Consolas, monospace; }
+    #source-btn {
+      display: block; width: 100%; margin-bottom: 10px; padding: 6px 0;
+      border: 1px solid #1677ff; border-radius: 6px; background: #fff;
+      color: #1677ff; font-size: 12px; font-weight: 600; cursor: pointer;
+    }
+    #source-btn:hover { background: #e6f0ff; }
+    #modal {
+      position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 100;
+      display: flex; align-items: center; justify-content: center;
+    }
+    #modal.hidden { display: none; }
+    #modal-box {
+      width: min(900px, 88vw); height: min(560px, 80vh);
+      background: #fff; border-radius: 8px; overflow: hidden;
+      display: flex; flex-direction: column; box-shadow: 0 8px 32px rgba(0,0,0,.25);
+    }
+    #modal-head {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 10px 16px; border-bottom: 1px solid #e5e6eb;
+      font-size: 13px; font-weight: 600; color: #1f1f2e;
+    }
+    #modal-close { border: none; background: none; font-size: 20px; line-height: 1; cursor: pointer; color: #86909c; }
+    #modal-close:hover { color: #333; }
+    #modal-code {
+      flex: 1; margin: 0; padding: 14px 16px; overflow: auto;
+      font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px;
+      line-height: 1.6; color: #24292f; white-space: pre; tab-size: 4;
+    }
     .loading { opacity: .5; pointer-events: none; }
   </style>
 </head>
@@ -98,6 +126,15 @@
     <div id="panel-head">节点信息</div>
     <div id="panel-body"><p class="doc">单击节点查看详细信息</p></div>
   </aside>
+  <div id="modal" class="hidden">
+    <div id="modal-box">
+      <div id="modal-head">
+        <span id="modal-title">Source Code</span>
+        <button id="modal-close" title="关闭">×</button>
+      </div>
+      <pre id="modal-code"></pre>
+    </div>
+  </div>
   <script src="app.js"></script>
 </body>
 </html>

@@ -65,7 +65,7 @@ func cmdServe(ctx context.Context, args []string) int {
 
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           server.New(ctx, repo, webFS).Handler(),
+		Handler:           server.New(ctx, repo, webFS, abs).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	fmt.Printf("codeintel serve 已启动: http://localhost%s  （仓库: %s）\n", *addr, abs)

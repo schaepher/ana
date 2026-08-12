@@ -554,6 +554,11 @@ v2.0 设计树封闭后，MVP 实现过程中补充与调整的能力记录。�
   每条显示方向 →/←、对方节点、位置行号——出边行号在节点自身文件，
   入边在对方文件）。数据复用 /api/expand（node+edges+neighbors），
   后端 NodeJSON 补充 doc_comment/message/date/fields 字段。
+- **Source Code 弹窗**：函数/方法节点信息栏顶部有 Source Code 按钮，
+  点击弹窗展示完整源码（`/api/source?id=`）。后端按需读取仓库文件并
+  go/parser 定位声明提取源码区间（匹配策略：LineStart 精确 → 行范围
+  包含 → 名称匹配（方法名 (T).m 解析接收者），文件修改后行号漂移仍可
+  定位）；只允许 function/method 且防目录穿越（解析结果必须在仓库根内）。
   **布局坑**：G6 v5 会给容器设内联 `position:relative`，覆盖样式表的
   absolute 定位，`right:320px` 不收缩宽度——需外层 #main-area 承担
   定位让出右侧空间（容器 100% 填充）。

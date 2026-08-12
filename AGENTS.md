@@ -140,6 +140,10 @@ defer logger.Debug("exit <name>")
     前端边虚线 [5,2] 标注"接收者"。**坑**：三行布局中间行单个节点
     （如 receiver）会落在中心节点正上方（placeRow 单个节点 start=cx）——
     须 offsetSingle 偏移到中心右侧。
+    **源码弹窗**：函数/方法节点信息栏 Source Code 按钮 → /api/source。
+    后端按需读文件 + go/parser 提取声明区间（LineStart 精确 → 行范围
+    → 名称三级匹配，容忍文件修改后行号漂移）；仅 function/method，
+    路径解析须验证仍在仓库根内（防目录穿越）。
 11. **serve 运维坑**：`serve` 打开的是 .codeintel/codeintel.db；重建索引
     （rm -rf .codeintel 或 init 清库）会留下持有已删除文件句柄的旧 serve 进程，
     表现为 API 返回旧数据。改库后须重启 serve。

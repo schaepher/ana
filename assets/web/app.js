@@ -754,6 +754,42 @@
 
   var panel = document.getElementById('sidepanel');
   var panelBody = document.getElementById('panel-body');
+  var modal = document.getElementById('modal');
+  var modalTitle = document.getElementById('modal-title');
+  var modalCode = document.getElementById('modal-code');
+  // 当前信息栏节点（Source Code 按钮用）
+  var currentPanelId = null;
+  // 委托：Source Code 按钮（函数/方法节点信息栏顶部）
+  panelBody.addEventListener('click', function (evt) {
+    if (evt.target.id === 'source-btn' && currentPanelId) showSource(currentPanelId);
+  });
+  document.getElementById('modal-close').addEventListener('click', closeSource);
+  modal.addEventListener('click', function (evt) {
+    if (evt.target === modal) closeSource(); // 点击遮罩关闭
+  });
+
+  // showSource 请求 /api/source 并弹窗展示函数/方法源码
+  function showSource(id) {
+    fetch('/api/source?id=' + encodeURIComponent(id))
+      .then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+      })
+      .then(function (data) {
+        modalTitle.textContent = data.file + ':' + data.line;
+        modalCode.textContent = data.code;
+        modal.classList.remove('hidden');
+      })
+      .catch(function (err) {
+        modalTitle.textContent = 'Source Code';
+        modalCode.textContent = '加载源码失败: ' + err.message;
+        modal.classList.remove('hidden');
+      });
+  }
+
+  function closeSource() {
+    modal.classList.add('hidden');
+  }
 
   var KIND_LABEL = {
     function: '函数', method: '方法', struct: '结构体', interface: '接口',
@@ -781,10 +817,16 @@
   function renderNodePanel(data) {
     var node = data.node;
     if (!node) return;
+    currentPanelId = node.id;
     var edges = data.edges || [];
     var byId = {};
     (data.neighbors || []).forEach(function (n) { byId[n.id] = n; });
     var html = [];
+
+    // 函数/方法：Source Code 按钮（弹窗展示源码）
+    if (node.kind === 'function' || node.kind === 'method') {
+      html.push('<button id="source-btn">Source Code</button>');
+    }
 
     // 基本信息
     var basic = [];
