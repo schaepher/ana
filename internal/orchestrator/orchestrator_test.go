@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"codeintel/internal/domain"
-	"codeintel/internal/infrastructure/sqlite"
+	"github.com/schaepher/codeintel/internal/domain"
+	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
 )
 
 // TestFullBuildAndQuery 端到端：临时 Go 模块 → 全量构建 → 校验图数据。

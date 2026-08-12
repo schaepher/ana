@@ -17,11 +17,11 @@ import (
 	"sync"
 	"time"
 
-	"codeintel/internal/domain"
-	"codeintel/internal/infrastructure/ast"
-	"codeintel/internal/infrastructure/git"
-	"codeintel/internal/infrastructure/scip"
-	"codeintel/internal/infrastructure/sqlite"
+	"github.com/schaepher/codeintel/internal/domain"
+	"github.com/schaepher/codeintel/internal/infrastructure/ast"
+	"github.com/schaepher/codeintel/internal/infrastructure/git"
+	"github.com/schaepher/codeintel/internal/infrastructure/scip"
+	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
 )
 
 // 常量

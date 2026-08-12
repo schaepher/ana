@@ -1,4 +1,4 @@
-module codeintel
+module github.com/schaepher/codeintel
 
 go 1.26
 

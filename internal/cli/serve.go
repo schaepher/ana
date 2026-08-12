@@ -9,10 +9,10 @@ import (
 	"os"
 	"time"
 
-	"codeintel/assets"
-	"codeintel/internal/domain"
-	"codeintel/internal/infrastructure/sqlite"
-	"codeintel/internal/server"
+	"github.com/schaepher/codeintel/assets"
+	"github.com/schaepher/codeintel/internal/domain"
+	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
+	"github.com/schaepher/codeintel/internal/server"
 )
 
 // cmdServe 实现 `codeintel serve --repo <path> [--addr :8090]`：

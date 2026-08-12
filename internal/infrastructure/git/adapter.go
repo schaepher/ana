@@ -10,7 +10,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"codeintel/internal/domain"
+	"github.com/schaepher/codeintel/internal/domain"
 )
 
 // Adapter 是 Git 历史适配器。

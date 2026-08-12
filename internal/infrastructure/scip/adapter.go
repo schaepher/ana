@@ -18,8 +18,8 @@ import (
 	"github.com/scip-code/scip/bindings/go/scip"
 	"google.golang.org/protobuf/proto"
 
-	"codeintel/internal/canonicalizer"
-	"codeintel/internal/domain"
+	"github.com/schaepher/codeintel/internal/canonicalizer"
+	"github.com/schaepher/codeintel/internal/domain"
 )
 
 // Adapter 是 SCIP 索引适配器。

@@ -8,7 +8,7 @@ import (
 
 	"github.com/scip-code/scip/bindings/go/scip"
 
-	"codeintel/internal/domain"
+	"github.com/schaepher/codeintel/internal/domain"
 )
 
 // GoSymbol 解析后的 Go 符号身份。

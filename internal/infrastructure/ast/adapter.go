@@ -14,8 +14,8 @@ import (
 
 	"golang.org/x/tools/go/packages"
 
-	"codeintel/internal/canonicalizer"
-	"codeintel/internal/domain"
+	"github.com/schaepher/codeintel/internal/canonicalizer"
+	"github.com/schaepher/codeintel/internal/domain"
 )
 
 // Adapter 是基于 go/packages 的调用图分析器。

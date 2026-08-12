@@ -8,8 +8,8 @@ import (
 	"io/fs"
 	"net/http"
 
-	"codeintel/internal/domain"
-	"codeintel/internal/infrastructure/sqlite"
+	"github.com/schaepher/codeintel/internal/domain"
+	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
 )
 
 // Server 承载图查询 HTTP 接口。

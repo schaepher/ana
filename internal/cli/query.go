@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	"codeintel/internal/domain"
-	"codeintel/internal/infrastructure/sqlite"
+	"github.com/schaepher/codeintel/internal/domain"
+	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
 )
 
 // MinConfidence 调用关系查询默认置信度阈值。

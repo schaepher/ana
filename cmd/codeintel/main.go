@@ -4,7 +4,7 @@ package main
 import (
 	"os"
 
-	"codeintel/internal/cli"
+	"github.com/schaepher/codeintel/internal/cli"
 )
 
 func main() {

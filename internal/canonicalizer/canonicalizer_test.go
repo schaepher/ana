@@ -21,8 +21,8 @@ func TestFromScipSymbol(t *testing.T) {
 		},
 		{
 			// 子包：Package.Name 只有 module 名，完整路径来自 descriptor
-			symbol:   "scip-go gomod codeintel . `codeintel/internal/orchestrator`/FullBuild().",
-			wantPath: "codeintel/internal/orchestrator",
+			symbol:   "scip-go gomod github.com/schaepher/codeintel . `github.com/schaepher/codeintel/internal/orchestrator`/FullBuild().",
+			wantPath: "github.com/schaepher/codeintel/internal/orchestrator",
 			wantName: "FullBuild",
 		},
 		{

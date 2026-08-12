@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"codeintel/internal/domain"
+	"github.com/schaepher/codeintel/internal/domain"
 )
 
 // 确保 DB 实现仓储接口
