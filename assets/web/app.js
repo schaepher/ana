@@ -350,7 +350,23 @@
     });
 
     graph.setData({ nodes: keepNodes, edges: keepEdges });
-    graph.layout();
+    // 收起后只重绘不跑 force 布局（setData 保留节点坐标）；
+    // 若该节点是某展开节点的子节点，父节点位置可能被子节点展开移动，
+    // 重新对其三行排布恢复分层
+    var parent = parentOf(id);
+    if (parent) {
+      arrangeLayers(parent);
+    }
+    graph.draw();
+  }
+
+  // parentOf 返回展开记录中包含 childId 的父节点（该子节点由谁展开）。
+  function parentOf(childId) {
+    var found = null;
+    expandedMap.forEach(function (rec, pid) {
+      if (!found && rec.nodes.indexOf(childId) >= 0) found = pid;
+    });
+    return found;
   }
 
   // collectCollapse 递归收集收起子树中应删除的节点与边：
