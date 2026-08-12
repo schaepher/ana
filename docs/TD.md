@@ -563,6 +563,10 @@ v2.0 设计树封闭后，MVP 实现过程中补充与调整的能力记录。�
 
 - **排除 `_test.go`**：scip-go `--skip-tests` + AST 适配器关闭 Tests 模式，
   测试符号（TestXxx、测试 main）不入图。
+- **initializes 边**（v2.1 补充）：struct 实例化（`&T{}` / `T{}` /
+  内建 `new(T)`）产生 `initializes` 边（调用者函数 → struct 类型，
+  conf 0.8），构造函数 `newT()` 由 calls 边 + 其内部实例化递归覆盖。
+  仅限 module 内 struct（排除 map/slice 等复合字面量）。
 - **REFERENCES 引用边未实现**：scip-go 的定义 occurrence 只覆盖符号名
   （不含函数体），引用无法归属到引用者，引用关系由 CALLS 边覆盖。
 - **signature 由 AST 适配器生成**（`types.ObjectString`）：SCIP v0.7.1

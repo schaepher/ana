@@ -36,6 +36,7 @@ const (
 	FactReferences  FactKind = "references"
 	FactDataFlowsTo FactKind = "data_flows_to"
 	FactTests       FactKind = "tests"
+	FactInitializes FactKind = "initializes" // struct 实例化（&T{} / T{} / new(T)）
 )
 
 // 工具来源标识，对应 edges.tool_source 列。

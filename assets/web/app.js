@@ -39,12 +39,14 @@
   var EDGE_KIND_LINE = {
     calls: [],
     implements: [4, 4],
-    imports: [2, 4]
+    imports: [2, 4],
+    initializes: [1, 3]
   };
   var EDGE_KIND_LABEL = {
     calls: '调用',
     implements: '实现',
-    imports: '导入'
+    imports: '导入',
+    initializes: '初始化'
   };
   var EDGE_OUT_COLOR = '#1677ff';
   var EDGE_IN_COLOR = '#f5222d';

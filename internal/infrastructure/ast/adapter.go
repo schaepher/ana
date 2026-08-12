@@ -156,10 +156,18 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
+			// struct 初始化（&T{} / T{}）→ initializes 边
+			if cl, isLit := n.(*ast.CompositeLit); isLit {
+				return a.processCompositeLit(pkg, cl, stack, emit, repo)
+			}
 			return true
 		}
+		// 内建 new(T)：callee 解析失败（builtin 无 Pkg）时单独处理
 		callee, ok := resolveCallee(pkg.TypesInfo, call.Fun)
 		if !ok {
+			if id, isID := call.Fun.(*ast.Ident); isID && id.Name == "new" && len(call.Args) == 1 {
+				return a.processNewCall(pkg, call, stack, emit, repo)
+			}
 			return true
 		}
 		callerDecl := findCallerDecl(stack)
@@ -307,6 +315,78 @@ func (a *Adapter) markHTTPHandlers(repo *domain.Repository, pkg *packages.Packag
 		}
 	}
 	return nil
+}
+
+// initializes 边的公共处理：caller 函数 → struct 类型（initializes, conf 0.8）。
+// 返回 false 表示不满足条件（无 caller/非项目内 struct/自引用），不产出边。
+func (a *Adapter) emitInitializes(pkg *packages.Package, t types.Type, stack []ast.Node, emit domain.EmitFunc, repo *domain.Repository) bool {
+	callerDecl := findCallerDecl(stack)
+	if callerDecl == nil {
+		return false // 包级初始化，MVP 不建边
+	}
+	caller, ok := pkg.TypesInfo.Defs[callerDecl.Name].(*types.Func)
+	if !ok {
+		return false
+	}
+	callerID, _ := fnID(caller)
+	if callerID == "" {
+		return false
+	}
+	if p, ok := t.(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	named, ok := t.(*types.Named)
+	if !ok {
+		return false
+	}
+	if _, ok := named.Underlying().(*types.Struct); !ok {
+		return false // 仅 struct 初始化（排除 map/slice/chan 等复合字面量）
+	}
+	if named.Obj().Pkg() == nil || !isInModule(named.Obj().Pkg().Path(), repo.Module) {
+		return false
+	}
+	targetID := canonicalizer.GoSymbolID(named.Obj().Pkg().Path(), named.Obj().Name())
+	if targetID == callerID {
+		return false
+	}
+	// 保障目标节点存在（UPSERT 合并，不覆盖 SCIP 节点）
+	pos := pkg.Fset.PositionFor(named.Obj().Pos(), false)
+	_ = emit(domain.Item{Node: &domain.CodeEntity{
+		ID:        targetID,
+		Kind:      domain.KindStruct,
+		Name:      named.Obj().Name(),
+		FilePath:  relPath(repo.Path, pos.Filename),
+		LineStart: pos.Line,
+		LineEnd:   pos.Line,
+	}})
+	_ = emit(domain.Item{Fact: &domain.Fact{
+		SourceID:   callerID,
+		TargetID:   targetID,
+		Kind:       domain.FactInitializes,
+		ToolSource: domain.ToolCodeGraph,
+		Confidence: 0.8,
+	}})
+	return true
+}
+
+// processCompositeLit 处理 &T{} / T{}：解析类型并生成 initializes 边。
+func (a *Adapter) processCompositeLit(pkg *packages.Package, cl *ast.CompositeLit, stack []ast.Node, emit domain.EmitFunc, repo *domain.Repository) bool {
+	t := pkg.TypesInfo.TypeOf(cl)
+	if t == nil {
+		return true
+	}
+	a.emitInitializes(pkg, t, stack, emit, repo)
+	return true
+}
+
+// processNewCall 处理内建 new(T)：生成 initializes 边。
+func (a *Adapter) processNewCall(pkg *packages.Package, call *ast.CallExpr, stack []ast.Node, emit domain.EmitFunc, repo *domain.Repository) bool {
+	t := pkg.TypesInfo.TypeOf(call.Args[0])
+	if t == nil {
+		return true
+	}
+	a.emitInitializes(pkg, t, stack, emit, repo)
+	return true
 }
 
 // isRegisterServerName 判断函数名是否匹配 protoc 生成惯例 RegisterXxxServer。

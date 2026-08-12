@@ -84,6 +84,9 @@ defer logger.Debug("exit <name>")
    节点按 id UPSERT 合并 properties（json_patch），SCIP 写入的 kind/行号不被覆盖。
 4. **外键约束**：edge 端点节点必须存在；不存在的边（如 Git 追踪到未索引文件）
    在 SaveBatchStats 中静默跳过并计数，不中断构建。
+   **initializes 边**：`&T{}`/`T{}`/`new(T)` 产生 调用者→struct 的
+   initializes 边（conf 0.8），仅 module 内 struct（Underlying 为
+   *types.Struct 才建，排除 map/slice 复合字面量）。
 5. **SCIP 引用边未实现**：scip-go 的定义 occurrence 只覆盖符号名（不含函数体），
    引用无法归属到调用者，因此没有 REFERENCES 边；引用类查询依赖 AST 的 CALLS 边。
 6. **签名来源**：SCIP v0.7.1 协议不输出 signature，签名由 AST 适配器用
