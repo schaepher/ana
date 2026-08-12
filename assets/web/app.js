@@ -31,11 +31,20 @@
     http: '#fa541c',
     grpc: '#f5222d'
   };
-  var EDGE_STYLE = {
-    calls: { stroke: '#4e5969', lineDash: [] },
-    implements: { stroke: '#722ed1', lineDash: [4, 4] },
-    imports: { stroke: '#fa8c16', lineDash: [2, 4] }
+  // 边：出边（该节点依赖对方）蓝色，入边（对方依赖该节点）红色；
+  // 线型区分关系种类，label 显示关系说明
+  var EDGE_KIND_LINE = {
+    calls: [],
+    implements: [4, 4],
+    imports: [2, 4]
   };
+  var EDGE_KIND_LABEL = {
+    calls: '调用',
+    implements: '实现',
+    imports: '导入'
+  };
+  var EDGE_OUT_COLOR = '#1677ff';
+  var EDGE_IN_COLOR = '#f5222d';
 
   var graph = new G6.Graph({
     container: container,
@@ -64,13 +73,18 @@
     },
     edge: {
       style: function (d) {
-        var s = EDGE_STYLE[d.data.kind] || EDGE_STYLE.calls;
+        var direction = d.data.direction;
         return {
-          stroke: s.stroke,
+          stroke: direction === 'in' ? EDGE_IN_COLOR : EDGE_OUT_COLOR,
           lineWidth: 1.5,
-          lineDash: s.lineDash,
+          lineDash: EDGE_KIND_LINE[d.data.kind] || [],
           endArrow: true,
-          endArrowSize: 8
+          endArrowSize: 8,
+          labelText: EDGE_KIND_LABEL[d.data.kind] || d.data.kind,
+          labelFontSize: 9,
+          labelBackground: true,
+          labelBackgroundFill: 'rgba(255,255,255,.8)',
+          labelBackgroundRadius: 2
         };
       }
     },
@@ -239,7 +253,7 @@
     graph.addEdgeData([{
       source: e.source,
       target: e.target,
-      data: { kind: e.kind }
+      data: { kind: e.kind, direction: e.direction }
     }]);
     return true;
   }
