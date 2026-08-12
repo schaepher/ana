@@ -11,6 +11,11 @@
   var seenNodes = new Set();
   var seenEdges = new Set();
   var expanding = false;
+  // 展开令牌：收起会使飞行中的展开回调失效，防止已删节点"复活"
+  var expandToken = 0;
+  // 展开记录：parentId → { nodes: 新增节点 id, edges: 新增边 key }（双击收起用）。
+  // 注意：邻居可能已在图中（roots 里的服务入口），其边也要记录才能完整收起。
+  var expandedMap = new Map();
 
   var KIND_COLOR = {
     function: '#1677ff',
@@ -90,7 +95,7 @@
         graph.layout();
         var n = data.nodes ? data.nodes.length : 0;
         tip.textContent = n
-          ? '已加载 ' + n + ' 个顶层入口 · 单击节点展开依赖'
+          ? '已加载 ' + n + ' 个顶层入口 · 双击节点展开/收起依赖'
           : '没有找到入口（先运行 codeintel init）';
       })
       .catch(function (err) {
@@ -101,6 +106,7 @@
   function expandNode(id) {
     if (expanding) return;
     expanding = true;
+    var myToken = ++expandToken;
     container.classList.add('loading');
     fetch('/api/expand?id=' + encodeURIComponent(id))
       .then(function (res) {
@@ -108,12 +114,22 @@
         return res.json();
       })
       .then(function (data) {
+        // 期间发生了收起/其他展开：放弃本次结果，避免已删节点复活
+        if (myToken !== expandToken) return data;
         var added = 0;
-        (data.neighbors || []).forEach(function (n) { if (addNode(n)) added++; });
-        (data.edges || []).forEach(function (e) { if (addEdge(e)) added++; });
+        var newIds = [];
+        var newEdgeKeys = [];
+        (data.neighbors || []).forEach(function (n) { if (addNode(n)) { added++; newIds.push(n.id); } });
+        (data.edges || []).forEach(function (e) {
+          var key = e.source + '→' + e.target + '|' + e.kind;
+          if (addEdge(e)) { added++; newEdgeKeys.push(key); }
+        });
+        if (newIds.length || newEdgeKeys.length) {
+          expandedMap.set(id, { nodes: newIds, edges: newEdgeKeys });
+        }
         graph.layout(); // 增量数据后必须显式布局，否则节点堆在原点
         tip.textContent = added > 0
-          ? '展开 ' + (added / 2 | 0) + ' 个邻居 · 继续单击节点探索'
+          ? '展开 ' + newIds.length + ' 个邻居 · 双击可收起'
           : '该节点没有更多依赖';
         return data;
       })
@@ -125,6 +141,69 @@
         expanding = false;
         container.classList.remove('loading');
       });
+  }
+
+  // collapseNode 收起节点的展开分支（递归）：删除子节点中只与该节点
+  // 相连的（孤儿）节点；仍被其他节点引用的共享节点保留（但其与收起
+  // 节点的边一并删除）。实现上用 setData 全量重建——G6 v5 的
+  // removeEdgeData/removeNodeData 增量删除在批处理时可能引用已删节点
+  // （"Node not found"），全量重建规避该坑。
+  function collapseNode(id) {
+    var children = expandedMap.get(id);
+    if (!children || children.size === 0) return;
+
+    // 停止布局动画并取消飞行中的展开回调
+    if (typeof graph.stopLayout === 'function') graph.stopLayout();
+    expandToken++;
+
+    // 递归收集要删除的节点（孤儿才删）与要删除的边（本次展开添加的边）
+    var toRemove = new Set();
+    var edgesToRemove = new Set();
+    collectCollapse(id, toRemove, edgesToRemove);
+
+    // 全量重建：保留所有不在删除集合中的节点与边
+    var data = graph.getData();
+    var keepNodes = (data.nodes || []).filter(function (n) { return !toRemove.has(n.id); });
+    var keepEdges = (data.edges || []).filter(function (e) {
+      if (toRemove.has(e.source) || toRemove.has(e.target)) return false;
+      return !edgesToRemove.has(e.source + '→' + e.target + '|' + ((e.data && e.data.kind) || ''));
+    });
+    // 同步去重集合
+    seenNodes.clear();
+    keepNodes.forEach(function (n) { seenNodes.add(n.id); });
+    seenEdges.clear();
+    keepEdges.forEach(function (e) {
+      seenEdges.add(e.source + '→' + e.target + '|' + ((e.data && e.data.kind) || ''));
+    });
+
+    graph.setData({ nodes: keepNodes, edges: keepEdges });
+    graph.layout();
+  }
+
+  // collectCollapse 递归收集收起子树中应删除的节点与边：
+  // - edgesToRemove：各层展开时新增的边（key 为 "source→target|kind"）
+  // - toRemove：孤儿子节点（无指向保留节点的边）才删除
+  function collectCollapse(id, toRemove, edgesToRemove) {
+    var record = expandedMap.get(id);
+    if (!record) return;
+    expandedMap.delete(id);
+    record.edges.forEach(function (k) { edgesToRemove.add(k); });
+    var data = graph.getData();
+    record.nodes.forEach(function (cid) {
+      collectCollapse(cid, toRemove, edgesToRemove);
+      if (toRemove.has(cid)) return;
+      var hasOtherEdge = (data.edges || []).some(function (e) {
+        if (e.source === cid || e.target === cid) {
+          var other = e.source === cid ? e.target : e.source;
+          var k1 = e.source + '→' + e.target + '|' + ((e.data && e.data.kind) || '');
+          var k2 = e.target + '→' + e.source + '|' + ((e.data && e.data.kind) || '');
+          return other !== id && !toRemove.has(other) &&
+            !edgesToRemove.has(k1) && !edgesToRemove.has(k2);
+        }
+        return false;
+      });
+      if (!hasOtherEdge) toRemove.add(cid);
+    });
   }
 
   /* ---------- 图数据增量 ---------- */
@@ -167,11 +246,31 @@
 
   /* ---------- 交互 ---------- */
 
+  // 单击：显示符号信息；双击：展开 / 收起依赖
   graph.on('node:click', function (evt) {
     var id = evt.target.id;
     if (!id) return;
-    expandNode(id);
+    var n = nodeById(id);
+    if (n) showInfo(n);
   });
+
+  graph.on('node:dblclick', function (evt) {
+    var id = evt.target.id;
+    if (!id) return;
+    if (expandedMap.has(id)) {
+      collapseNode(id);
+      var name = nodeById(id);
+      tip.textContent = '已收起' + (name ? ' ' + name.name : '') + ' · 双击可重新展开';
+    } else {
+      expandNode(id);
+    }
+  });
+
+  // nodeById 从图数据中取节点信息（含原始 API 数据）。
+  function nodeById(id) {
+    var d = graph.getNodeData(id);
+    return d && d.data ? d.data.full : null;
+  }
 
   function showInfo(n) {
     if (!n) return;

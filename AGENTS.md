@@ -106,6 +106,13 @@ defer logger.Debug("exit <name>")
     `graph.layout()`；force 布局不处理孤立节点与增量新节点（位置留空会堆在原点）——
     addNode 时必须预置网格初始位置（style.x/y，固定 4 列避免 sqrt 回绕重叠）。
     位置读取用 `getNodeData(id).style.x/y`，`getData()` 读不到布局位置。
+    坐标转换 API 参数为数组：`getElementPosition(id)` / `getClientByCanvas([x,y])`
+    返回 `[x,y,z]`，传对象会得到 null。
+    **交互**：单击显示信息，双击展开/收起。收起实现要点：expandedMap 记录每次
+    展开新增的 nodes 与 edges（**已存在的邻居边也要记录**，否则收起删不掉）；
+    收起用 setData 全量重建（G6 v5 removeEdgeData/removeNodeData 增量删除在批处理
+    时引用已删节点报 "Node not found"）；展开令牌（expandToken）使收起时飞行中的
+    展开回调失效，防止已删节点复活。
 11. **serve 运维坑**：`serve` 打开的是 .codeintel/codeintel.db；重建索引
     （rm -rf .codeintel 或 init 清库）会留下持有已删除文件句柄的旧 serve 进程，
     表现为 API 返回旧数据。改库后须重启 serve。
