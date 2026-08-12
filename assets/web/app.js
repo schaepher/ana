@@ -260,11 +260,23 @@
       if (e.source === id) other = e.target;
       else if (e.target === id) other = e.source;
       if (!other) return;
-      if (kind === 'calls') {
-        if (e.source === id) pushUniq(callees, other);
-        else pushUniq(callers, other);
-      } else {
-        pushUniq(others, other);
+      // 按关系方向分行，避免非 calls 关系堆在中间一行：
+      //   出边（我调用/初始化/实现/导入）→ 下行；入边（别人调用/初始化我、
+      //   接口被实现、包被导入）→ 上行；对象关系（uses/passes_to）→ 中间
+      var down = e.source === id;
+      switch (kind) {
+        case 'calls':
+        case 'initializes':
+          if (down) pushUniq(callees, other);
+          else pushUniq(callers, other);
+          break;
+        case 'implements':
+        case 'imports':
+          if (down) pushUniq(callers, other); // 实现的接口/导入的包 → 上行
+          else pushUniq(callees, other);      // 接口的实现者/被导入者 → 下行
+          break;
+        default: // uses / passes_to / of_type 等对象关系
+          pushUniq(others, other);
       }
     });
     var updates = [{ id: id, style: { x: cx, y: cy } }];
