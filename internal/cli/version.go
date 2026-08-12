@@ -5,15 +5,23 @@ import (
 	"runtime/debug"
 )
 
+// gitCommit 由构建参数注入（见 Makefile）：
+//
+//	go build -ldflags "-X github.com/schaepher/codeintel/internal/cli.gitCommit=<hash>"
+//
+// 未注入时回退到 debug.ReadBuildInfo 的 vcs.revision（go build 默认嵌入）。
+var gitCommit = "unknown"
+
 // cmdVersion 实现 `codeintel version`：输出编译时的 commit hash。
-// go build 默认（-buildvcs=true）把 VCS 信息嵌入二进制，无需 ldflags。
 func cmdVersion(args []string) int {
-	fmt.Printf("codeintel %s\n", gitCommit())
+	fmt.Printf("codeintel %s\n", version())
 	return 0
 }
 
-// gitCommit 从构建信息读取 vcs.revision。
-func gitCommit() string {
+func version() string {
+	if gitCommit != "unknown" && gitCommit != "" {
+		return gitCommit
+	}
 	bi, ok := debug.ReadBuildInfo()
 	if !ok {
 		return "unknown"
