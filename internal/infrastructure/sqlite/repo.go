@@ -384,21 +384,26 @@ SELECT id FROM reach LIMIT 2000`
 
 // GetRoots 返回顶层入口节点（前端初始视图）：
 //   - main 入口函数（排除测试包生成的 main，其 id 形如 <pkg>.test:main）
+//   - init 函数（框架注册常发生在 init() 中，作为入口展开）
 //   - HTTP 服务入口（serves_http 标记）
 //   - gRPC 服务入口（serves_grpc 标记）
 //
-// 测试文件（_test.go）中的符号不作为入口。
+// 约束：入口必须落在当前 module 内的文件（file_path 非空、非 _test.go、
+// 非仓库外路径）。
 func (r *Repo) GetRoots() ([]*domain.CodeEntity, error) {
 	logger := zap.L()
 	logger.Debug("enter (Repo).GetRoots")
 	defer logger.Debug("exit (Repo).GetRoots")
 	rows, err := r.Query(`
 SELECT id, kind, name, file_path, line_start, line_end, properties FROM nodes
-WHERE (file_path IS NULL OR file_path NOT LIKE '%_test.go')
+WHERE file_path IS NOT NULL
+  AND file_path NOT LIKE '%_test.go'
+  AND file_path NOT LIKE '../%'
   AND ((name = 'main' AND kind = 'function' AND id NOT LIKE '%.test:main')
+   OR (name = 'init' AND kind = 'function' AND id NOT LIKE '%.test:init')
    OR json_extract(properties, '$.serves_http') = 'true'
    OR json_extract(properties, '$.serves_grpc') = 'true')
-ORDER BY kind, name LIMIT 100`)
+ORDER BY kind, name LIMIT 200`)
 	if err != nil {
 		return nil, fmt.Errorf("get roots: %w", err)
 	}
