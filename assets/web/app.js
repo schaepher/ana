@@ -161,9 +161,13 @@
         if (newIds.length || newEdgeKeys.length) {
           expandedMap.set(id, { nodes: newIds, edges: newEdgeKeys });
         }
-        // 展开顶层节点后聚焦：删除与它不关联的节点（仅保留它与其直接邻居）
-        if (rootIds.has(id)) focusOn(id);
-        graph.layout(); // 增量数据后必须显式布局，否则节点堆在原点
+        // 展开顶层节点后聚焦：删除与它不关联的节点，并按三行排布
+        // （arrangeLayers 已设置最终位置，不再跑 force 布局覆盖）
+        if (rootIds.has(id)) {
+          focusOn(id);
+        } else {
+          graph.layout(); // 非顶层展开：增量数据后显式布局
+        }
         tip.textContent = rootIds.has(id)
           ? '已聚焦 ' + id.split('/').pop() + ' 的依赖 · 双击收起返回入口'
           : (added > 0 ? '展开 ' + newIds.length + ' 个邻居 · 双击可收起' : '该节点没有更多依赖');
@@ -204,34 +208,61 @@
       if (!keep.has(k)) expandedMap.delete(k);
     });
     graph.setData({ nodes: nodes, edges: edges });
-    arrangeAround(id); // 环形布局：邻居围绕被展开节点
+    arrangeLayers(id); // 三行布局：caller 上行、节点中间、callee 下行
   }
 
-  // arrangeAround 将节点环形排列：id 居中，其直接邻居围绕（均匀角度）。
+  // arrangeLayers 三行排布被展开节点的关联：
+  //   上行：callers（调用该节点的，calls 入边）
+  //   中间行：该节点 + 非 calls 关联（implements/imports 等）
+  //   下行：callees（该节点调用的，calls 出边）
   // 不跑 force 布局，避免旧坐标影响（focusOn 后不调用 graph.layout）。
-  function arrangeAround(id) {
+  function arrangeLayers(id) {
     var data = graph.getData();
     if (!data.nodes.some(function (n) { return n.id === id; })) return;
     var w = container.clientWidth || 1200;
     var h = container.clientHeight || 800;
     var cx = w / 2;
     var cy = h / 2;
-    var neighbors = [];
+    var callers = [];
+    var callees = [];
+    var others = [];
     (data.edges || []).forEach(function (e) {
-      if (e.source === id && neighbors.indexOf(e.target) < 0) neighbors.push(e.target);
-      else if (e.target === id && neighbors.indexOf(e.source) < 0) neighbors.push(e.source);
+      var kind = (e.data && e.data.kind) || '';
+      var other = null;
+      if (e.source === id) other = e.target;
+      else if (e.target === id) other = e.source;
+      if (!other) return;
+      if (kind === 'calls') {
+        if (e.source === id) pushUniq(callees, other);
+        else pushUniq(callers, other);
+      } else {
+        pushUniq(others, other);
+      }
     });
-    var radius = Math.min(w, h) / 2 - 100;
-    if (neighbors.length > 12) radius = Math.min(w, h) / 2 - 60; // 多邻居时半径取大
     var updates = [{ id: id, style: { x: cx, y: cy } }];
-    neighbors.forEach(function (nid, i) {
-      var angle = -Math.PI / 2 + (2 * Math.PI * i) / Math.max(neighbors.length, 1);
-      updates.push({
-        id: nid,
-        style: { x: cx + radius * Math.cos(angle), y: cy + radius * Math.sin(angle) }
-      });
-    });
+    var rowGap = 240;
+    var rowWidth = w - 140;
+    // 中间行：非 calls 关联水平分布在节点两侧
+    placeRow(updates, others, cy, rowWidth, cx, 160);
+    // 上行：callers
+    placeRow(updates, callers, cy - rowGap, rowWidth, cx, 90);
+    // 下行：callees
+    placeRow(updates, callees, cy + rowGap, rowWidth, cx, 90);
     graph.updateNodeData(updates);
+  }
+
+  // placeRow 将一组节点水平均匀排布在一行（居中）。
+  function placeRow(updates, ids, y, rowWidth, cx, minSpacing) {
+    if (!ids.length) return;
+    var spacing = Math.min(170, Math.max(minSpacing, rowWidth / ids.length));
+    var start = cx - ((ids.length - 1) * spacing) / 2;
+    ids.forEach(function (nid, i) {
+      updates.push({ id: nid, style: { x: start + i * spacing, y: y } });
+    });
+  }
+
+  function pushUniq(arr, v) {
+    if (arr.indexOf(v) < 0) arr.push(v);
   }
 
   // resetGraph 清空图数据与全部状态（收起顶层节点后回到入口视图）。
