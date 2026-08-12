@@ -46,6 +46,9 @@
   };
   var EDGE_OUT_COLOR = '#1677ff';
   var EDGE_IN_COLOR = '#f5222d';
+  var EDGE_DEFAULT_COLOR = '#000000';
+  // 当前选中节点：以其为参照，出边蓝、入边红，其他边黑色
+  var selectedId = null;
 
   var graph = new G6.Graph({
     container: container,
@@ -70,13 +73,26 @@
         labelBackgroundRadius: 3,
         labelFontSize: 12,
         cursor: 'pointer'
+      },
+      state: {
+        selected: {
+          stroke: '#000000',
+          lineWidth: 4
+        }
       }
     },
     edge: {
       style: function (d) {
-        var direction = d.data.direction;
+        // 颜色跟随选中节点（闭包变量 selectedId）：
+        // 选中节点的出边蓝、入边红，其余黑色。样式函数在元素渲染时求值，
+        // 选中变化后由 setElementState 触发全图重渲染重算。
+        var stroke = EDGE_DEFAULT_COLOR;
+        if (selectedId) {
+          if (d.source === selectedId) stroke = EDGE_OUT_COLOR;
+          else if (d.target === selectedId) stroke = EDGE_IN_COLOR;
+        }
         return {
-          stroke: direction === 'in' ? EDGE_IN_COLOR : EDGE_OUT_COLOR,
+          stroke: stroke,
           lineWidth: 1.5,
           lineDash: EDGE_KIND_LINE[d.data.kind] || [],
           endArrow: true,
@@ -251,6 +267,7 @@
     var key = e.source + '→' + e.target + '|' + e.kind;
     if (seenEdges.has(key)) return false;
     seenEdges.add(key);
+    // 边颜色由样式函数按 selectedId 渲染时求值（见 edge.style）
     graph.addEdgeData([{
       source: e.source,
       target: e.target,
@@ -261,13 +278,39 @@
 
   /* ---------- 交互 ---------- */
 
-  // 单击：显示符号信息；双击：展开 / 收起依赖
+  // 单击节点：选中并以它为参照染色（出边蓝/入边红），显示符号信息
   graph.on('node:click', function (evt) {
     var id = evt.target.id;
     if (!id) return;
+    selectNode(id);
     var n = nodeById(id);
     if (n) showInfo(n);
   });
+
+  // 单击空白：取消选中，边恢复黑色
+  graph.on('canvas:click', function () {
+    clearSelection();
+    info.style.display = 'none';
+  });
+
+  // 选中节点：先更新 selectedId 再触发状态变化重渲染。
+  // G6 v5 中 setElementState 的状态变化会触发全图样式函数重新求值，
+  // 边据此按新选中节点染色（updateEdgeData/draw 都不会重算样式函数）。
+  function selectNode(id) {
+    if (selectedId === id) return;
+    if (selectedId) graph.setElementState(selectedId, []);
+    selectedId = id;
+    graph.setElementState(id, ['selected']);
+  }
+
+  // 取消选中：必须先置空 selectedId 再触发状态变化重渲染（顺序颠倒
+  // 会导致渲染仍按旧选中节点染色）。
+  function clearSelection() {
+    if (!selectedId) return;
+    var prev = selectedId;
+    selectedId = null;
+    graph.setElementState(prev, []);
+  }
 
   graph.on('node:dblclick', function (evt) {
     var id = evt.target.id;
