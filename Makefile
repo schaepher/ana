@@ -6,11 +6,15 @@ GIT_COMMIT := $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
 VERSION_PKG := github.com/schaepher/codeintel/internal/cli
 LDFLAGS    := -X '$(VERSION_PKG).gitCommit=$(GIT_COMMIT)'
 
-.PHONY: build test vet clean version
+.PHONY: build install test vet clean version
 
 ## build: 编译二进制（注入 commit hash）
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/codeintel
+
+## install: 安装到 GOBIN（默认 GOPATH/bin），同样注入 commit hash
+install:
+	go install -ldflags "$(LDFLAGS)" ./cmd/codeintel
 
 ## test: 运行全部测试
 test:
