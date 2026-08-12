@@ -126,6 +126,10 @@ defer logger.Debug("exit <name>")
     rowClass 方向分类与三行布局一致（calls/initializes 出=down、implements/
     imports 出=up、其余=mid）。曾为"移除全部兄弟"，会把唯一顶行 caller 剪掉
     导致链路断头（用户反馈后修正）。
+    **树布局**：relayoutTree 方向感知分层——行号仅以 calls 入边（isCaller）
+    为上一行，其余一律下一行（implements/imports 在三行布局中是上行依赖，
+    但链视图中是节点自身子项，排下一行），每行水平居中。入口节点首次选择
+    显式置于画布正中（addNode 网格位置在左上角，force 不移动孤立节点）。
 11. **serve 运维坑**：`serve` 打开的是 .codeintel/codeintel.db；重建索引
     （rm -rf .codeintel 或 init 清库）会留下持有已删除文件句柄的旧 serve 进程，
     表现为 API 返回旧数据。改库后须重启 serve。

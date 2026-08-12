@@ -212,6 +212,11 @@
     resetGraph();
     entryRootId = e.id; // 展开树根
     addNode(e);
+    // 入口节点置于画布正中：addNode 的网格预置位置在左上角，force 布局
+    // 不移动孤立节点，需显式定位
+    var w = container.clientWidth || 1200;
+    var h = container.clientHeight || 800;
+    graph.updateNodeData([{ id: e.id, style: { x: w / 2, y: h / 2 } }]);
     graph.layout();
     tip.textContent = '已选择 ' + e.name + ' · 双击节点展开依赖';
     info.style.display = 'none';
@@ -505,6 +510,19 @@
   // 相同的分类）："up"=caller 行、"down"=callee 行、"mid"=中间行（对象关系
   // uses/passes_to/of_type）；图中无边时返回 null。用于同向剪枝：展开节点时
   // 只移除同侧兄弟。
+  // 注意：树布局（relayoutTree）不用本函数判断上下——implements/imports 虽
+  // 在三行布局中视为上行依赖，但在链视图中是节点自身的子项，排下一行。
+
+  // isCaller 判断 child 是否为 parent 的 caller（calls 入边）。树布局行号
+  // 仅以 calls 入边为"上一行"（链路顶行），其余关系一律下一行，保证链路
+  // 垂直（展开 callee 后 cmdInit 仍居中在 FullBuild 上方）。
+  function isCaller(parent, child) {
+    var data = graph.getData();
+    return (data.edges || []).some(function (x) {
+      return x.source === child && x.target === parent &&
+        ((x.data && x.data.kind) || '') === 'calls';
+    });
+  }
   function rowClass(center, other) {
     var data = graph.getData();
     var e = (data.edges || []).find(function (x) {
@@ -543,45 +561,57 @@
     return found;
   }
 
-  // relayoutTree 对展开树做层级布局：根在最上行，展开的子节点逐层向下，
-  // 每层节点水平均匀分布。未在展开树中的节点追加到最后一层。
+  // relayoutTree 对展开树做方向感知的层级布局：以根为中间行，caller 子
+  // 节点（rowClass=up）排在其上一行、callee 子节点（down/mid）排在下一
+  // 行，逐层递推；每行水平均匀分布。未在展开树中的节点（如共享节点）
+  // 追加到最下行。相比按展开树深度分层，方向感知保证链路顶行（caller，
+  // 如 cmdInit）始终位于其父节点上方——展开 callee 后顶行不会落回父节点
+  // 下一行。
   function relayoutTree(rootId) {
     var data = graph.getData();
     if (!data.nodes.some(function (n) { return n.id === rootId; })) return;
     var nodeSet = new Set(data.nodes.map(function (n) { return n.id; }));
-    var layers = [[rootId]];
-    var assigned = new Set([rootId]);
-    var frontier = [rootId];
-    while (frontier.length) {
-      var next = [];
-      frontier.forEach(function (pid) {
-        var rec = expandedMap.get(pid);
-        if (!rec) return;
-        rec.nodes.forEach(function (cid) {
-          if (assigned.has(cid) || !nodeSet.has(cid)) return; // 已删节点跳过
-          assigned.add(cid);
-          next.push(cid);
-        });
+    // BFS 计算每节点行号：根=0，caller（calls 入边）-1，其余（callee、
+    // 实现接口、导入包、对象关系）+1
+    var depths = new Map([[rootId, 0]]);
+    var queue = [rootId];
+    while (queue.length) {
+      var pid = queue.shift();
+      var rec = expandedMap.get(pid);
+      if (!rec) continue;
+      var pd = depths.get(pid);
+      rec.nodes.forEach(function (cid) {
+        if (!nodeSet.has(cid) || depths.has(cid)) return; // 已分配/已删节点跳过
+        depths.set(cid, pd + (isCaller(pid, cid) ? -1 : 1));
+        queue.push(cid);
       });
-      if (next.length) layers.push(next);
-      frontier = next;
     }
-    // 未在展开树中的节点（如共享节点）追加到最后一层
+    // 未在展开树中的节点（如共享节点）追加到最后一行
     var tail = [];
     data.nodes.forEach(function (n) {
-      if (!assigned.has(n.id)) tail.push(n.id);
+      if (!depths.has(n.id)) tail.push(n.id);
+    });
+    // 按行号分组
+    var rows = new Map();
+    depths.forEach(function (d, nid) {
+      if (!rows.has(d)) rows.set(d, []);
+      rows.get(d).push(nid);
     });
     if (tail.length) {
-      layers.push(tail);
+      var maxD = 0;
+      rows.forEach(function (_, d) { if (d > maxD) maxD = d; });
+      rows.set(maxD + 1, tail);
     }
     var w = container.clientWidth || 1200;
     var h = container.clientHeight || 800;
     var cx = w / 2;
     var rowGap = 200;
     var startY = 80;
+    var minD = 0;
+    rows.forEach(function (_, d) { if (d < minD) minD = d; });
     var updates = [];
-    layers.forEach(function (ids, li) {
-      var y = startY + li * rowGap;
+    rows.forEach(function (ids, d) {
+      var y = startY + (d - minD) * rowGap;
       var spacing = Math.min(180, Math.max(90, (w - 120) / ids.length));
       var x0 = cx - ((ids.length - 1) * spacing) / 2;
       ids.forEach(function (nid, i) {
