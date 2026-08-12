@@ -53,7 +53,8 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, emit domai
 		return fmt.Errorf("create .codeintel: %w", err)
 	}
 
-	cmd := exec.CommandContext(ctx, bin, "index", "-o", indexPath, "-q")
+	// --skip-tests：不索引 _test.go 测试文件（测试符号不入图）
+	cmd := exec.CommandContext(ctx, bin, "index", "-o", indexPath, "-q", "--skip-tests")
 	cmd.Dir = repo.Path
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("scip-go index failed: %v: %s", err, string(out))

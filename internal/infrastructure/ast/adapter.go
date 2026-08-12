@@ -41,8 +41,8 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, emit domai
 	cfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
 			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps,
-		Dir:   repo.Path,
-		Tests: true,
+		Dir: repo.Path,
+		// Tests 默认 false：不加载 _test.go（测试符号不入图）
 	}
 	pkgs, err := packages.Load(cfg, "./...")
 	if err != nil {
