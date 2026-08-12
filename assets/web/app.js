@@ -26,7 +26,8 @@
     interface: '#722ed1',
     package: '#fa8c16',
     file: '#8c8c8c',
-    commit: '#595959'
+    commit: '#595959',
+    object: '#00b96b'
   };
   var FLAG_COLOR = {
     main: '#eb2f96',
@@ -40,13 +41,19 @@
     calls: [],
     implements: [4, 4],
     imports: [2, 4],
-    initializes: [1, 3]
+    initializes: [1, 3],
+    uses: [6, 2],
+    passes_to: [2, 2, 2, 4],
+    of_type: [1, 4, 1, 4]
   };
   var EDGE_KIND_LABEL = {
     calls: '调用',
     implements: '实现',
     imports: '导入',
-    initializes: '初始化'
+    initializes: '初始化',
+    uses: '使用',
+    passes_to: '传给',
+    of_type: '类型'
   };
   var EDGE_OUT_COLOR = '#1677ff';
   var EDGE_IN_COLOR = '#f5222d';

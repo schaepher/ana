@@ -22,6 +22,7 @@ const (
 	KindStruct    EntityKind = "struct"
 	KindInterface EntityKind = "interface"
 	KindCommit    EntityKind = "commit"
+	KindObject    EntityKind = "object" // struct 实例化产生的对象
 )
 
 // FactKind 事实（关系）种类，对应 edges.kind 列。
@@ -37,6 +38,9 @@ const (
 	FactDataFlowsTo FactKind = "data_flows_to"
 	FactTests       FactKind = "tests"
 	FactInitializes FactKind = "initializes" // struct 实例化（&T{} / T{} / new(T)）
+	FactUses        FactKind = "uses"        // 对象的方法被调用（使用处）
+	FactPassesTo    FactKind = "passes_to"   // 对象被传给其他函数（去处）
+	FactOfType      FactKind = "of_type"      // 对象 → 其 struct 类型
 )
 
 // 工具来源标识，对应 edges.tool_source 列。

@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"go/ast"
+	"go/token"
 	"go/types"
 	"path/filepath"
 	"strings"
@@ -145,6 +146,10 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 	}
 
 	var stack []ast.Node
+	// 对象流追踪：变量名 → 对象 ID（同一函数内）；表达式 Pos → 对象 ID（去重）
+	objVars := map[string]domain.CanonicalID{}
+	objCache := map[token.Pos]domain.CanonicalID{}
+
 	ast.Inspect(f, func(n ast.Node) bool {
 		if n == nil {
 			if len(stack) > 0 {
@@ -154,11 +159,32 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 		}
 		stack = append(stack, n)
 
+		// 变量绑定：x := &T{} / var x = &T{} / x := new(T)
+		if assign, isAssign := n.(*ast.AssignStmt); isAssign && assign.Tok == token.DEFINE &&
+			len(assign.Lhs) == 1 && len(assign.Rhs) == 1 {
+			if id, isID := assign.Lhs[0].(*ast.Ident); isID {
+				if objID, ok := a.createObject(pkg, assign.Rhs[0], stack, emit, repo, objCache); ok {
+					objVars[id.Name] = objID
+				}
+			}
+		}
+		if decl, isDecl := n.(*ast.GenDecl); isDecl && decl.Tok == token.VAR {
+			for _, spec := range decl.Specs {
+				vs, isVS := spec.(*ast.ValueSpec)
+				if !isVS || len(vs.Names) != 1 || len(vs.Values) != 1 {
+					continue
+				}
+				if objID, ok := a.createObject(pkg, vs.Values[0], stack, emit, repo, objCache); ok {
+					objVars[vs.Names[0].Name] = objID
+				}
+			}
+		}
+
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
-			// struct 初始化（&T{} / T{}）→ initializes 边
+			// 非调用的初始化表达式（如 struct 字段内嵌 &T{}）：仍创建对象
 			if cl, isLit := n.(*ast.CompositeLit); isLit {
-				return a.processCompositeLit(pkg, cl, stack, emit, repo)
+				a.createObject(pkg, cl, stack, emit, repo, objCache)
 			}
 			return true
 		}
@@ -166,7 +192,7 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 		callee, ok := resolveCallee(pkg.TypesInfo, call.Fun)
 		if !ok {
 			if id, isID := call.Fun.(*ast.Ident); isID && id.Name == "new" && len(call.Args) == 1 {
-				return a.processNewCall(pkg, call, stack, emit, repo)
+				a.createObject(pkg, call, stack, emit, repo, objCache)
 			}
 			return true
 		}
@@ -181,6 +207,48 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 		callerID, callerKind := fnID(caller)
 		if callerID == "" {
 			return true
+		}
+
+		// 对象使用处：x.Method()（x 是初始化的对象）→ uses 边（对象 → 方法）
+		if sel, isSel := call.Fun.(*ast.SelectorExpr); isSel {
+			if xid, isID := sel.X.(*ast.Ident); isID {
+				if objID, ok := objVars[xid.Name]; ok {
+					if methodID, methodKind := fnID(callee); methodID != "" {
+						_ = emit(domain.Item{Node: nodeFor(repo, pkg, callee, methodID, methodKind, nil)})
+						_ = emit(domain.Item{Fact: &domain.Fact{
+							SourceID:   objID,
+							TargetID:   methodID,
+							Kind:       domain.FactUses,
+							ToolSource: domain.ToolCodeGraph,
+							Confidence: 0.8,
+						}})
+					}
+				}
+			}
+		}
+		// 对象去处：f(x) / f(&T{}) → passes_to 边（对象 → 接收函数）
+		if callee.Pkg() != nil && isInModule(callee.Pkg().Path(), repo.Module) {
+			calleeID, calleeKind := fnID(callee)
+			for _, arg := range call.Args {
+				var objID domain.CanonicalID
+				var ok2 bool
+				if xid, isID := arg.(*ast.Ident); isID {
+					objID, ok2 = objVars[xid.Name]
+				}
+				if !ok2 {
+					objID, ok2 = a.createObject(pkg, arg, stack, emit, repo, objCache)
+				}
+				if ok2 && calleeID != "" && objID != calleeID {
+					_ = emit(domain.Item{Node: nodeFor(repo, pkg, callee, calleeID, calleeKind, nil)})
+					_ = emit(domain.Item{Fact: &domain.Fact{
+						SourceID:   objID,
+						TargetID:   calleeID,
+						Kind:       domain.FactPassesTo,
+						ToolSource: domain.ToolCodeGraph,
+						Confidence: 0.8,
+					}})
+				}
+			}
 		}
 		// 服务入口标记：调用 net/http / grpc 包的函数作为顶层入口。
 		// 注意：外部调用点随后会直接 return（不建 CALLS 边），因此标记
@@ -317,76 +385,96 @@ func (a *Adapter) markHTTPHandlers(repo *domain.Repository, pkg *packages.Packag
 	return nil
 }
 
-// initializes 边的公共处理：caller 函数 → struct 类型（initializes, conf 0.8）。
-// 返回 false 表示不满足条件（无 caller/非项目内 struct/自引用），不产出边。
-func (a *Adapter) emitInitializes(pkg *packages.Package, t types.Type, stack []ast.Node, emit domain.EmitFunc, repo *domain.Repository) bool {
+// createObject 将初始化表达式（&T{} / T{} / new(T)）解析为对象：
+//   - 创建对象节点（kind=object，ID=obj:go:<pkg>:<func>:<line>:<col>）
+//   - initializes 边：初始化者函数 → struct 类型（与类型的关系）
+//
+// 返回对象 ID；非 struct 初始化 / 外部类型 / 无 caller 时返回 false。
+// cache 以表达式 Pos 去重，同一表达式只建一个对象。
+func (a *Adapter) createObject(pkg *packages.Package, expr ast.Expr, stack []ast.Node, emit domain.EmitFunc,
+	repo *domain.Repository, cache map[token.Pos]domain.CanonicalID) (domain.CanonicalID, bool) {
+	var t types.Type
+	switch e := expr.(type) {
+	case *ast.UnaryExpr: // &T{}
+		if cl, ok := e.X.(*ast.CompositeLit); ok {
+			t = pkg.TypesInfo.TypeOf(cl)
+		}
+	case *ast.CompositeLit: // T{}
+		t = pkg.TypesInfo.TypeOf(e)
+	case *ast.CallExpr: // new(T)
+		if id, ok := e.Fun.(*ast.Ident); ok && id.Name == "new" && len(e.Args) == 1 {
+			t = pkg.TypesInfo.TypeOf(e.Args[0])
+		}
+	}
+	if t == nil {
+		return "", false
+	}
+	if cached, ok := cache[expr.Pos()]; ok {
+		return cached, true
+	}
 	callerDecl := findCallerDecl(stack)
 	if callerDecl == nil {
-		return false // 包级初始化，MVP 不建边
+		return "", false // 包级初始化，MVP 不追踪对象
 	}
 	caller, ok := pkg.TypesInfo.Defs[callerDecl.Name].(*types.Func)
 	if !ok {
-		return false
+		return "", false
 	}
 	callerID, _ := fnID(caller)
 	if callerID == "" {
-		return false
+		return "", false
 	}
 	if p, ok := t.(*types.Pointer); ok {
 		t = p.Elem()
 	}
 	named, ok := t.(*types.Named)
 	if !ok {
-		return false
+		return "", false
 	}
 	if _, ok := named.Underlying().(*types.Struct); !ok {
-		return false // 仅 struct 初始化（排除 map/slice/chan 等复合字面量）
+		return "", false // 仅 struct（排除 map/slice 等复合字面量）
 	}
 	if named.Obj().Pkg() == nil || !isInModule(named.Obj().Pkg().Path(), repo.Module) {
-		return false
+		return "", false
 	}
-	targetID := canonicalizer.GoSymbolID(named.Obj().Pkg().Path(), named.Obj().Name())
-	if targetID == callerID {
-		return false
+	structID := canonicalizer.GoSymbolID(named.Obj().Pkg().Path(), named.Obj().Name())
+	if structID == callerID {
+		return "", false
 	}
-	// 保障目标节点存在（UPSERT 合并，不覆盖 SCIP 节点）
-	pos := pkg.Fset.PositionFor(named.Obj().Pos(), false)
+	posInfo := pkg.Fset.PositionFor(expr.Pos(), false)
+	objID := domain.CanonicalID(fmt.Sprintf("obj:go:%s:%s:%d:%d",
+		pkg.PkgPath, callerDecl.Name.Name, posInfo.Line, posInfo.Column))
+
+	// 对象节点（properties 记录类型）
 	_ = emit(domain.Item{Node: &domain.CodeEntity{
-		ID:        targetID,
-		Kind:      domain.KindStruct,
+		ID:        objID,
+		Kind:      domain.KindObject,
 		Name:      named.Obj().Name(),
-		FilePath:  relPath(repo.Path, pos.Filename),
-		LineStart: pos.Line,
-		LineEnd:   pos.Line,
+		FilePath:  relPath(repo.Path, posInfo.Filename),
+		LineStart: posInfo.Line,
+		LineEnd:   posInfo.Line,
+		Properties: map[string]any{
+			"type": string(structID),
+		},
 	}})
+	// initializes 边：初始化者 → 对象（对象由该函数创建）
 	_ = emit(domain.Item{Fact: &domain.Fact{
 		SourceID:   callerID,
-		TargetID:   targetID,
+		TargetID:   objID,
 		Kind:       domain.FactInitializes,
 		ToolSource: domain.ToolCodeGraph,
 		Confidence: 0.8,
 	}})
-	return true
-}
-
-// processCompositeLit 处理 &T{} / T{}：解析类型并生成 initializes 边。
-func (a *Adapter) processCompositeLit(pkg *packages.Package, cl *ast.CompositeLit, stack []ast.Node, emit domain.EmitFunc, repo *domain.Repository) bool {
-	t := pkg.TypesInfo.TypeOf(cl)
-	if t == nil {
-		return true
-	}
-	a.emitInitializes(pkg, t, stack, emit, repo)
-	return true
-}
-
-// processNewCall 处理内建 new(T)：生成 initializes 边。
-func (a *Adapter) processNewCall(pkg *packages.Package, call *ast.CallExpr, stack []ast.Node, emit domain.EmitFunc, repo *domain.Repository) bool {
-	t := pkg.TypesInfo.TypeOf(call.Args[0])
-	if t == nil {
-		return true
-	}
-	a.emitInitializes(pkg, t, stack, emit, repo)
-	return true
+	// of_type 边：对象 → 其 struct 类型
+	_ = emit(domain.Item{Fact: &domain.Fact{
+		SourceID:   objID,
+		TargetID:   structID,
+		Kind:       domain.FactOfType,
+		ToolSource: domain.ToolCodeGraph,
+		Confidence: 1.0,
+	}})
+	cache[expr.Pos()] = objID
+	return objID, true
 }
 
 // isRegisterServerName 判断函数名是否匹配 protoc 生成惯例 RegisterXxxServer。
