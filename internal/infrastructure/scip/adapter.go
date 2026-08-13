@@ -177,7 +177,8 @@ func (a *Adapter) processDocument(repo *domain.Repository, doc *scip.Document, e
 		}
 	}
 
-	// pass 3: IMPLEMENTS 边（is_implementation relationship）
+	// pass 3: IMPLEMENTS 边（is_implementation relationship）——方向：
+	// 接口 → 实现者（用户确认：接口要指向实现，而非实现指向接口）
 	for _, sym := range doc.Symbols {
 		if len(sym.Relationships) == 0 {
 			continue
@@ -186,21 +187,21 @@ func (a *Adapter) processDocument(repo *domain.Repository, doc *scip.Document, e
 		if err != nil {
 			continue
 		}
-		sourceID := canonicalizer.GoSymbolID(src.ImportPath, src.Name)
+		implID := canonicalizer.GoSymbolID(src.ImportPath, src.Name) // 实现者
 		for _, rel := range sym.Relationships {
 			if !rel.IsImplementation {
 				continue
 			}
-			tgt, err := canonicalizer.FromScipSymbol(rel.Symbol)
+			iface, err := canonicalizer.FromScipSymbol(rel.Symbol)
 			if err != nil {
 				continue
 			}
-			if !isInModule(tgt.ImportPath, repo.Module) {
+			if !isInModule(iface.ImportPath, repo.Module) {
 				continue // 外部接口无节点（外键约束）
 			}
 			if err := emit(domain.Item{Fact: &domain.Fact{
-				SourceID:   sourceID,
-				TargetID:   canonicalizer.GoSymbolID(tgt.ImportPath, tgt.Name),
+				SourceID:   canonicalizer.GoSymbolID(iface.ImportPath, iface.Name), // 接口
+				TargetID:   implID,                                                 // 实现者
 				Kind:       domain.FactImplements,
 				ToolSource: domain.ToolSCIP,
 				Confidence: 1.0,

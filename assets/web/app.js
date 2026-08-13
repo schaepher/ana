@@ -342,9 +342,13 @@
           else pushUniq(callers, other);
           break;
         case 'implements':
+          // 接口 → 实现者：接口出边（实现者）→ 下行，实现者入边（接口）→ 上行
+          if (down) pushUniq(callees, other);
+          else pushUniq(callers, other);
+          break;
         case 'imports':
-          if (down) pushUniq(callers, other); // 实现的接口/导入的包 → 上行
-          else pushUniq(callees, other);      // 接口的实现者/被导入者 → 下行
+          if (down) pushUniq(callers, other); // 导入的包 → 上行
+          else pushUniq(callees, other);      // 被导入者 → 下行
           break;
         default: // uses / passes_to / of_type 等对象关系
           pushUniq(others, other);
@@ -549,6 +553,8 @@
       case 'initializes':
         return down ? 'down' : 'up';
       case 'implements':
+        // 接口 → 实现者（反转后）：接口出边=实现者下行，实现者入边=接口上行
+        return down ? 'down' : 'up';
       case 'imports':
         return down ? 'up' : 'down';
       default:
@@ -909,6 +915,15 @@
         var inn = items.filter(function (g) { return g.dir === '入'; });
         if (out.length) html.push(relGroupHtml('方法（' + out.length + '）', out));
         if (inn.length) html.push(relGroupHtml('接收者（' + inn.length + '）', inn));
+        return;
+      }
+      if (kind === 'implements') {
+        // 实现线（接口 → 实现者）按视角分组：接口节点视角=出边（实现者们），
+        // 实现者节点视角=入边（它实现的接口）
+        var out = items.filter(function (g) { return g.dir === '出'; });
+        var inn = items.filter(function (g) { return g.dir === '入'; });
+        if (out.length) html.push(relGroupHtml('实现者（' + out.length + '）', out));
+        if (inn.length) html.push(relGroupHtml('实现（' + inn.length + '）', inn));
         return;
       }
       items.sort(function (a, b) { return a.dir === b.dir ? 0 : (a.dir === '出' ? -1 : 1); });

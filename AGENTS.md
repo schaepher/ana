@@ -150,6 +150,11 @@ defer logger.Debug("exit <name>")
     （N）、方法入边=接收者（N））。**坑**：三行布局中间行单个节点
     （如接收者）会落在中心节点正上方（placeRow 单个节点 start=cx）——
     须 offsetSingle 偏移到中心右侧。
+    **implements 方向**：SCIP 适配器 is_implementation 关系输出
+    接口 → 实现者（2026-08-13 反转，用户确认"接口指向实现"）；
+    前端三行布局/rowClass 的 implements 分类对调（接口出边=下行、
+    实现者入边=上行），信息栏按视角拆分（接口=实现者（N）、
+    实现者=实现（N））。重建需 clean 清库。
     **节点配色**：KIND_COLOR 每种类型独立色（函数蓝/方法青/结构体绿/
     接口紫/包橙/文件灰/提交深灰/对象薄荷绿）。
     **源码弹窗**：函数/方法节点信息栏 Source Code 按钮 → /api/source。
