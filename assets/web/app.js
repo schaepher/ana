@@ -60,7 +60,7 @@
     uses: '使用',
     passes_to: '传给',
     of_type: '类型',
-    has_method: '方法',
+    has_method: '拥有方法',
     data_flows_to: '数据流'
   };
   var EDGE_OUT_COLOR = '#1677ff';
