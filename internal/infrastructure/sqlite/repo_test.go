@@ -22,7 +22,7 @@ func newTestRepo(t *testing.T) *Repo {
 // save 便捷写入节点 + 边。
 func save(t *testing.T, r *Repo, nodes []*domain.CodeEntity, edges []*domain.Fact) {
 	t.Helper()
-	if _, err := r.SaveBatchStats(nodes, edges); err != nil {
+	if _, err := r.SaveBatchStats(nodes, edges, nil); err != nil {
 		t.Fatalf("SaveBatchStats: %v", err)
 	}
 }
@@ -63,7 +63,7 @@ func TestSaveBatchAndGetSymbol(t *testing.T) {
 
 func TestSaveBatchEmpty(t *testing.T) {
 	r := newTestRepo(t)
-	res, err := r.SaveBatchStats(nil, nil)
+	res, err := r.SaveBatchStats(nil, nil, nil)
 	if err != nil {
 		t.Fatalf("SaveBatchStats(nil): %v", err)
 	}
@@ -79,7 +79,7 @@ func TestSaveBatchFKSkip(t *testing.T) {
 		SourceID: "symbol:go:example.com/m:a",
 		TargetID: "symbol:go:example.com/m:b",
 		Kind:     domain.FactCalls,
-	}})
+	}}, nil)
 	if err != nil {
 		t.Fatalf("SaveBatchStats: %v", err)
 	}

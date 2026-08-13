@@ -29,7 +29,8 @@ import (
 
 // emitFunctionFields 发射单个函数内的字段访问节点与数据流边。
 func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
-	funcID domain.CanonicalID, idents map[token.Pos]string, emit domain.EmitFunc) error {
+	funcID domain.CanonicalID, idents map[token.Pos]string, funcData *funcData,
+	emit domain.EmitFunc) error {
 	logger := zap.L()
 	logger.Debug("enter emitFunctionFields")
 	defer logger.Debug("exit emitFunctionFields")
@@ -37,16 +38,18 @@ func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Func
 		return nil // 无函数体的 stub
 	}
 	ext := &fieldExtractor{
-		repo:   repo,
-		prog:   prog,
-		fn:     fn,
-		funcID: funcID,
-		idents: idents,
-		emit:   emit,
-		fields: map[*ssa.FieldAddr]*fieldAccess{},
-		reads:  map[*ssa.FieldAddr]*fieldAccess{},
-		values: map[ssa.Value]domain.CanonicalID{},
-		slots:  map[string]bool{},
+		repo:     repo,
+		prog:     prog,
+		fn:       fn,
+		funcID:   funcID,
+		idents:   idents,
+		emit:     emit,
+		funcData: funcData,
+		fields:   map[*ssa.FieldAddr]*fieldAccess{},
+		reads:    map[*ssa.FieldAddr]*fieldAccess{},
+		values:   map[ssa.Value]domain.CanonicalID{},
+		funcIDs:  map[*ssa.Function]domain.CanonicalID{},
+		slotsFor: map[domain.CanonicalID]map[string]bool{funcID: {}},
 	}
 
 	// 第一遍：按使用方式判定 FieldAddr 的读写（go/ssa v0.26 表示，
@@ -138,7 +141,8 @@ func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Func
 			}
 		}
 	}
-	return nil
+	// 第三遍：跨过程边（argument/returns/phi_operand）
+	return ext.emitCrossFlow()
 }
 
 // faUses 扫描 FieldAddr 的使用方式：是否被 Store 写入、是否被 UnOp(MUL) 解引用读。
@@ -215,6 +219,7 @@ func (ext *fieldExtractor) newFieldAccess(fa *ssa.FieldAddr, access string) *fie
 		return nil
 	}
 	instance := ext.instancePath(fa.X) + "." + info.fieldName
+	ext.recordEntry(access, info, instance)
 	return &fieldAccess{
 		id:       ext.accessID(instance, access, fa.Pos()),
 		addr:     fa,
@@ -222,6 +227,24 @@ func (ext *fieldExtractor) newFieldAccess(fa *ssa.FieldAddr, access string) *fie
 		instance: instance,
 		info:     info,
 		ext:      ext,
+	}
+}
+
+// recordEntry 记录 direct 读/写条目（function_field_summary 预计算用）。
+func (ext *fieldExtractor) recordEntry(access string, info fieldInfo, instance string) {
+	if ext.funcData == nil {
+		return
+	}
+	e := fieldEntry{
+		fieldPath:    info.fullPath,
+		instancePath: instance,
+		line:         info.line,
+		snippet:      info.snippet,
+	}
+	if access == "read" {
+		ext.funcData.directReads = append(ext.funcData.directReads, e)
+	} else {
+		ext.funcData.directWrites = append(ext.funcData.directWrites, e)
 	}
 }
 
@@ -235,6 +258,7 @@ func (ext *fieldExtractor) newFieldAccessValue(f *ssa.Field) *fieldAccess {
 		return nil
 	}
 	instance := ext.instancePath(f.X) + "." + info.fieldName
+	ext.recordEntry("read", info, instance)
 	return &fieldAccess{
 		id:       ext.accessID(instance, "read", f.Pos()),
 		access:   "read",
@@ -315,7 +339,7 @@ func (ext *fieldExtractor) emitFlow(from domain.CanonicalID, v ssa.Value) error 
 	logger.Debug("enter (fieldExtractor).emitFlow")
 	defer logger.Debug("exit (fieldExtractor).emitFlow")
 	to, err := ext.emitValue(v)
-	if err != nil {
+	if err != nil || to == "" {
 		return err
 	}
 	return ext.emitEdge(from, to)
@@ -327,7 +351,7 @@ func (ext *fieldExtractor) emitFlowValue(v ssa.Value, to domain.CanonicalID) err
 	logger.Debug("enter (fieldExtractor).emitFlowValue")
 	defer logger.Debug("exit (fieldExtractor).emitFlowValue")
 	from, err := ext.emitValue(v)
-	if err != nil {
+	if err != nil || from == "" {
 		return err
 	}
 	return ext.emitEdge(from, to)
@@ -338,17 +362,13 @@ func (ext *fieldExtractor) emitEdge(from, to domain.CanonicalID) error {
 	logger := zap.L()
 	logger.Debug("enter (fieldExtractor).emitEdge")
 	defer logger.Debug("exit (fieldExtractor).emitEdge")
-	return ext.emit(domain.Item{Fact: &domain.Fact{
-		SourceID:   from,
-		TargetID:   to,
-		Kind:       domain.FactDataFlowsTo,
-		ToolSource: domain.ToolSSA,
-		Confidence: 1.0,
-	}})
+	return ext.emitEdgeKind(from, to, domain.FactDataFlowsTo)
 }
 
-// emitValue 发射（并去重）参与字段访问的 ssa_value 节点（Q73）。
-// slot = SSA 名；shadowing 同名（多个 Alloc 同名）时附加 @行号 消歧。
+// emitValue 发射（并去重）参与字段访问或跨过程数据流的 ssa_value 节点（Q73）。
+// 节点命名空间按值所属函数（funcIDOf）：跨函数（实参/形参/返回值）落在各自
+// 函数的 canonical ID 下。slot = SSA 名；同名冲突（shadowing）附加 @行号 消歧。
+// 值不属于可标识函数（闭包等）时返回空 ID，调用方跳过相关边。
 func (ext *fieldExtractor) emitValue(v ssa.Value) (domain.CanonicalID, error) {
 	logger := zap.L()
 	logger.Debug("enter (fieldExtractor).emitValue")
@@ -356,14 +376,23 @@ func (ext *fieldExtractor) emitValue(v ssa.Value) (domain.CanonicalID, error) {
 	if id, ok := ext.values[v]; ok {
 		return id, nil
 	}
+	funcID, ok := ext.funcIDOf(v)
+	if !ok {
+		return "", nil
+	}
+	slots := ext.slotsFor[funcID]
+	if slots == nil {
+		slots = map[string]bool{}
+		ext.slotsFor[funcID] = slots
+	}
 	slot := v.Name()
-	if ext.slots[slot] {
+	if slots[slot] {
 		line := ext.prog.Fset.PositionFor(v.Pos(), false).Line
 		slot = fmt.Sprintf("%s@%d", slot, line)
 	} else {
-		ext.slots[slot] = true
+		slots[slot] = true
 	}
-	id := domain.CanonicalID(string(ext.funcID) + "#" + slot)
+	id := domain.CanonicalID(string(funcID) + "#" + slot)
 	ext.values[v] = id
 	n := &domain.CodeEntity{
 		ID:   id,
@@ -373,10 +402,56 @@ func (ext *fieldExtractor) emitValue(v ssa.Value) (domain.CanonicalID, error) {
 			"origin_kind": originKind(v),
 			"ssa_op":      ssaOp(v),
 			"type_string": v.Type().String(),
-			"func_id":     string(ext.funcID),
+			"func_id":     string(funcID),
 		},
 	}
 	return id, ext.emit(domain.Item{Node: n})
+}
+
+// funcIDOf 返回值所属函数的 canonical ID（缓存）。
+// 闭包（Object 非 types.Func）或无法归属的值返回 ok=false。
+func (ext *fieldExtractor) funcIDOf(v ssa.Value) (domain.CanonicalID, bool) {
+	logger := zap.L()
+	logger.Debug("enter (fieldExtractor).funcIDOf")
+	defer logger.Debug("exit (fieldExtractor).funcIDOf")
+	// 函数值（作为被调方出现的 *ssa.Function）：Parent() 为 nil，
+	// 须按函数自身解析（否则会落到当前函数命名空间）
+	if fn, ok := v.(*ssa.Function); ok {
+		return ext.funcIDOfFn(fn)
+	}
+	parent := v.Parent()
+	if parent == nil {
+		return ext.funcID, true // 程序级值（Const 等）：归当前函数命名空间
+	}
+	if id, ok := ext.funcIDs[parent]; ok {
+		return id, true
+	}
+	obj, ok := parent.Object().(*types.Func)
+	if !ok || obj == nil {
+		return "", false // 闭包等：无函数节点命名空间
+	}
+	id, _, _ := funcIdentity(obj)
+	if id == "" {
+		return "", false
+	}
+	ext.funcIDs[parent] = id
+	return id, true
+}
+
+// funcIDOfFn 解析具名函数的 canonical ID（不落缓存，幂等）。
+func (ext *fieldExtractor) funcIDOfFn(fn *ssa.Function) (domain.CanonicalID, bool) {
+	logger := zap.L()
+	logger.Debug("enter (fieldExtractor).funcIDOfFn")
+	defer logger.Debug("exit (fieldExtractor).funcIDOfFn")
+	obj, ok := fn.Object().(*types.Func)
+	if !ok || obj == nil {
+		return "", false // 闭包等
+	}
+	id, _, _ := funcIdentity(obj)
+	if id == "" {
+		return "", false
+	}
+	return id, true
 }
 
 // instancePath 生成变量访问链（如 req.Amount 或 a.b.c），深度上限 8 防环。
@@ -475,9 +550,11 @@ type fieldExtractor struct {
 	idents map[token.Pos]string // 源码标识符索引（Alloc 反查变量名）
 	emit   domain.EmitFunc
 
-	fields map[*ssa.FieldAddr]*fieldAccess // FieldAddr → write 节点（Store 解析目标）
-	reads  map[*ssa.FieldAddr]*fieldAccess // FieldAddr → read 节点（UnOp 解引用）
-	values map[ssa.Value]domain.CanonicalID // 已发射的 ssa_value
-	slots  map[string]bool                  // 函数内 slot 名占用（shadowing 消歧）
-	lines  map[string][]string              // 源码行缓存（filePath → 行数组）
+	fields   map[*ssa.FieldAddr]*fieldAccess // FieldAddr → write 节点（Store 解析目标）
+	reads    map[*ssa.FieldAddr]*fieldAccess // FieldAddr → read 节点（UnOp 解引用）
+	values   map[ssa.Value]domain.CanonicalID // 已发射的 ssa_value
+	funcIDs  map[*ssa.Function]domain.CanonicalID // 函数 → canonical ID 缓存
+	slotsFor map[domain.CanonicalID]map[string]bool // 每函数 slot 占用（shadowing 消歧）
+	lines    map[string][]string             // 源码行缓存（filePath → 行数组）
+	funcData *funcData                       // 摘要收集（direct 读写 + 静态调用）
 }

@@ -15,7 +15,8 @@ import (
 
 // SchemaVersion 数据库 schema 版本（PRAGMA user_version）。
 // v1.0 前无自动迁移：版本不匹配时提示手动重建（TD.md 10.2）。
-const SchemaVersion = 1
+// v2：新增 function_field_summary 表（SSA 字段追溯，field_trace.md §5.2）。
+const SchemaVersion = 2
 
 const schema = `
 CREATE TABLE IF NOT EXISTS nodes (
@@ -63,6 +64,20 @@ CREATE TABLE IF NOT EXISTS build_metadata (
     timestamp INTEGER DEFAULT (strftime('%s', 'now'))
 );
 CREATE INDEX IF NOT EXISTS idx_build_commit ON build_metadata(commit_sha);
+
+-- 函数字段摘要表（SSA 字段追溯，field_trace.md §5.2）
+CREATE TABLE IF NOT EXISTS function_field_summary (
+    function_id TEXT NOT NULL,
+    access_kind TEXT NOT NULL CHECK(access_kind IN ('direct_read','direct_write','indirect_write')),
+    field_path TEXT NOT NULL,
+    instance_path TEXT,
+    line_start INTEGER,
+    code_snippet TEXT,
+    FOREIGN KEY(function_id) REFERENCES nodes(id) ON DELETE CASCADE,
+    UNIQUE(function_id, access_kind, field_path)
+);
+CREATE INDEX IF NOT EXISTS idx_summary_func_access ON function_field_summary(function_id, access_kind);
+CREATE INDEX IF NOT EXISTS idx_summary_field ON function_field_summary(field_path);
 `
 
 // Open 打开（或创建）仓库根目录下的 .codeintel/codeintel.db，并校验 schema 版本。

@@ -27,7 +27,10 @@ import (
 var _ domain.IndexerPort = (*Adapter)(nil)
 
 // Adapter 是 SSA 字段追溯适配器。
-type Adapter struct{}
+type Adapter struct {
+	// fd 摘要收集（构建期内存态）：function_field_summary 预计算用
+	fd map[domain.CanonicalID]*funcData
+}
 
 // Name 实现 IndexerPort。
 func (a *Adapter) Name() string {
@@ -69,15 +72,17 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, emit domai
 	// 实例路径（x.A）需从 AST 恢复源码变量名
 	idents := buildIdentIndex(pkgs, repo.Module)
 
+	a.fd = map[domain.CanonicalID]*funcData{}
 	for fn := range ssautil.AllFunctions(prog) {
 		if !isModuleFunction(fn, repo.Module) {
 			continue // 外部依赖走摘要（Phase 5）
 		}
-		if err := emitFunction(repo, prog, fn, idents, emit); err != nil {
+		if err := emitFunction(repo, prog, fn, idents, a.fd, emit); err != nil {
 			return err
 		}
 	}
-	return nil
+	// function_field_summary 预计算 + INDIRECT_WRITE 边（间接写闭包）
+	return emitSummaries(a.fd, emit)
 }
 
 // buildIdentIndex 收集项目内文件的所有标识符（位置 → 名字），供 Alloc 反查源码变量名。
@@ -114,7 +119,7 @@ func isModuleFunction(fn *ssa.Function, module string) bool {
 // 仅处理有 FuncDecl 源码的顶层函数/方法——闭包（FuncLit）与合成 wrapper 跳过；
 // 闭包内字段访问在 Phase 2 归入外层函数（field_trace.md Q14 适配）。
 func emitFunction(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
-	idents map[token.Pos]string, emit domain.EmitFunc) error {
+	idents map[token.Pos]string, data map[domain.CanonicalID]*funcData, emit domain.EmitFunc) error {
 	logger := zap.L()
 	logger.Debug("enter emitFunction")
 	defer logger.Debug("exit emitFunction")
@@ -149,7 +154,12 @@ func emitFunction(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
 	if err := emit(domain.Item{Node: n}); err != nil {
 		return err
 	}
-	return emitFunctionFields(repo, prog, fn, id, idents, emit)
+	fd := data[id]
+	if fd == nil {
+		fd = &funcData{}
+		data[id] = fd
+	}
+	return emitFunctionFields(repo, prog, fn, id, idents, fd, emit)
 }
 
 // funcIdentity 从 types.Func 生成 canonical ID / kind / name，与 AST 适配器 fnID 一致：

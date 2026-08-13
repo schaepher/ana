@@ -24,12 +24,20 @@ func writeFile(t *testing.T, path, content string) {
 // indexFixture 在临时目录构建 Go 模块并跑 ssa.Adapter.Index，收集全部产出。
 func indexFixture(t *testing.T, files map[string]string) ([]*domain.CodeEntity, []*domain.Fact) {
 	t.Helper()
+	nodes, facts, _ := indexFixtureFull(t, files)
+	return nodes, facts
+}
+
+// indexFixtureFull 同 indexFixture，额外收集函数字段摘要行。
+func indexFixtureFull(t *testing.T, files map[string]string) ([]*domain.CodeEntity, []*domain.Fact, []*domain.FunctionFieldSummary) {
+	t.Helper()
 	dir := t.TempDir()
 	for path, content := range files {
 		writeFile(t, filepath.Join(dir, path), content)
 	}
 	var nodes []*domain.CodeEntity
 	var facts []*domain.Fact
+	var summaries []*domain.FunctionFieldSummary
 	adapter := &Adapter{}
 	repo := &domain.Repository{Path: dir, Module: "example.com/mtest"}
 	err := adapter.Index(context.Background(), repo, func(item domain.Item) error {
@@ -39,12 +47,15 @@ func indexFixture(t *testing.T, files map[string]string) ([]*domain.CodeEntity, 
 		if item.Fact != nil {
 			facts = append(facts, item.Fact)
 		}
+		if item.Summary != nil {
+			summaries = append(summaries, item.Summary)
+		}
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("Index: %v", err)
 	}
-	return nodes, facts
+	return nodes, facts, summaries
 }
 
 // findNode 按 ID 查找节点。

@@ -65,13 +65,13 @@ func seedRepo(t *testing.T) string {
 		{ID: "symbol:go:example.com/m:main", Kind: domain.KindFunction, Name: "main", FilePath: "main.go"},
 		{ID: "symbol:go:example.com/m/svc:(Svc).Run", Kind: domain.KindMethod, Name: "(Svc).Run", FilePath: "svc/svc.go"},
 	}
-	if _, err := r.SaveBatchStats(nodes, nil); err != nil {
+	if _, err := r.SaveBatchStats(nodes, nil, nil); err != nil {
 		t.Fatalf("save nodes: %v", err)
 	}
 	if _, err := r.SaveBatchStats(nil, []*domain.Fact{{
 		SourceID: "symbol:go:example.com/m:main", TargetID: "symbol:go:example.com/m/svc:(Svc).Run",
 		Kind: domain.FactCalls, Confidence: 0.9,
-	}}); err != nil {
+	}}, nil); err != nil {
 		t.Fatalf("save edge: %v", err)
 	}
 	return dir

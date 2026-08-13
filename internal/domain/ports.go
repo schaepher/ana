@@ -2,11 +2,30 @@ package domain
 
 import "context"
 
-// Item 是适配器流式产出的原始数据单元：要么是节点，要么是边。
+// Item 是适配器流式产出的原始数据单元：节点 / 边 / 函数字段摘要行。
 type Item struct {
-	Node *CodeEntity
-	Fact *Fact
+	Node    *CodeEntity
+	Fact    *Fact
+	Summary *FunctionFieldSummary
 }
+
+// FunctionFieldSummary 函数字段摘要行（function_field_summary 表，
+// 构建时预计算，加速 S1 查询，field_trace.md §5.2）。
+type FunctionFieldSummary struct {
+	FunctionID  CanonicalID
+	AccessKind  string // direct_read / direct_write / indirect_write
+	FieldPath   string // 类型限定路径（同 field_access.full_path）
+	InstancePath string
+	LineStart   int
+	CodeSnippet string
+}
+
+// 摘要 access_kind 常量。
+const (
+	SummaryDirectRead  = "direct_read"
+	SummaryDirectWrite = "direct_write"
+	SummaryIndirectWrite = "indirect_write"
+)
 
 // EmitFunc 将适配器产出的数据流式交给 Canonicalizer 消费。
 // 返回错误时适配器应停止产出。

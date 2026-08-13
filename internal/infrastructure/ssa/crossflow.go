@@ -1,0 +1,277 @@
+// 跨过程数据流与摘要收集（field_trace.md §6.2/§7.5）：
+//   - argument 边：静态调用实参 → 被调函数形参
+//   - returns 边：被调函数返回值 → 调用点结果（多返回经 tuple → Extract 拆解）
+//   - phi_operand 边：Phi 每个分支输入 → Phi
+//   - funcData：direct 读写条目 + 静态调用记录（间接写闭包计算用）
+//
+// 动态调用（接口方法/函数值/闭包）v1 不解析：接口调用由 AST 适配器 calls 边覆盖，
+// 函数值/闭包参数流待摘要系统（Phase 5）。
+package ssa
+
+import (
+	"go/types"
+	"strings"
+
+	"github.com/schaepher/codeintel/internal/domain"
+	"golang.org/x/tools/go/ssa"
+	"go.uber.org/zap"
+)
+
+// funcData 单个函数的摘要收集数据（构建期内存态）。
+type funcData struct {
+	directReads  []fieldEntry
+	directWrites []fieldEntry
+	calls        []callInfo
+}
+
+// fieldEntry 单个字段访问的摘要条目。
+type fieldEntry struct {
+	fieldPath    string
+	instancePath string
+	line         int
+	snippet      string
+}
+
+// callInfo 静态调用记录（间接写匹配用）。
+type callInfo struct {
+	calleeID       domain.CanonicalID
+	argStructPaths []string
+}
+
+// emitCrossFlow 发射单个函数的跨过程边并记录摘要数据。
+func (ext *fieldExtractor) emitCrossFlow() error {
+	logger := zap.L()
+	logger.Debug("enter (fieldExtractor).emitCrossFlow")
+	defer logger.Debug("exit (fieldExtractor).emitCrossFlow")
+	for _, b := range ext.fn.Blocks {
+		for _, instr := range b.Instrs {
+			switch v := instr.(type) {
+			case *ssa.Phi:
+				if err := ext.emitPhi(v); err != nil {
+					return err
+				}
+			case *ssa.Call:
+				if err := ext.emitCall(&v.Call, v); err != nil {
+					return err
+				}
+			case *ssa.Go:
+				if err := ext.emitCall(&v.Call, nil); err != nil {
+					return err
+				}
+			case *ssa.Defer:
+				if err := ext.emitCall(&v.Call, nil); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// emitPhi 发射 phi_operand 边（常量分支跳过）。
+func (ext *fieldExtractor) emitPhi(phi *ssa.Phi) error {
+	logger := zap.L()
+	logger.Debug("enter (fieldExtractor).emitPhi")
+	defer logger.Debug("exit (fieldExtractor).emitPhi")
+	phiID, err := ext.emitValue(phi)
+	if err != nil || phiID == "" {
+		return err
+	}
+	for _, op := range phi.Edges {
+		if _, isConst := op.(*ssa.Const); isConst {
+			continue
+		}
+		opID, err := ext.emitValue(op)
+		if err != nil || opID == "" {
+			continue
+		}
+		if err := ext.emitEdgeKind(opID, phiID, domain.FactPhiOperand); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// emitCall 处理单个调用点：argument / returns 边 + 摘要调用记录。
+// 仅处理静态可解析且属于项目内的被调函数。
+func (ext *fieldExtractor) emitCall(cc *ssa.CallCommon, callVal ssa.Value) error {
+	logger := zap.L()
+	logger.Debug("enter (fieldExtractor).emitCall")
+	defer logger.Debug("exit (fieldExtractor).emitCall")
+	callee := resolveStaticCallee(cc)
+	if callee == nil || !isModuleFunction(callee, ext.repo.Module) {
+		return nil // 外部/动态调用：摘要系统（Phase 5）处理
+	}
+	calleeID, ok := ext.funcIDOf(callee)
+	if !ok {
+		return nil // 闭包等无可标识命名空间
+	}
+
+	// argument 边：实参 → 形参
+	for i, arg := range cc.Args {
+		if i >= len(callee.Params) {
+			break
+		}
+		if _, isConst := arg.(*ssa.Const); isConst {
+			continue
+		}
+		argID, err := ext.emitValue(arg)
+		if err != nil || argID == "" {
+			continue
+		}
+		paramID, err := ext.emitValue(callee.Params[i])
+		if err != nil || paramID == "" {
+			continue
+		}
+		if err := ext.emitEdgeKind(argID, paramID, domain.FactArgument); err != nil {
+			return err
+		}
+	}
+
+	// returns 边：被调返回值 → 调用点结果
+	nResults := callee.Signature.Results().Len()
+	if nResults > 0 && callVal != nil {
+		callID, err := ext.emitValue(callVal)
+		if err == nil && callID != "" {
+			rets := returnOperands(callee)
+			if nResults == 1 {
+				for _, ret := range rets {
+					if len(ret) == 0 {
+						continue
+					}
+					opID, err := ext.emitValue(ret[0])
+					if err == nil && opID != "" {
+						if err := ext.emitEdgeKind(opID, callID, domain.FactReturns); err != nil {
+							return err
+						}
+					}
+				}
+			} else if refs := callVal.Referrers(); refs != nil && len(*refs) > 0 {
+				// 多返回：RETURNS 到 tuple，Extract 经 data_flows_to 拆解
+				for _, ret := range rets {
+					for _, op := range ret {
+						opID, err := ext.emitValue(op)
+						if err == nil && opID != "" {
+							if err := ext.emitEdgeKind(opID, callID, domain.FactReturns); err != nil {
+								return err
+							}
+						}
+					}
+				}
+				for _, u := range *refs {
+					ex, ok := u.(*ssa.Extract)
+					if !ok {
+						continue
+					}
+					exID, err := ext.emitValue(ex)
+					if err == nil && exID != "" {
+						if err := ext.emitEdge(callID, exID); err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 摘要收集（间接写闭包计算用）。
+	// 常量实参（nil、字面量）不产生实例传递，不参与类型匹配
+	if ext.funcData != nil {
+		var argPaths []string
+		for _, arg := range cc.Args {
+			if _, isConst := arg.(*ssa.Const); isConst {
+				continue
+			}
+			if p := structPathOfType(arg.Type()); p != "" {
+				argPaths = append(argPaths, p)
+			}
+		}
+		ext.funcData.calls = append(ext.funcData.calls, callInfo{
+			calleeID:       calleeID,
+			argStructPaths: argPaths,
+		})
+	}
+	return nil
+}
+
+// resolveStaticCallee 解析静态可确定的被调函数：静态调用 / 直接函数值 / phi 链。
+func resolveStaticCallee(cc *ssa.CallCommon) *ssa.Function {
+	logger := zap.L()
+	logger.Debug("enter resolveStaticCallee")
+	defer logger.Debug("exit resolveStaticCallee")
+	if fn := cc.StaticCallee(); fn != nil {
+		return fn
+	}
+	return resolveFuncValue(cc.Value, 0)
+}
+
+func resolveFuncValue(v ssa.Value, depth int) *ssa.Function {
+	if depth > 4 {
+		return nil
+	}
+	if fn, ok := v.(*ssa.Function); ok {
+		return fn
+	}
+	if phi, ok := v.(*ssa.Phi); ok {
+		for _, op := range phi.Edges {
+			if fn := resolveFuncValue(op, depth+1); fn != nil {
+				return fn
+			}
+		}
+	}
+	return nil
+}
+
+// returnOperands 收集函数所有 Return 指令的操作数（多返回为元组）。
+func returnOperands(fn *ssa.Function) [][]ssa.Value {
+	logger := zap.L()
+	logger.Debug("enter returnOperands")
+	defer logger.Debug("exit returnOperands")
+	var out [][]ssa.Value
+	for _, b := range fn.Blocks {
+		for _, instr := range b.Instrs {
+			if ret, ok := instr.(*ssa.Return); ok {
+				out = append(out, ret.Results)
+			}
+		}
+	}
+	return out
+}
+
+// structPathOfType 取实参类型的结构体限定路径（*T → pkg.T；非具名结构体 → 空）。
+func structPathOfType(t types.Type) string {
+	if p, ok := t.(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	named, ok := t.(*types.Named)
+	if !ok {
+		return ""
+	}
+	obj := named.Obj()
+	if obj == nil || obj.Pkg() == nil {
+		return ""
+	}
+	return obj.Pkg().Path() + "." + obj.Name()
+}
+
+// structPathOf 从 full_path（pkg.T.f）提取结构体路径（pkg.T）。
+func structPathOf(fullPath string) string {
+	if i := strings.LastIndex(fullPath, "."); i >= 0 {
+		return fullPath[:i]
+	}
+	return fullPath
+}
+
+// emitEdgeKind 发射指定 kind 的边（tool_source=ssa，conf 1.0，Q69）。
+func (ext *fieldExtractor) emitEdgeKind(from, to domain.CanonicalID, kind domain.FactKind) error {
+	logger := zap.L()
+	logger.Debug("enter (fieldExtractor).emitEdgeKind")
+	defer logger.Debug("exit (fieldExtractor).emitEdgeKind")
+	return ext.emit(domain.Item{Fact: &domain.Fact{
+		SourceID:   from,
+		TargetID:   to,
+		Kind:       kind,
+		ToolSource: domain.ToolSSA,
+		Confidence: 1.0,
+	}})
+}

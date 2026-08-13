@@ -44,6 +44,11 @@ ON CONFLICT(source_id, target_id, kind) DO UPDATE SET
     metadata = excluded.metadata
 WHERE excluded.confidence > edges.confidence`
 
+const insertSummarySQL = `
+INSERT OR IGNORE INTO function_field_summary
+    (function_id, access_kind, field_path, instance_path, line_start, code_snippet)
+VALUES (?, ?, ?, ?, ?, ?)`
+
 // saveBatchResult 记录批次写入的统计信息。
 type saveBatchResult struct {
 	// SkippedEdges 因外键冲突（端点节点不存在）被跳过的边数
@@ -55,18 +60,20 @@ func (r *Repo) SaveBatch(nodes []*domain.CodeEntity, edges []*domain.Fact) error
 	logger := zap.L()
 	logger.Debug("enter (Repo).SaveBatch")
 	defer logger.Debug("exit (Repo).SaveBatch")
-	_, err := r.SaveBatchStats(nodes, edges)
+	_, err := r.SaveBatchStats(nodes, edges, nil)
 	return err
 }
 
-// SaveBatchStats 与 SaveBatch 相同，但返回批次统计（跳过的外键冲突边数）。
+// SaveBatchStats 与 SaveBatch 相同，但返回批次统计（跳过的外键冲突边数），
+// 并接受函数字段摘要行（function_field_summary）。
 // 端点节点不存在的边（如 Git 追踪到 SCIP 未索引的文件）静默跳过，不中断构建。
-func (r *Repo) SaveBatchStats(nodes []*domain.CodeEntity, edges []*domain.Fact) (*saveBatchResult, error) {
+func (r *Repo) SaveBatchStats(nodes []*domain.CodeEntity, edges []*domain.Fact,
+	summaries []*domain.FunctionFieldSummary) (*saveBatchResult, error) {
 	logger := zap.L()
 	logger.Debug("enter (Repo).SaveBatchStats")
 	defer logger.Debug("exit (Repo).SaveBatchStats")
 	result := &saveBatchResult{}
-	if len(nodes) == 0 && len(edges) == 0 {
+	if len(nodes) == 0 && len(edges) == 0 && len(summaries) == 0 {
 		return result, nil
 	}
 	tx, err := r.Begin()
@@ -114,6 +121,25 @@ func (r *Repo) SaveBatchStats(nodes []*domain.CodeEntity, edges []*domain.Fact) 
 				}
 				stmt.Close()
 				return nil, fmt.Errorf("insert edge %s->%s (%s): %w", e.SourceID, e.TargetID, e.Kind, err)
+			}
+		}
+		stmt.Close()
+	}
+	if len(summaries) > 0 {
+		stmt, err := tx.Prepare(insertSummarySQL)
+		if err != nil {
+			return nil, fmt.Errorf("prepare summary insert: %w", err)
+		}
+		for _, s := range summaries {
+			// 端点函数节点不存在（如构建顺序导致）时跳过；UNIQUE 冲突（重复行）忽略
+			if _, err := stmt.Exec(string(s.FunctionID), s.AccessKind, s.FieldPath,
+				s.InstancePath, s.LineStart, s.CodeSnippet); err != nil {
+				if isFKError(err) {
+					result.SkippedEdges++
+					continue
+				}
+				stmt.Close()
+				return nil, fmt.Errorf("insert summary %s %s %s: %w", s.FunctionID, s.AccessKind, s.FieldPath, err)
 			}
 		}
 		stmt.Close()

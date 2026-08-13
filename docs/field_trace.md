@@ -431,7 +431,7 @@ SSA 语义与映射类决策全部保留：Q1（SSA_VALUE 统一建模）、Q2�
 | Q70 | 边 kind 复用 | `data_flows_to` 复用（tool_source 区分语义）；`calls` 复用（metadata 标调用类型）；不建 `FUNCTION_CONTAINS`/`FIELD_CONTAINS` | 避免边类型膨胀；func_id 与 properties.fields 已覆盖 |
 | Q71 | 实现形态 | IndexerPort 适配器（六边形），非独立 CLI | 适配器并行/降级/存储全复用 |
 | Q72 | 节点精简 | 废弃 `CALL_SITE`/`TYPE`；调用信息入 calls metadata；类型导航用 struct properties.fields | 与现有模型对齐 |
-| Q73 | SSA_VALUE 范围 | 仅保留参与字段访问的 `ssa_value`（def-use 两端） | 控制节点规模（全保留会图爆炸） |
+| Q73 | SSA_VALUE 范围 | 参与字段访问**或跨过程数据流**的值（实参/形参/返回值/Phi 等管线值也保留） | 控制节点规模（全保留会图爆炸；仅 def-use 两端则跨过程链断裂，S2/S3 不可用） |
 
 ---
 

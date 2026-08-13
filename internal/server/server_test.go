@@ -67,13 +67,13 @@ func newTestServer(t *testing.T) *httptest.Server {
 			"fields": []any{map[string]any{"name": "Port", "type": "int"}},
 		},
 	}
-	if _, err := r.SaveBatchStats([]*domain.CodeEntity{greet, main, svc}, nil); err != nil {
+	if _, err := r.SaveBatchStats([]*domain.CodeEntity{greet, main, svc}, nil, nil); err != nil {
 		t.Fatalf("save nodes: %v", err)
 	}
 	if _, err := r.SaveBatchStats(nil, []*domain.Fact{{
 		SourceID: main.ID, TargetID: greet.ID, Kind: domain.FactCalls,
 		Confidence: 0.8, Metadata: map[string]any{"line_num": 2},
-	}}); err != nil {
+	}}, nil); err != nil {
 		t.Fatalf("save edge: %v", err)
 	}
 

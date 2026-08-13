@@ -110,7 +110,10 @@ func (o *Orchestrator) FullBuild(ctx context.Context) (*BuildResult, error) {
 			if item.Fact != nil {
 				batch.edges = append(batch.edges, item.Fact)
 			}
-			if len(batch.nodes) >= BatchSize || len(batch.edges) >= BatchSize {
+			if item.Summary != nil {
+				batch.summaries = append(batch.summaries, item.Summary)
+			}
+			if len(batch.nodes) >= BatchSize || len(batch.edges) >= BatchSize || len(batch.summaries) >= BatchSize {
 				if err := o.flush(batch, &mu, &skipped); err != nil {
 					fmt.Fprintf(os.Stderr, "write batch: %v\n", err)
 				}
@@ -196,8 +199,9 @@ func (o *Orchestrator) FullBuild(ctx context.Context) (*BuildResult, error) {
 }
 
 type batchT struct {
-	nodes []*domain.CodeEntity
-	edges []*domain.Fact
+	nodes     []*domain.CodeEntity
+	edges     []*domain.Fact
+	summaries []*domain.FunctionFieldSummary
 }
 
 func newBatch() *batchT {
@@ -212,10 +216,10 @@ func (o *Orchestrator) flush(b *batchT, mu *sync.Mutex, skipped *int) error {
 	logger := zap.L()
 	logger.Debug("enter (Orchestrator).flush")
 	defer logger.Debug("exit (Orchestrator).flush")
-	if len(b.nodes) == 0 && len(b.edges) == 0 {
+	if len(b.nodes) == 0 && len(b.edges) == 0 && len(b.summaries) == 0 {
 		return nil
 	}
-	res, err := o.RepoImpl.SaveBatchStats(b.nodes, b.edges)
+	res, err := o.RepoImpl.SaveBatchStats(b.nodes, b.edges, b.summaries)
 	if err != nil {
 		return err
 	}
@@ -224,6 +228,7 @@ func (o *Orchestrator) flush(b *batchT, mu *sync.Mutex, skipped *int) error {
 	mu.Unlock()
 	b.nodes = b.nodes[:0]
 	b.edges = b.edges[:0]
+	b.summaries = b.summaries[:0]
 	return nil
 }
 

@@ -1,0 +1,199 @@
+package ssa
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/schaepher/codeintel/internal/domain"
+)
+
+// findFact 按 (source, target, kind) 查找边。
+func findFact(t *testing.T, facts []*domain.Fact, source, target, kind string) *domain.Fact {
+	t.Helper()
+	for _, f := range facts {
+		if string(f.SourceID) == source && string(f.TargetID) == target && string(f.Kind) == kind {
+			return f
+		}
+	}
+	t.Fatalf("fact not found: %s -> %s [%s]", source, target, kind)
+	return nil
+}
+
+// findFactByKindPrefix 按 kind 与 source ID 前缀查找边（SSA 临时名 tN 不稳定）。
+func findFactByKindPrefix(facts []*domain.Fact, kind domain.FactKind, srcPrefix string) *domain.Fact {
+	for _, f := range facts {
+		if f.Kind == kind && strings.HasPrefix(string(f.SourceID), srcPrefix) {
+			return f
+		}
+	}
+	return nil
+}
+
+func TestArgumentReturnsEdges(t *testing.T) {
+	nodes, facts, summaries := indexFixtureFull(t, map[string]string{
+		"go.mod":  moduleGoMod,
+		"main.go": `package m
+
+type T struct {
+	A int
+}
+
+func make(v int) T {
+	return T{A: v}
+}
+
+func use(t *T) int {
+	return t.A
+}
+
+func main() {
+	t := make(5)
+	_ = use(&t)
+}
+`,
+	})
+	mainID := "symbol:go:example.com/mtest:main"
+	useID := "symbol:go:example.com/mtest:use"
+	makeID := "symbol:go:example.com/mtest:make"
+
+	// argument 边：main 的局部 t（Alloc）→ use 的形参 t
+	arg := findFactByKindPrefix(facts, domain.FactArgument, mainID+"#t")
+	if arg == nil {
+		t.Fatal("argument edge main#t -> use#t not found")
+	}
+	if string(arg.TargetID) != useID+"#t" {
+		t.Errorf("argument target = %s, want %s#t", arg.TargetID, useID)
+	}
+	// 形参节点归属 use 函数
+	param := nodeByID(t, nodes, useID+"#t")
+	if param.Property("func_id") != useID {
+		t.Errorf("param func_id = %q", param.Property("func_id"))
+	}
+
+	// returns 边：make 的返回值（make 命名空间的临时值）→ main 的调用结果
+	ret := findFactByKindPrefix(facts, domain.FactReturns, makeID+"#t")
+	if ret == nil {
+		t.Fatal("returns edge from make not found")
+	}
+	result := nodeByID(t, nodes, string(ret.TargetID))
+	if result.Property("func_id") != mainID {
+		t.Errorf("returns target func_id = %q, want %s", result.Property("func_id"), mainID)
+	}
+	// make 的返回值也是 make 的写条目来源（T{A: v} → direct_write）
+	findSummary(t, summaries, makeID, domain.SummaryDirectWrite, "example.com/mtest.T.A")
+}
+
+func TestPhiOperandEdges(t *testing.T) {
+	_, facts, _ := indexFixtureFull(t, map[string]string{
+		"go.mod":  moduleGoMod,
+		"main.go": `package m
+
+type T struct {
+	A int
+}
+
+func phi(c bool, a, b *T) int {
+	x := a
+	if c {
+		x = b
+	}
+	return x.A
+}
+`,
+	})
+	phiID := "symbol:go:example.com/mtest:phi"
+	// phi_operand：分支输入 a / b → Phi 节点
+	a := findFactByKindPrefix(facts, domain.FactPhiOperand, phiID+"#a")
+	b := findFactByKindPrefix(facts, domain.FactPhiOperand, phiID+"#b")
+	if a == nil || b == nil {
+		t.Fatalf("phi_operand edges missing: a=%v b=%v", a, b)
+	}
+	if a.TargetID != b.TargetID {
+		t.Errorf("phi operands must share target, got %s vs %s", a.TargetID, b.TargetID)
+	}
+}
+
+func TestSummaryDirectAndIndirect(t *testing.T) {
+	_, facts, summaries := indexFixtureFull(t, map[string]string{
+		"go.mod":  moduleGoMod,
+		"main.go": `package m
+
+type T struct {
+	A int
+	B string
+}
+
+func fill(t *T, v int) {
+	t.A = v
+	t.B = "x"
+}
+
+func inner(t *T) {
+	fill(t, 2)
+}
+
+func outer(t *T) {
+	inner(t)
+}
+`,
+	})
+	fillID := "symbol:go:example.com/mtest:fill"
+	innerID := "symbol:go:example.com/mtest:inner"
+	outerID := "symbol:go:example.com/mtest:outer"
+
+	// fill：direct_write T.A / T.B
+	findSummary(t, summaries, fillID, domain.SummaryDirectWrite, "example.com/mtest.T.A")
+	findSummary(t, summaries, fillID, domain.SummaryDirectWrite, "example.com/mtest.T.B")
+	// 间接写闭包：outer → inner → fill，类型匹配（*T 实参）传播
+	findSummary(t, summaries, innerID, domain.SummaryIndirectWrite, "example.com/mtest.T.A")
+	findSummary(t, summaries, innerID, domain.SummaryIndirectWrite, "example.com/mtest.T.B")
+	findSummary(t, summaries, outerID, domain.SummaryIndirectWrite, "example.com/mtest.T.A")
+
+	// INDIRECT_WRITE 边：inner → fill、outer → inner
+	findFact(t, facts, innerID, fillID, string(domain.FactIndirectWrite))
+	findFact(t, facts, outerID, innerID, string(domain.FactIndirectWrite))
+}
+
+func TestSummaryTypeMismatchNoIndirect(t *testing.T) {
+	// 实参类型与被调函数写字段的声明类型不匹配 → 无间接写
+	_, _, summaries := indexFixtureFull(t, map[string]string{
+		"go.mod":  moduleGoMod,
+		"main.go": `package m
+
+type T struct {
+	A int
+}
+
+type U struct {
+	B int
+}
+
+func fillT(t *T) {
+	t.A = 1
+}
+
+func call(u *U) {
+	fillT(nil)
+}
+`,
+	})
+	callID := "symbol:go:example.com/mtest:call"
+	for _, s := range summaries {
+		if string(s.FunctionID) == callID && s.AccessKind == domain.SummaryIndirectWrite {
+			t.Errorf("call must not have indirect writes, got %+v", s)
+		}
+	}
+}
+
+// findSummary 按（函数, access_kind, field_path）查找摘要行。
+func findSummary(t *testing.T, summaries []*domain.FunctionFieldSummary,
+	funcID, accessKind, fieldPath string) *domain.FunctionFieldSummary {
+	t.Helper()
+	for _, s := range summaries {
+		if string(s.FunctionID) == funcID && s.AccessKind == accessKind && s.FieldPath == fieldPath {
+			return s
+		}
+	}
+	t.Fatalf("summary not found: %s %s %s", funcID, accessKind, fieldPath)
+	return nil
+}
