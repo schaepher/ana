@@ -248,19 +248,22 @@
         if (myToken !== expandToken) return data;
         // 展开时过滤"其他父"：已有父的节点展开后，只保留父这个 caller，
         // 其他 calls 入边节点（潜在父）不展示，只保留子节点方向。
-        // 注意：只拦 calls 入边——has_method/implements/initializes 等
-        // 入边是节点的关联（如接收者的方法们），双击接收者要能展开它们
+        // 例外：展开 caller（up 类）节点时不过滤——展示它的调用方让链
+        // 向上延伸（如展开 cmdInit 显示 Main）。只拦 calls 入边——
+        // has_method/implements/initializes 等入边是节点的关联须展示
         var parent = parentOf(id);
         var neighbors = data.neighbors || [];
         var edges = data.edges || [];
         if (parent) {
+          // 展开 down/mid 类节点才过滤其他调用方；up 类（caller）展示调用方
+          var filterCallers = rowClass(parent, id) !== 'up';
           var blocked = new Set();
           neighbors = neighbors.filter(function (n) {
             if (n.id === parent) return true;
             var e = edges.find(function (x) {
               return (x.source === id && x.target === n.id) || (x.source === n.id && x.target === id);
             });
-            if (e && e.direction === 'in' && e.kind === 'calls') { blocked.add(n.id); return false; }
+            if (e && e.direction === 'in' && e.kind === 'calls' && filterCallers) { blocked.add(n.id); return false; }
             return true;
           });
           edges = edges.filter(function (e) {

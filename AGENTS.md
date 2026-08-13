@@ -126,8 +126,10 @@ defer logger.Debug("exit <name>")
     rowClass 方向分类与三行布局一致（calls/initializes 出=down、implements/
     imports 出=up、其余=mid）。曾为"移除全部兄弟"，会把唯一顶行 caller 剪掉
     导致链路断头（用户反馈后修正）。
-    **展开过滤**：有父展开时"过滤其他父"只拦 calls 入边（潜在 caller）；
-    has_receiver/implements/initializes 等入边是关联必须展示（否则双击
+    **展开过滤**：有父展开时"过滤其他父"只拦 calls 入边（潜在 caller），
+    且**按方向区分**——down/mid 类展开过滤（链式干净），up 类（caller）
+    展开不过滤（展示调用方，链向上延伸，如展开 cmdInit 显示 Main）；
+    has_method/implements/initializes 等入边是关联必须展示（否则双击
     接收者展开不出方法）。**收起顺序坑**：collectCollapse 须先递归回收
     整棵子树记录再判孤儿——边回收边判断会把连到后处理兄弟新增边的边
     误判为"有其他边"而残留节点。
