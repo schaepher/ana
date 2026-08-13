@@ -18,6 +18,19 @@
     #header .legend { display: flex; gap: 14px; font-size: 12px; color: #c9c9d4; }
     #header .legend span { display: flex; align-items: center; gap: 4px; }
     .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    #kind-legend-wrap { position: relative; }
+    #kind-legend-btn {
+      background: #2a2a3d; color: #c9c9d4; border: 1px solid #43435c;
+      border-radius: 4px; font-size: 12px; padding: 2px 8px; cursor: pointer;
+    }
+    #kind-legend-btn:hover { color: #fff; }
+    #kind-legend {
+      position: absolute; top: calc(100% + 6px); right: 0; min-width: 132px;
+      background: #fff; border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.2);
+      padding: 8px 10px; z-index: 30;
+    }
+    #kind-legend.hidden { display: none; }
+    #kind-legend .ki { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #333; padding: 3px 0; }
     #search-box { position: relative; flex: 1; max-width: 420px; margin: 0 16px; }
     #entry-input {
       width: 100%; padding: 6px 12px; border-radius: 6px; border: 1px solid #43435c;
@@ -130,6 +143,10 @@
       <span><i class="dot" style="background:#1677ff"></i>选中节点出边</span>
       <span><i class="dot" style="background:#f5222d"></i>选中节点入边</span>
       <span><i class="dot" style="background:#000"></i>默认</span>
+      <div id="kind-legend-wrap">
+        <button id="kind-legend-btn" title="节点类型颜色">节点类型 ▾</button>
+        <div id="kind-legend" class="hidden"></div>
+      </div>
     </div>
   </div>
   <div id="main-area">

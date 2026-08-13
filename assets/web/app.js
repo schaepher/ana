@@ -947,6 +947,26 @@
     panelBody.innerHTML = '<p class="doc">单击节点查看详细信息</p>';
   }
 
+  /* ---------- 节点类型颜色图例（右上角下拉） ---------- */
+
+  var kindLegend = document.getElementById('kind-legend');
+  var kindLegendBtn = document.getElementById('kind-legend-btn');
+  (function renderKindLegend() {
+    var html = '';
+    Object.keys(KIND_COLOR).forEach(function (k) {
+      html += '<div class="ki"><i class="dot" style="background:' + KIND_COLOR[k] + '"></i>' +
+        (KIND_LABEL[k] || k) + '</div>';
+    });
+    kindLegend.innerHTML = html;
+  })();
+  kindLegendBtn.addEventListener('click', function (evt) {
+    evt.stopPropagation();
+    kindLegend.classList.toggle('hidden');
+  });
+  document.addEventListener('click', function () {
+    kindLegend.classList.add('hidden');
+  });
+
   /* ---------- 侧边栏拖拽调整宽度 ---------- */
 
   var resizeHandle = document.getElementById('panel-resize');
