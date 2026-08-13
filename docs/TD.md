@@ -564,12 +564,13 @@ v2.0 设计树封闭后，MVP 实现过程中补充与调整的能力记录。�
   节点视角，即它的方法们））。数据复用 /api/expand（node+edges+
   neighbors），后端 NodeJSON 补充 doc_comment/message/date/fields
   字段。
-- **分组 [隐藏] 按钮**（2026-08-13）：信息栏关系分组标题带 [隐藏]
-  按钮——点击隐藏该分组涉及的节点（collectSubtree 清理 + setData
-  重建 + 增量重排 + 显式 graph.draw() + 刷新信息栏）；**曾展开过
-  （expandedMap 有记录）的节点保留**。分组→节点 id 映射存于
-  panelGroupNodes（渲染时按分组索引记录）。**坑**：setData 后不自动
-  渲染，须 draw()——否则隐藏要等下次状态变化（点空白）才可见。
+- **分组 [隐藏]/[展开] 按钮**（2026-08-13）：信息栏关系分组标题带
+  [隐藏]（隐藏该分组涉及的节点：collectSubtree 清理 + setData 重建 +
+  增量重排 + 显式 graph.draw() + 刷新信息栏；**曾展开过的节点保留**）
+  与 [展开]（依次展开该分组节点，等待 expanding 释放后再展开下一个）。
+  分组→节点 id 映射存于 panelGroupNodes（渲染时按分组索引记录）。
+  **坑**：setData 后不自动渲染，须 draw()——否则隐藏要等下次状态
+  变化（点空白）才可见。
 - **struct 展开过滤方法**（2026-08-13）：展开 struct 节点时不展示
   它的方法们（has_method 出边邻居与边过滤）——方法是 struct 的
   细节，探索链时避免其它方法涌入；已在图中的方法不受影响。

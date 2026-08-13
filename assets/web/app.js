@@ -927,7 +927,30 @@
       var gi = evt.target.getAttribute('data-gi');
       hideGroupNodes(panelGroupNodes[gi] || []);
     }
+    // 分组 [展开] 按钮：依次展开该分组涉及的节点（等待前一个完成）
+    if (evt.target.classList && evt.target.classList.contains('expand-group-btn')) {
+      var gi = evt.target.getAttribute('data-gi');
+      expandGroupNodes(panelGroupNodes[gi] || []);
+    }
   });
+
+  // expandGroupNodes 依次展开分组里的节点：等 expanding 释放后再展开
+  // 下一个（expandNode 内部有 expanding 锁，fetch+渲染期间会跳过调用）
+  function expandGroupNodes(ids) {
+    if (!ids || !ids.length) return;
+    var i = 0;
+    function next() {
+      if (i >= ids.length) return;
+      if (expanding) {
+        setTimeout(next, 300);
+        return;
+      }
+      var id = ids[i++];
+      expandNode(id);
+      setTimeout(next, 300);
+    }
+    next();
+  }
 
   // hideGroupNodes 隐藏一组节点（及其子树边）：曾展开过（有展开记录）
   // 的节点保留；隐藏后增量重排并刷新信息栏。
@@ -1151,7 +1174,9 @@
       if (!byFile[f]) byFile[f] = [];
       byFile[f].push(g);
     });
-    var out = ['<h3>' + title + ' <button class="hide-group-btn" data-gi="' + gi + '" title="隐藏该分组节点（已展开的保留）">隐藏</button></h3>'];
+    var out = ['<h3>' + title +
+      ' <button class="hide-group-btn" data-gi="' + gi + '" title="隐藏该分组节点（已展开的保留）">隐藏</button>' +
+      ' <button class="expand-group-btn" data-gi="' + gi + '" title="依次展开该分组节点">展开</button></h3>'];
     Object.keys(byFile).forEach(function (f) {
       out.push('<div class="file-group">' + escapeHtml(f) + '</div>');
       byFile[f].forEach(function (g) {
