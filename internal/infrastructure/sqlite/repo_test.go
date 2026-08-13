@@ -3,6 +3,7 @@ package sqlite
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/schaepher/codeintel/internal/domain"
@@ -436,5 +437,92 @@ func TestOpenSchemaVersionMismatch(t *testing.T) {
 	if db2, _ := Open(t.TempDir()); db2.RepoPath() != filepath.Clean(t.TempDir()) {
 		// 不深究，只保证调用不 panic
 		db2.Close()
+	}
+}
+
+// faNode 构造 field_access 节点（properties 含 full_path/func_id）。
+func faNode(id, funcID, field, instance string, line int) *domain.CodeEntity {
+	return &domain.CodeEntity{
+		ID: domain.CanonicalID(id), Kind: domain.KindFieldAccess, Name: instance,
+		FilePath: "main.go", LineStart: line,
+		Properties: map[string]any{"full_path": field, "instance_path": instance,
+			"access_kind": "write", "func_id": funcID},
+	}
+}
+
+func svNode(id, funcID string) *domain.CodeEntity {
+	return &domain.CodeEntity{
+		ID: domain.CanonicalID(id), Kind: domain.KindSSAValue, Name: id[strings.LastIndex(id, "#")+1:],
+		Properties: map[string]any{"func_id": funcID},
+	}
+}
+
+func dfEdge(a, b domain.CanonicalID) *domain.Fact {
+	return &domain.Fact{SourceID: a, TargetID: b,
+		Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1}
+}
+
+func TestTraceBackwardMultiHop(t *testing.T) {
+	r := newTestRepo(t)
+	funcID := "symbol:go:example.com/m:f"
+	// 链：a → b → field（data_flows_to）
+	fa := faNode(funcID+"#x.A.write@3", funcID, "example.com/m.T.A", "x.A", 3)
+	b := svNode(funcID+"#t1", funcID)
+	a := svNode(funcID+"#t0", funcID)
+	save(t, r, []*domain.CodeEntity{fa, b, a}, []*domain.Fact{dfEdge(a.ID, b.ID), dfEdge(b.ID, fa.ID)})
+
+	rows, err := r.TraceBackward("example.com/m.T.A", domain.CanonicalID(funcID), 8)
+	if err != nil {
+		t.Fatalf("TraceBackward: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("rows = %d, want 3 (field + 2 hops)", len(rows))
+	}
+	// 深度递增：0=field, 1=b, 2=a
+	depth0, depth1, depth2 := rows[0], rows[1], rows[2]
+	if depth0.Depth != 0 || depth1.Depth != 1 || depth2.Depth != 2 {
+		t.Errorf("depths = %d,%d,%d", depth0.Depth, depth1.Depth, depth2.Depth)
+	}
+	if string(depth0.ID) != string(fa.ID) || string(depth1.ID) != string(b.ID) || string(depth2.ID) != string(a.ID) {
+		t.Errorf("chain = %s,%s,%s", depth0.ID, depth1.ID, depth2.ID)
+	}
+	if depth1.EdgeKinds != "data_flows_to" {
+		t.Errorf("edge kinds = %q", depth1.EdgeKinds)
+	}
+
+	// 深度限制：maxDepth=1 时只到 b
+	rows, err = r.TraceBackward("example.com/m.T.A", domain.CanonicalID(funcID), 1)
+	if err != nil {
+		t.Fatalf("TraceBackward depth1: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Errorf("depth-limited rows = %d, want 2", len(rows))
+	}
+}
+
+func TestTraceForwardUsagePoint(t *testing.T) {
+	r := newTestRepo(t)
+	funcID := "symbol:go:example.com/m:f"
+	// 读节点 → result → 写节点（同字段）：正向走到写节点标记为使用点
+	read := faNode(funcID+"#x.A.read@3", funcID, "example.com/m.T.A", "x.A", 3)
+	result := svNode(funcID+"#t1", funcID)
+	write := faNode(funcID+"#x.A.write@5", funcID, "example.com/m.T.A", "x.A", 5)
+	save(t, r, []*domain.CodeEntity{read, result, write},
+		[]*domain.Fact{dfEdge(read.ID, result.ID), dfEdge(result.ID, write.ID)})
+
+	rows, err := r.TraceForward("example.com/m.T.A", domain.CanonicalID(funcID), 8)
+	if err != nil {
+		t.Fatalf("TraceForward: %v", err)
+	}
+	// 锚点 = 全部匹配访问点（读+写，2 个 depth0），再经 result 走到写节点（depth2）
+	if len(rows) != 4 {
+		t.Fatalf("rows = %d, want 4 (2 anchors + result + write)", len(rows))
+	}
+	if rows[2].Depth != 1 || string(rows[2].ID) != string(result.ID) {
+		t.Errorf("depth1 row = %+v, want result", rows[2])
+	}
+	last := rows[3]
+	if last.Depth != 2 || !last.IsUsage {
+		t.Errorf("write node should be usage point at depth 2: %+v", last)
 	}
 }

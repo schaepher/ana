@@ -22,6 +22,8 @@ func Main(ctx context.Context, args []string) int {
 		return cmdInit(ctx, args[1:])
 	case "query":
 		return cmdQuery(args[1:])
+	case "export":
+		return cmdExport(args[1:])
 	case "serve":
 		return cmdServe(ctx, args[1:])
 	case "clean":
@@ -51,6 +53,12 @@ func usage() {
   codeintel query callers <sym>    查询调用者（--depth N，默认 1，置信度阈值 0.8）
   codeintel query callees <sym>    查询被调用者（--depth N，默认 1）
   codeintel query impact <sym>     影响分析（--depth N，默认 3）
+  codeintel query fields <func>    字段读写摘要（direct_read/write + indirect_write）
+  codeintel query trace-backward <field> --func <func>
+                                  字段产生点反向追溯（--max-depth N，默认 8）
+  codeintel query trace-forward <field> --func <func>
+                                  字段后续使用正向追踪
+  codeintel export [--out json]   导出双层索引 JSON（字段 → 产生者/消费者）
   codeintel clean --repo <path>    删除仓库的索引数据库
   codeintel version                输出编译时的 commit hash
 

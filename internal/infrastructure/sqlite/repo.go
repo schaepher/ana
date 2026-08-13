@@ -704,3 +704,140 @@ func (r *Repo) GetLatest() (*domain.BuildMeta, error) {
 	}
 	return m, nil
 }
+
+// GetFunctionFields 查询函数的字段读写摘要（S1，field_trace.md §6.2）。
+// 直接查构建期预计算的 function_field_summary 表，无需动态遍历调用图。
+func (r *Repo) GetFunctionFields(funcID domain.CanonicalID) ([]*domain.FunctionFieldSummary, error) {
+	logger := zap.L()
+	logger.Debug("enter (Repo).GetFunctionFields")
+	defer logger.Debug("exit (Repo).GetFunctionFields")
+	rows, err := r.Query(`SELECT function_id, access_kind, field_path, instance_path, line_start, code_snippet
+		FROM function_field_summary WHERE function_id = ?
+		ORDER BY access_kind, field_path`, string(funcID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*domain.FunctionFieldSummary
+	for rows.Next() {
+		var (
+			s   domain.FunctionFieldSummary
+			fid string
+		)
+		if err := rows.Scan(&fid, &s.AccessKind, &s.FieldPath, &s.InstancePath, &s.LineStart, &s.CodeSnippet); err != nil {
+			return nil, err
+		}
+		s.FunctionID = domain.CanonicalID(fid)
+		out = append(out, &s)
+	}
+	return out, rows.Err()
+}
+
+// TraceBackward 反向追溯字段产生点（S2，field_trace.md §6.3）：
+// 起点为入口函数内匹配 full_path 的 field_access 节点，沿
+// data_flows_to / argument / returns / alias / phi_operand 反向遍历。
+func (r *Repo) TraceBackward(field string, funcID domain.CanonicalID, maxDepth int) ([]*domain.TraceRow, error) {
+	logger := zap.L()
+	logger.Debug("enter (Repo).TraceBackward")
+	defer logger.Debug("exit (Repo).TraceBackward")
+	return r.trace(field, funcID, maxDepth, false)
+}
+
+// TraceForward 正向追踪字段后续使用（S3，field_trace.md §6.4）：
+// 起点同 S2，沿 data_flows_to / argument / returns / phi_operand / alias
+// 正向遍历（跨函数经 argument/returns 边，不沿函数级 calls 边跳跃）；
+// 遇到匹配 full_path 的 field_access 标记为使用点。
+func (r *Repo) TraceForward(field string, funcID domain.CanonicalID, maxDepth int) ([]*domain.TraceRow, error) {
+	logger := zap.L()
+	logger.Debug("enter (Repo).TraceForward")
+	defer logger.Debug("exit (Repo).TraceForward")
+	return r.trace(field, funcID, maxDepth, true)
+}
+
+// trace 递归 CTE 实现 S2/S3；UNION 去重 + 深度限制防环（Q49）。
+func (r *Repo) trace(field string, funcID domain.CanonicalID, maxDepth int, forward bool) ([]*domain.TraceRow, error) {
+	logger := zap.L()
+	logger.Debug("enter (Repo).trace")
+	defer logger.Debug("exit (Repo).trace")
+	if maxDepth <= 0 {
+		maxDepth = 8 // 默认深度（Q28，--max-depth 可调）
+	}
+	var query string
+	if !forward {
+		query = `WITH RECURSIVE def_trace(id, depth, name, edge_kinds, line) AS (
+    SELECT n.id, 0, n.name, '', n.line_start
+    FROM nodes n
+    WHERE n.kind = 'field_access'
+      AND json_extract(n.properties, '$.full_path') = ?
+      AND json_extract(n.properties, '$.func_id') = ?
+    UNION
+    SELECT e.source_id, d.depth + 1, n_prev.name,
+           CASE WHEN d.edge_kinds = '' THEN e.kind
+                 ELSE d.edge_kinds || ',' || e.kind END, n_prev.line_start
+    FROM edges e
+    JOIN def_trace d ON e.target_id = d.id
+    JOIN nodes n_prev ON e.source_id = n_prev.id
+    WHERE e.kind IN ('data_flows_to','argument','returns','alias','phi_operand')
+      AND d.depth < ?
+)
+SELECT id, depth, name, edge_kinds, line FROM def_trace ORDER BY depth, id`
+	} else {
+		query = `WITH RECURSIVE fwd_trace(id, depth, name, edge_kinds, line, is_usage) AS (
+    SELECT n.id, 0, n.name, '', n.line_start, 1
+    FROM nodes n
+    WHERE n.kind = 'field_access'
+      AND json_extract(n.properties, '$.full_path') = ?
+      AND json_extract(n.properties, '$.func_id') = ?
+    UNION
+    SELECT e.target_id, d.depth + 1, n_next.name,
+           CASE WHEN d.edge_kinds = '' THEN e.kind
+                 ELSE d.edge_kinds || ',' || e.kind END, n_next.line_start,
+           CASE WHEN n_next.kind = 'field_access'
+                     AND json_extract(n_next.properties, '$.full_path') = ? THEN 1 ELSE 0 END
+    FROM edges e
+    JOIN fwd_trace d ON e.source_id = d.id
+    JOIN nodes n_next ON e.target_id = n_next.id
+    WHERE e.kind IN ('data_flows_to','argument','returns','phi_operand','alias')
+      AND d.depth < ?
+)
+SELECT id, depth, name, edge_kinds, line, is_usage FROM fwd_trace ORDER BY depth, id`
+	}
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if forward {
+		rows, err = r.Query(query, field, string(funcID), field, maxDepth)
+	} else {
+		rows, err = r.Query(query, field, string(funcID), maxDepth)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*domain.TraceRow
+	for rows.Next() {
+		var (
+			row  domain.TraceRow
+			id   string
+			line sql.NullInt64
+		)
+		if forward {
+			var usage int
+			if err := rows.Scan(&id, &row.Depth, &row.Name, &row.EdgeKinds, &line, &usage); err != nil {
+				return nil, err
+			}
+			row.IsUsage = usage == 1
+		} else {
+			if err := rows.Scan(&id, &row.Depth, &row.Name, &row.EdgeKinds, &line); err != nil {
+				return nil, err
+			}
+		}
+		row.ID = domain.CanonicalID(id)
+		if line.Valid {
+			row.Line = int(line.Int64)
+		}
+		out = append(out, &row)
+	}
+	return out, rows.Err()
+}

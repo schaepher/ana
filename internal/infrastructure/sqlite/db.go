@@ -78,6 +78,10 @@ CREATE TABLE IF NOT EXISTS function_field_summary (
 );
 CREATE INDEX IF NOT EXISTS idx_summary_func_access ON function_field_summary(function_id, access_kind);
 CREATE INDEX IF NOT EXISTS idx_summary_field ON function_field_summary(field_path);
+
+-- 表达式索引：field_access 定位（S2/S3 起点），字段追溯，field_trace.md §5.2
+CREATE INDEX IF NOT EXISTS idx_nodes_field_path ON nodes(json_extract(properties, '$.full_path'));
+CREATE INDEX IF NOT EXISTS idx_nodes_func_id ON nodes(json_extract(properties, '$.func_id'));
 `
 
 // Open 打开（或创建）仓库根目录下的 .codeintel/codeintel.db，并校验 schema 版本。

@@ -22,10 +22,20 @@ type FunctionFieldSummary struct {
 
 // 摘要 access_kind 常量。
 const (
-	SummaryDirectRead  = "direct_read"
-	SummaryDirectWrite = "direct_write"
+	SummaryDirectRead    = "direct_read"
+	SummaryDirectWrite   = "direct_write"
 	SummaryIndirectWrite = "indirect_write"
 )
+
+// TraceRow 字段追溯路径上的一步（S2/S3，field_trace.md §6.3/6.4）。
+type TraceRow struct {
+	ID        CanonicalID
+	Depth     int
+	Name      string
+	EdgeKinds string // 到达该节点经过的边类型（逗号连接）
+	Line      int
+	IsUsage   bool // S3：该节点是否为匹配 full_path 的使用点
+}
 
 // EmitFunc 将适配器产出的数据流式交给 Canonicalizer 消费。
 // 返回错误时适配器应停止产出。

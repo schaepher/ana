@@ -24,21 +24,21 @@ func cmdQuery(args []string) int {
 	logger.Debug("enter cmdQuery")
 	defer logger.Debug("exit cmdQuery")
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "error: query 需要一个子命令（symbol/callers/callees/impact）")
+		fmt.Fprintln(os.Stderr, "error: query 需要一个子命令（symbol/fields/trace-backward/trace-forward/callers/callees/impact）")
 		return 2
 	}
 	sub := args[0]
 	rest := args[1:]
 
 	// 手动解析 flags（flag 包遇到位置参数即停止，无法支持 "query symbol X --repo Y" 形式）
-	repoPath, depth, positional := parseQueryFlags(rest)
-	if len(positional) < 1 {
+	f := parseQueryFlags(rest)
+	if len(f.positional) < 1 {
 		fmt.Fprintf(os.Stderr, "error: 缺少符号参数\n")
 		return 2
 	}
-	target := positional[0]
+	target := f.positional[0]
 
-	abs, _, err := resolveRepo(repoPath)
+	abs, _, err := resolveRepo(f.repoPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
@@ -54,8 +54,12 @@ func cmdQuery(args []string) int {
 	switch sub {
 	case "symbol":
 		return querySymbol(repo, target)
+	case "fields":
+		return queryFields(repo, target)
+	case "trace-backward", "trace-forward":
+		return queryTraceDir(repo, target, f.funcPath, f.maxDepth, sub == "trace-forward")
 	case "callers", "callees", "impact":
-		d := depth
+		d := f.depth
 		if d <= 0 {
 			switch sub {
 			case "impact":
@@ -71,33 +75,160 @@ func cmdQuery(args []string) int {
 	}
 }
 
+// queryFlags 是 query 子命令的手动解析结果。
+type queryFlags struct {
+	repoPath   string
+	depth      int
+	maxDepth   int
+	funcPath   string
+	positional []string
+}
+
 // parseQueryFlags 手动解析 query 子命令的参数，支持 flags 与位置参数任意顺序。
-func parseQueryFlags(args []string) (repoPath string, depth int, positional []string) {
+func parseQueryFlags(args []string) queryFlags {
 	logger := zap.L()
 	logger.Debug("enter parseQueryFlags")
 	defer logger.Debug("exit parseQueryFlags")
-	repoPath = "."
+	f := queryFlags{repoPath: "."}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
 		case a == "--repo" && i+1 < len(args):
-			repoPath = args[i+1]
+			f.repoPath = args[i+1]
 			i++
 		case strings.HasPrefix(a, "--repo="):
-			repoPath = strings.TrimPrefix(a, "--repo=")
+			f.repoPath = strings.TrimPrefix(a, "--repo=")
 		case a == "--depth" && i+1 < len(args):
-			depth, _ = strconv.Atoi(args[i+1])
+			f.depth, _ = strconv.Atoi(args[i+1])
 			i++
 		case strings.HasPrefix(a, "--depth="):
-			depth, _ = strconv.Atoi(strings.TrimPrefix(a, "--depth="))
+			f.depth, _ = strconv.Atoi(strings.TrimPrefix(a, "--depth="))
+		case a == "--max-depth" && i+1 < len(args):
+			f.maxDepth, _ = strconv.Atoi(args[i+1])
+			i++
+		case strings.HasPrefix(a, "--max-depth="):
+			f.maxDepth, _ = strconv.Atoi(strings.TrimPrefix(a, "--max-depth="))
+		case a == "--func" && i+1 < len(args):
+			f.funcPath = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--func="):
+			f.funcPath = strings.TrimPrefix(a, "--func=")
 		case strings.HasPrefix(a, "-"):
 			// 未知 flag：忽略
 		default:
-			positional = append(positional, a)
+			f.positional = append(f.positional, a)
 		}
 	}
-	return
+	return f
 }
+
+// queryFields 输出函数的字段读写摘要（S1，field_trace.md §6.2），
+// 按 direct_read / direct_write / indirect_write 分组。
+func queryFields(repo *sqlite.Repo, input string) int {
+	logger := zap.L()
+	logger.Debug("enter queryFields")
+	defer logger.Debug("exit queryFields")
+	n, err := resolveSymbol(repo, input)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+	rows, err := repo.GetFunctionFields(n.ID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+	fmt.Printf("字段读写（%s）:\n", n.Name)
+	if len(rows) == 0 {
+		fmt.Println("  无字段访问（SSA 字段追溯未产出，或该函数无字段读写）")
+		return 0
+	}
+	groups := map[string][]*domain.FunctionFieldSummary{
+		domain.SummaryDirectRead:    nil,
+		domain.SummaryDirectWrite:   nil,
+		domain.SummaryIndirectWrite: nil,
+	}
+	for _, r := range rows {
+		groups[r.AccessKind] = append(groups[r.AccessKind], r)
+	}
+	for _, kind := range []string{domain.SummaryDirectRead, domain.SummaryDirectWrite, domain.SummaryIndirectWrite} {
+		items := groups[kind]
+		if len(items) == 0 {
+			continue
+		}
+		fmt.Printf("  [%s] %d 个字段\n", kind, len(items))
+		for _, it := range items {
+			line := ""
+			if it.LineStart > 0 {
+				line = fmt.Sprintf(":%d", it.LineStart)
+			}
+			fmt.Printf("    %-60s %-24s %-6s %s\n",
+				it.FieldPath, it.InstancePath, line, it.CodeSnippet)
+		}
+	}
+	return 0
+}
+
+// queryTraceDir 输出字段追溯路径（S2/S3，field_trace.md §6.3/6.4）。
+// 树形渲染：缩进 + 边类型 + 节点名 + (行号)（Q28）。
+func queryTraceDir(repo *sqlite.Repo, field, funcPath string, maxDepth int, forward bool) int {
+	logger := zap.L()
+	logger.Debug("enter queryTraceDir")
+	defer logger.Debug("exit queryTraceDir")
+	if funcPath == "" {
+		fmt.Fprintln(os.Stderr, "error: trace 需要 --func <函数>（canonical ID 或名称）")
+		return 2
+	}
+	n, err := resolveSymbol(repo, funcPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+	var rows []*domain.TraceRow
+	if forward {
+		rows, err = repo.TraceForward(field, n.ID, maxDepth)
+	} else {
+		rows, err = repo.TraceBackward(field, n.ID, maxDepth)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+	if len(rows) == 0 {
+		fmt.Printf("无追溯路径：%s 在 %s 中无匹配的字段访问点（--max-depth %d）\n",
+			field, n.Name, maxDepth)
+		return 0
+	}
+	direction := "←"
+	title := "产生点（反向追溯）"
+	if forward {
+		direction = "→"
+		title = "使用点（正向追踪）"
+	}
+	fmt.Printf("%s: %s @ %s\n", title, field, n.Name)
+	for _, r := range rows {
+		edge := lastEdgeKind(r.EdgeKinds)
+		mark := ""
+		if forward && r.IsUsage {
+			mark = " [使用点]"
+		}
+		line := ""
+		if r.Line > 0 {
+			line = fmt.Sprintf(" (%d)", r.Line)
+		}
+		fmt.Printf("%s%s %s %s%s%s\n", strings.Repeat("  ", r.Depth), direction, edge, shortID(r.ID), line, mark)
+	}
+	return 0
+}
+
+// lastEdgeKind 取路径上最后一段边类型（进入当前节点的边）。
+func lastEdgeKind(kinds string) string {
+	if i := strings.LastIndex(kinds, ","); i >= 0 {
+		return kinds[i+1:]
+	}
+	return kinds
+}
+
 
 // resolveSymbol 将用户输入解析为符号：canonical ID 直接命中，否则按名称查找。
 func resolveSymbol(repo *sqlite.Repo, input string) (*domain.CodeEntity, error) {
