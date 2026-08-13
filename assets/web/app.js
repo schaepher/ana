@@ -246,6 +246,13 @@
       .then(function (data) {
         // 期间发生了收起/其他展开：放弃本次结果，避免已删节点复活
         if (myToken !== expandToken) return data;
+        // 展开前的节点位置（增量布局用）：须在 addNode 之前收集，
+        // 否则新节点的网格初始位置会被当成"已有位置"（如 Main 停在 520）
+        var prevY = {};
+        graph.getData().nodes.forEach(function (n) {
+          var d = graph.getNodeData(n.id);
+          if (d && d.style) prevY[n.id] = d.style.y;
+        });
         // 展开时过滤"其他父"：已有父的节点展开后，只保留父这个 caller，
         // 其他 calls 入边节点（潜在父）不展示，只保留子节点方向。
         // 例外：展开 caller（up 类）节点时不过滤——展示它的调用方让链
@@ -290,7 +297,22 @@
         // 根（无父）展开用三行排布（caller 上行/节点中间/callee 下行）
         if (parentOf(id)) {
           var root = treeRoot();
-          if (root) relayoutTree(root);
+          if (root) {
+            // 增量布局：已有节点保持原位置，新节点行插入（上层展开时
+            // 不把已有节点往下推）；prevY 在 addNode 前已收集
+            relayoutTree(root, prevY);
+            // 新上层节点超出画布顶部时自适应缩放，保证全部可见。
+            // updateNodeData 无返回（同步触发动画），fitView 须等动画
+            // 完成后再计算包围盒（否则按旧位置算，缩放无效）
+            var minY = Infinity;
+            graph.getData().nodes.forEach(function (n) {
+              var d = graph.getNodeData(n.id);
+              if (d && d.style && d.style.y < minY) minY = d.style.y;
+            });
+            if (minY < 0 && typeof graph.fitView === 'function') {
+              setTimeout(function () { graph.fitView(); }, 500);
+            }
+          }
         } else {
           arrangeLayers(id);
         }
@@ -585,7 +607,10 @@
   // 追加到最下行。相比按展开树深度分层，方向感知保证链路顶行（caller，
   // 如 cmdInit）始终位于其父节点上方——展开 callee 后顶行不会落回父节点
   // 下一行。
-  function relayoutTree(rootId) {
+  // 增量布局：prevY（id → y）提供展开前的行位置——已有节点保持原 y，
+  // 新节点所在行在相邻已知行之间插值（顶部无已知行时向上扩展，可能超出
+  // 画布，由调用方 fitView 保证可见）。向上展开时不再把整棵树往下推。
+  function relayoutTree(rootId, prevY) {
     var data = graph.getData();
     if (!data.nodes.some(function (n) { return n.id === rootId; })) return;
     var nodeSet = new Set(data.nodes.map(function (n) { return n.id; }));
@@ -625,18 +650,42 @@
     var cx = w / 2;
     var rowGap = 200;
     var startY = 80;
-    var minD = 0;
-    rows.forEach(function (_, d) { if (d < minD) minD = d; });
+    // 行 y：已有节点（prevY）所在行优先取原 y；其余深度行插值
+    var rowY = new Map();
+    depths.forEach(function (d, nid) {
+      if (prevY && prevY[nid] !== undefined && !rowY.has(d)) rowY.set(d, prevY[nid]);
+    });
+    var known = [];
+    rowY.forEach(function (_, d) { known.push(d); });
+    known.sort(function (a, b) { return a - b; });
+    depths.forEach(function (d) {
+      if (rowY.has(d)) return;
+      var lo = null, hi = null;
+      for (var i = 0; i < known.length; i++) {
+        if (known[i] < d) lo = known[i];
+        else if (known[i] > d) { hi = known[i]; break; }
+      }
+      if (lo !== null && hi !== null) {
+        rowY.set(d, rowY.get(lo) + (d - lo) / (hi - lo) * (rowY.get(hi) - rowY.get(lo)));
+      } else if (hi !== null) {
+        rowY.set(d, rowY.get(hi) - (hi - d) * rowGap); // 顶部扩展（可能超出画布）
+      } else if (lo !== null) {
+        rowY.set(d, rowY.get(lo) + (d - lo) * rowGap); // 底部扩展
+      } else {
+        rowY.set(d, startY); // 全部为新节点（无 prevY 时）
+      }
+    });
     var updates = [];
     rows.forEach(function (ids, d) {
-      var y = startY + (d - minD) * rowGap;
+      var y = Math.round(rowY.get(d));
       var spacing = Math.min(180, Math.max(90, (w - 120) / ids.length));
       var x0 = cx - ((ids.length - 1) * spacing) / 2;
       ids.forEach(function (nid, i) {
         updates.push({ id: nid, style: { x: x0 + i * spacing, y: y } });
       });
     });
-    graph.updateNodeData(updates);
+    // 返回动画 promise（调用方可在动画完成后 fitView）
+    return graph.updateNodeData(updates);
   }
 
   // collectCollapse 递归收集收起子树中应删除的节点与边：

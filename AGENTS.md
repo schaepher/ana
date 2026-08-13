@@ -137,6 +137,10 @@ defer logger.Debug("exit <name>")
     为上一行，其余一律下一行（implements/imports 在三行布局中是上行依赖，
     但链视图中是节点自身子项，排下一行），每行水平居中。入口节点首次选择
     显式置于画布正中（addNode 网格位置在左上角，force 不移动孤立节点）。
+    **增量布局**：展开时 relayoutTree(root, prevY)——已有节点保持 y，
+    新节点行插值；prevY 必须在 addNode 前收集（否则新节点网格位置被当
+    已有位置）；updateNodeData 无返回（非 promise），fitView 须 setTimeout
+    等动画完成（否则包围盒按旧位置算，缩放无效）；收起走全量重排。
     **信息栏**：右侧常驻 320px 侧边栏（#sidepanel），单击节点复用
     /api/expand 渲染分组信息（基本/文档注释/提交/关系按类型）。**坑**：
     G6 v5 给容器设内联 position:relative 会覆盖样式表的 absolute——

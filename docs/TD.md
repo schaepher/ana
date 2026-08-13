@@ -603,6 +603,12 @@ v2.0 设计树封闭后，MVP 实现过程中补充与调整的能力记录。�
   每行水平居中。保证链路垂直——展开 callee 后 cmdInit 始终居中在
   FullBuild 正上方。注意树布局不用 rowClass 判断上下：implements/
   imports 在三行布局中是上行依赖，但链视图中作为节点自身子项排下一行。
+- **增量布局**（2026-08-13 修正）：展开时已有节点保持原位置，新节点行
+  在相邻已知行之间插值——向上展开（出现更上层调用方）不再把整棵树
+  往下推（用户确认）。prevY 须在 addNode **之前**收集（否则新节点的
+  网格初始位置被当成已有位置）；新行超出画布顶部时 updateNodeData
+  动画完成后（setTimeout 500ms，updateNodeData 无返回）fitView 自适应。
+  收起仍走全量重排。
 - **方法线 has_method**（2026-08-13，曾为 has_receiver 后反转）：接收者
   类型 → 方法（用户确认方向：由接收者指向方法）。AST 适配器
   （emitMethodReceiver）为每个带 receiver 的方法声明建立 has_method
