@@ -898,6 +898,15 @@
         if (out.length) html.push(relGroupHtml('调用（' + out.length + '）', out));
         return;
       }
+      if (kind === 'has_receiver') {
+        // 接收者关系按视角分组：方法节点视角=出边（其接收者），
+        // struct 节点视角=入边（它的方法们）
+        var out = items.filter(function (g) { return g.dir === '出'; });
+        var inn = items.filter(function (g) { return g.dir === '入'; });
+        if (out.length) html.push(relGroupHtml('接收者（' + out.length + '）', out));
+        if (inn.length) html.push(relGroupHtml('方法（' + inn.length + '）', inn));
+        return;
+      }
       items.sort(function (a, b) { return a.dir === b.dir ? 0 : (a.dir === '出' ? -1 : 1); });
       html.push(relGroupHtml((EDGE_KIND_LABEL[kind] || kind) + '（' + items.length + '）', items));
     });

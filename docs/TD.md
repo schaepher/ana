@@ -554,9 +554,11 @@ v2.0 设计树封闭后，MVP 实现过程中补充与调整的能力记录。�
   关系（按类型分组：调用/实现/导入/初始化/使用/传给/类型/数据流，
   每组内**按对方节点文件路径分组**（组头为文件路径，条目显示方向
   →/←、对方节点、行号）；**调用拆分为两组**：调用（N）= callee
-  出边、被调用（N）= caller 入边）。数据复用 /api/expand（node+
-  edges+neighbors），后端 NodeJSON 补充 doc_comment/message/date/
-  fields 字段。
+  出边、被调用（N）= caller 入边；**接收者关系按视角拆分**：出边
+  显示"接收者（N）"（方法节点视角）、入边显示"方法（N）"（struct
+  节点视角，即它的方法们））。数据复用 /api/expand（node+edges+
+  neighbors），后端 NodeJSON 补充 doc_comment/message/date/fields
+  字段。
 - **Source Code 弹窗**：函数/方法节点信息栏顶部有 Source Code 按钮，
   点击弹窗展示完整源码（`/api/source?id=`）。后端按需读取仓库文件并
   go/parser 定位声明提取源码区间（匹配策略：LineStart 精确 → 行范围
