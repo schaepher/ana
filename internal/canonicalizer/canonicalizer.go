@@ -17,6 +17,9 @@ type GoSymbol struct {
 	ImportPath string
 	Name       string // canonical 名：函数为 funcName，方法为 (T).methodName
 	IsMethod   bool
+	// IsInterfaceMethod 接口方法（desc[2] 为 Term，如 Payer#CreatePayment.）：
+	// 不作为独立节点，implements 边只连接接口类型与实现者类型
+	IsInterfaceMethod bool
 }
 
 // GoSymbolID 生成 canonical ID：symbol:go:<import_path>:<name>。
@@ -89,6 +92,9 @@ func FromScipSymbol(sym string) (GoSymbol, error) {
 		last := descs[len(descs)-1]
 		gs.Name = MethodName(descs[1].Name, last.Name)
 		gs.IsMethod = true
+		// desc[2] Term = 接口方法（Payer#CreatePayment.）；
+		// desc[2] Method = 实现方法（Service#CreatePayment().）
+		gs.IsInterfaceMethod = descs[2].Suffix == scip.Descriptor_Term
 	default:
 		// Term（变量/常量/字段）及其他：不在图中建节点
 		return GoSymbol{}, fmt.Errorf("unsupported symbol: %s", sym)

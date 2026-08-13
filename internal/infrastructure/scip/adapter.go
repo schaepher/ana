@@ -138,6 +138,9 @@ func (a *Adapter) processDocument(repo *domain.Repository, doc *scip.Document, e
 		if err != nil {
 			continue // local / unsupported 符号跳过
 		}
+		if gs.IsInterfaceMethod {
+			continue // 接口方法不作为独立节点（implements 只连接口类型→实现者）
+		}
 		kind, ok := canonicalizer.ScipKindToDomainKind(sym.Kind)
 		if !ok {
 			continue // 变量/常量/字段等不建节点
@@ -187,6 +190,9 @@ func (a *Adapter) processDocument(repo *domain.Repository, doc *scip.Document, e
 		if err != nil {
 			continue
 		}
+		if src.IsInterfaceMethod {
+			continue // 接口方法不建 implements 边（只连接口类型→实现者）
+		}
 		implID := canonicalizer.GoSymbolID(src.ImportPath, src.Name) // 实现者
 		for _, rel := range sym.Relationships {
 			if !rel.IsImplementation {
@@ -195,6 +201,9 @@ func (a *Adapter) processDocument(repo *domain.Repository, doc *scip.Document, e
 			iface, err := canonicalizer.FromScipSymbol(rel.Symbol)
 			if err != nil {
 				continue
+			}
+			if iface.IsInterfaceMethod {
+				continue // 方法级 implements（接口方法→实现方法）不建
 			}
 			if !isInModule(iface.ImportPath, repo.Module) {
 				continue // 外部接口无节点（外键约束）

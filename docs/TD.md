@@ -650,6 +650,11 @@ v2.0 设计树封闭后，MVP 实现过程中补充与调整的能力记录。�
   关系反转 Source/Target；前端三行布局/rowClass 的 implements 分类对调
   （接口出边=实现者下行、实现者入边=接口上行）；信息栏按视角拆分：
   接口节点出边显示"实现者（N）"、实现者节点入边显示"实现（N）"。
+- **接口作为整体节点**（2026-08-13 修正）：接口方法（如 (F).C）不建
+  独立节点，implements 边只连接接口类型 → 实现者类型。区分依据：
+  SCIP descriptor 链 desc[2] 为 Term 是接口方法（Payer#CreatePayment.）、
+  Method 是实现方法（Service#CreatePayment().）；AST 适配器调用接口
+  方法时也不建节点/不建调用边（isInterfaceMethod：接收者类型是接口）。
 - **选中染色**：单击节点后，其出边蓝色 `#1677ff`、入边红色 `#f5222d`，
   其他边及未选中时黑色。
 - **节点标签（两行）**：第一行文件所在目录 + basename（如

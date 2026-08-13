@@ -175,6 +175,10 @@ defer logger.Debug("exit <name>")
     前端三行布局/rowClass 的 implements 分类对调（接口出边=下行、
     实现者入边=上行），信息栏按视角拆分（接口=实现者（N）、
     实现者=实现（N））。重建需 clean 清库。
+    **接口整体节点**：接口方法（desc[2] 为 Term）不建独立节点——
+    canonicalizer 标记 IsInterfaceMethod；SCIP 适配器跳过节点与方法级
+    implements；AST 适配器 isInterfaceMethod（接收者类型是接口）跳过
+    调用边与节点。重建需 clean 清库。
     **节点配色**：KIND_COLOR 每种类型独立色（函数蓝/方法青/结构体绿/
     接口紫/包橙/文件灰/提交深灰/对象薄荷绿）。
     **源码弹窗**：函数/方法节点信息栏 Source Code 按钮 → /api/source。

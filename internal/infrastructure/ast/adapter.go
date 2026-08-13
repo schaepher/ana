@@ -340,6 +340,12 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 		if calleeID == "" || calleeID == callerID {
 			return true
 		}
+		if isInterfaceMethod(callee) {
+			// 接口方法不作为独立节点（用户确认）：只保障调用者节点，
+			// 不建接口方法节点与调用边
+			_ = emit(domain.Item{Node: nodeFor(repo, pkg, caller, callerID, callerKind, serviceFlags[callerID])})
+			return true
+		}
 		// 保障两端节点存在（INSERT OR IGNORE，不覆盖 SCIP 的完整节点）
 		if err := emit(domain.Item{Node: nodeFor(repo, pkg, caller, callerID, callerKind, serviceFlags[callerID])}); err != nil {
 			return false
@@ -781,6 +787,35 @@ func findCallerDecl(stack []ast.Node) *ast.FuncDecl {
 		}
 	}
 	return nil
+}
+
+// isInterfaceMethod 判断 *types.Func 是否为接口方法（接收者类型是接口）。
+// 接口方法不作为独立节点：SCIP 适配器不建、AST 适配器调用处也不建。
+func isInterfaceMethod(fn *types.Func) bool {
+	logger := zap.L()
+	logger.Debug("enter isInterfaceMethod")
+	defer logger.Debug("exit isInterfaceMethod")
+	if fn == nil || fn.Pkg() == nil {
+		return false
+	}
+	sig, _ := fn.Type().(*types.Signature)
+	if sig == nil {
+		return false
+	}
+	recv := sig.Recv()
+	if recv == nil {
+		return false
+	}
+	t := recv.Type()
+	if p, ok := t.(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	named, ok := t.(*types.Named)
+	if !ok {
+		return false
+	}
+	_, ok = named.Underlying().(*types.Interface)
+	return ok
 }
 
 // fnID 计算函数/方法的 canonical ID 与领域种类。
