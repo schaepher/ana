@@ -1,7 +1,7 @@
 // 树布局 relayoutTree（原 app.js 1.6 节）：
 // BFS 深度 → tail 定位（含悬浮分支锚点传播）→ 边方向修正 → rowY 分配
-import { state } from './state.js';
-import { isUp } from './layout.js';
+import { state, ROW_KIND_RANK } from './state.js';
+import { isUp, edgeKind } from './layout.js';
 
 // relayoutTree 对展开树做方向感知的层级布局：以根为中间行，child 通过
 // 任意关系指向 parent（isUp）排上一行，否则下一行；每行水平均匀分布。
@@ -12,8 +12,10 @@ export function relayoutTree(rootId, prevY) {
   var data = state.graph.getData();
   if (!data.nodes.some(function (n) { return n.id === rootId; })) return;
   var nodeSet = new Set(data.nodes.map(function (n) { return n.id; }));
-  // BFS 计算每节点行号：根=0，child 通过任意关系指向 parent 则上一行
+  // BFS 计算每节点行号：根=0，child 通过任意关系指向 parent 则上一行。
+  // parentKind 记录子节点与父节点的边类型（行内分组排列用）
   var depths = new Map([[rootId, 0]]);
+  var parentKind = new Map();
   var queue = [rootId];
   while (queue.length) {
     var pid = queue.shift();
@@ -23,6 +25,7 @@ export function relayoutTree(rootId, prevY) {
     rec.nodes.forEach(function (cid) {
       if (!nodeSet.has(cid) || depths.has(cid)) return; // 已分配/已删节点跳过
       depths.set(cid, pd + (isUp(pid, cid) ? -1 : 1));
+      parentKind.set(cid, edgeKind(pid, cid));
       queue.push(cid);
     });
   }
@@ -160,6 +163,11 @@ export function relayoutTree(rootId, prevY) {
   var updates = [];
   rows.forEach(function (ids, d) {
     var y = Math.round(rowY.get(d));
+    // 行内排列：相同边类型的子节点放一起（按 ROW_KIND_RANK 分组，calls
+    // 最后）；稳定排序保持组内原有顺序。悬浮/共享节点（无父边 kind）排最前
+    ids.sort(function (a, b) {
+      return (ROW_KIND_RANK[parentKind.get(a)] || 0) - (ROW_KIND_RANK[parentKind.get(b)] || 0);
+    });
     var spacing = Math.min(180, Math.max(90, (w - 120) / ids.length));
     var x0 = cx - ((ids.length - 1) * spacing) / 2;
     ids.forEach(function (nid, i) {

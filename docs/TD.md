@@ -769,6 +769,17 @@ v2.0 设计树封闭后，MVP 实现过程中补充与调整的能力记录。�
   `logging.FromContext(ctx)`（有 ctx）+ enter/exit Debug 日志；
   幂等可重跑；排除 `internal/logging` 自身与 scripts/。
 
+### 12.10 行内按边类型分组排列（2026-08-13）
+
+**需求**：同一行的子节点把相同边类型的放一起，[调用]（calls）放最后。
+**实现**（layout-tree.js / layout.js）：ROW_KIND_RANK 常量定义分组顺序
+（implements→imports→initializes→uses→passes_to→passes_result→
+of_type→has_method→data_flows_to→**calls 最后**）；BFS 时记录
+parentKind（与父的边类型）；行内稳定排序（同类相邻、组内原顺序）；
+悬浮/共享节点（无父边）排最前。三行布局（arrangeLayers）中间行的
+others 同样按类型分组。实测：New 行 initializes(Server, x=500) 在
+calls(FromContext, x=680) 之前。
+
 ### 12.9 允许展开一层外部包（2026-08-13）
 
 **问题**：函数作为参数传给**外部包函数**时（如 `mux.HandleFunc(path, s.handleRoots)`），

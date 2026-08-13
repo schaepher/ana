@@ -1,5 +1,5 @@
 // 布局与方向判定（原 app.js 1.6 节）：三行布局、方向分类、边查询
-import { state } from './state.js';
+import { state, ROW_KIND_RANK } from './state.js';
 import { pushUniq } from './utils.js';
 
 // arrangeLayers 三行排布被展开节点的关联（根/无父展开）：
@@ -40,6 +40,18 @@ export function arrangeLayers(id) {
       default: // uses / passes_to / of_type 等对象关系
         pushUniq(others, other);
     }
+  });
+  // 中间行同类相邻：others 按边类型分组（与树布局 ROW_KIND_RANK 一致，
+  // calls 不在其中故不影响）——先记 kind 再按 rank 排序
+  var othersWithKind = {};
+  others.forEach(function (oid) {
+    var e = (data.edges || []).find(function (x) {
+      return (x.source === id && x.target === oid) || (x.source === oid && x.target === id);
+    });
+    othersWithKind[oid] = (e && e.data && e.data.kind) || '';
+  });
+  others.sort(function (a, b) {
+    return (ROW_KIND_RANK[othersWithKind[a]] || 0) - (ROW_KIND_RANK[othersWithKind[b]] || 0);
   });
   var updates = [{ id: id, style: { x: cx, y: cy } }];
   var rowGap = 140;

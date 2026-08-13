@@ -61,6 +61,10 @@
      （depthChanged/suspended 时按 minD 分层——prevY 与新深度错位）；
      垂直行距 140px（2026-08-13 由 200 收紧——四行标签约 100px 高，
      140 仍留 ~40px 空隙，箭头指向的父子行不过分疏远）
+  6. 行内排列（2026-08-13）：按与父节点的边类型分组（ROW_KIND_RANK
+     顺序，相同类型相邻），[调用]（calls）放最后；BFS 时记录
+     parentKind，稳定排序保持组内原顺序；悬浮/共享节点（无父边）排
+     最前。arrangeLayers 三行布局的中间行 others 同样按类型分组
 - `rowClass`（方向分类）、`isUp`、`edgeKind`、`hasOtherEdge`
 
 ### 1.7 交互与选中

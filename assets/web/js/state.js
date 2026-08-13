@@ -45,6 +45,13 @@ export const EDGE_DEFAULT_COLOR = '#000000';
 export const REL_ORDER = ['calls', 'implements', 'imports', 'initializes', 'uses', 'passes_to', 'passes_result', 'of_type', 'has_method', 'data_flows_to'];
 // 隐藏规则可选项：展开时移除"同侧且属于这些关系类型"的兄弟
 export const HIDE_OPTIONS = ['calls', 'has_method', 'implements', 'initializes', 'imports', 'uses', 'passes_to', 'passes_result', 'of_type', 'data_flows_to'];
+// 行内排列顺序：子节点按与父节点的边类型分组（相同类型相邻），
+// [调用]（calls）放最后；未知/悬浮节点（无父边）排最前
+export const ROW_KIND_RANK = {};
+['implements', 'imports', 'initializes', 'uses', 'passes_to', 'passes_result',
+ 'of_type', 'has_method', 'data_flows_to', 'calls'].forEach(function (k, i) {
+  ROW_KIND_RANK[k] = i + 1;
+});
 // 信息栏类型/标记中文名
 export const KIND_LABEL = {
   function: '函数', method: '方法', struct: '结构体', interface: '接口',
