@@ -22,7 +22,11 @@ import (
 )
 
 // Adapter 是基于 go/packages 的调用图分析器。
-type Adapter struct{}
+type Adapter struct {
+	// 包路径 → packages.Package：跨包解析构造器函数体（链式调用
+	// 返回接口时分析 return 的具体类型），Index 时填充
+	pkgsByPath map[string]*packages.Package
+}
 
 var _ domain.IndexerPort = (*Adapter)(nil)
 
@@ -50,6 +54,12 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, emit domai
 		return fmt.Errorf("go/packages load: %w", err)
 	}
 	packages.PrintErrors(pkgs) // 诊断信息打到 stderr，不中断
+
+	// 全部 module 内包的引用（跨包解析构造器 return 用）
+	a.pkgsByPath = map[string]*packages.Package{}
+	for _, p := range pkgs {
+		a.pkgsByPath[p.PkgPath] = p
+	}
 
 	// 服务入口标记：函数若调用 net/http 或 grpc 包，标记 serves_http / serves_grpc
 	serviceFlags := map[domain.CanonicalID]map[string]bool{}
@@ -949,7 +959,14 @@ func (a *Adapter) concreteReturnType(pkg *packages.Package, expr ast.Expr) types
 	if !ok2 || fn == nil {
 		return t
 	}
-	decl := findFuncDecl(pkg, fn)
+	// 函数体在定义包内（可能是跨包构造器）：用定义包的 Syntax/Fset 查找
+	defPkg := pkg
+	if fn.Pkg() != nil && a.pkgsByPath != nil {
+		if dp, ok := a.pkgsByPath[fn.Pkg().Path()]; ok {
+			defPkg = dp
+		}
+	}
+	decl := findFuncDecl(defPkg, fn)
 	if decl == nil || decl.Body == nil {
 		return t
 	}
@@ -960,7 +977,7 @@ func (a *Adapter) concreteReturnType(pkg *packages.Package, expr ast.Expr) types
 			return true
 		}
 		for _, re := range rs.Results {
-			rt := pkg.TypesInfo.TypeOf(re)
+			rt := defPkg.TypesInfo.TypeOf(re) // 定义包的类型信息
 			rn, ok3 := derefNamed(rt)
 			if ok3 && !isInterfaceType(rn) {
 				found = rt

@@ -716,8 +716,11 @@ v2.0 设计树封闭后，MVP 实现过程中补充与调整的能力记录。�
 - **链式调用接口方法**（2026-08-13）：`NewService().DoSth()` 且
   NewService 声明返回接口时——静态分析其函数体 return 语句：返回
   具体类型（return impl{}）→ 调用边指向具体类型的实现方法
-  （main → (impl).DoSth）；无法确定（多态/跨包）→ 回退指向接口类型
+  （main → (impl).DoSth）；无法确定（多态）→ 回退指向接口类型
   节点（main → Service）。接口方法本身仍不建节点。
+  **跨包支持**：Adapter 保存全部 module 内包引用（pkgsByPath），
+  return 分析在定义包内查找函数体并用定义包的 TypesInfo（构造器
+  在另一包时同样解析到实现方法）。
 - **REFERENCES 引用边未实现**：scip-go 的定义 occurrence 只覆盖符号名
   （不含函数体），引用无法归属到引用者，引用关系由 CALLS 边覆盖。
 - **signature 由 AST 适配器生成**（`types.ObjectString`）：SCIP v0.7.1
