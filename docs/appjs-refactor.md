@@ -1,7 +1,10 @@
-# app.js 功能清单与重构准备（2026-08-13）
+# app.js 功能清单与重构记录（2026-08-13）
 
-本文档整理 `assets/web/app.js` 的当前功能模块与行为契约，作为重构基线。
-重构后须通过 `e2e/regression-suite.mjs`（playwright 回归套件）验证行为不变。
+本文档整理前端各功能模块与行为契约。**重构已完成**（2026-08-13）：
+原单文件 `assets/web/app.js`（1432 行）拆分为 12 个 ES module
+（`assets/web/js/`，最大 226 行），`index.html` 以
+`<script type="module" src="js/main.js">` 加载。重构后
+`e2e/regression-suite.mjs` 22/22 通过，行为与原版一致。
 
 ## 1. 功能模块清单
 
@@ -100,14 +103,31 @@
 9. 标签四行；边标注：调用/拥有方法/拥有实现/持有参数/持有返回参数
 10. 隐藏规则可配置（localStorage）
 
-## 3. 重构建议（拆分方向）
+## 3. 重构结果（文件划分，均 <300 行）
 
-- 状态层：graph state（seen/expandedMap/selectedId/expandToken）独立
-- 布局引擎：arrangeLayers/relayoutTree/rowClass 独立模块（纯函数化，
-  便于单测）
-- 图操作：addNode/addEdge/collapse/prune 独立（数据操作与渲染解耦）
-- 信息栏：render/事件/按钮逻辑独立模块
-- 配置：hideKinds/图例/侧栏宽度独立
+- `js/state.js`（80）：常量 + 全局状态对象（graph/seen/expandedMap/
+  selectedId/hideKinds 等）
+- `js/utils.js`（66）：displayName/nodeLabel/escapeHtml/kv/pushUniq/nodeById
+- `js/graph-ops.js`（40）：addNode/addEdge（去重 + 网格初始位置）
+- `js/layout.js`（134）：arrangeLayers 三行 / placeRow / rowClass /
+  isUp / edgeKind / hasOtherEdge
+- `js/layout-tree.js`（170）：relayoutTree（BFS 深度 → tail 锚点传播 →
+  边方向修正 → rowY 增量/全量）
+- `js/search.js`（111）：入口加载 / 搜索框 / selectEntry / resetGraph
+- `js/expand.js`（226）：expandNode / pruneSiblings / collectSubtree /
+  parentOf / treeRoot
+- `js/collapse.js`（约 80）：collapseNode（只收一层）
+- `js/interact.js`（61）：selectNode/clearSelection/bindInteractions
+- `js/panel.js`（157）：showNodePanel / renderNodePanel / relGroupHtml
+- `js/panel-actions.js`（127）：hideGroupNodes / expandGroupNodes /
+  Source Code 弹窗
+- `js/config.js`（97）：kind-legend / hide-legend（localStorage）/
+  侧栏拖拽
+- `js/main.js`（81）：创建 graph、绑定各模块、调试钩子
+
+依赖：state.js 为根；utils/graph-ops/layout 无内部依赖；
+expand → panel（renderNodePanel）、config → expand/layout-tree；
+无循环依赖。
 
 ## 4. 回归测试
 
