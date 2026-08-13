@@ -2,3 +2,4 @@
 /codeintel
 /.codeintel/
 scripts/notify.sh
+e2e/node_modules
