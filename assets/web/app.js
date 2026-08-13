@@ -937,6 +937,41 @@
     panelBody.innerHTML = '<p class="doc">单击节点查看详细信息</p>';
   }
 
+  /* ---------- 侧边栏拖拽调整宽度 ---------- */
+
+  var resizeHandle = document.getElementById('panel-resize');
+  var rootStyle = document.documentElement.style;
+  var dragState = null;
+  // 宽度上限/下限
+  var PANEL_MIN_W = 240;
+  var PANEL_MAX_W = 520;
+
+  resizeHandle.addEventListener('mousedown', function (evt) {
+    evt.preventDefault();
+    dragState = { startX: evt.clientX, startW: panelWidth() };
+    document.body.style.userSelect = 'none';
+  });
+  window.addEventListener('mousemove', function (evt) {
+    if (!dragState) return;
+    // 向左拖（clientX 变小）→ 侧栏变宽
+    var w = dragState.startW + (dragState.startX - evt.clientX);
+    w = Math.max(PANEL_MIN_W, Math.min(PANEL_MAX_W, w));
+    rootStyle.setProperty('--panel-w', w + 'px');
+  });
+  window.addEventListener('mouseup', function () {
+    if (!dragState) return;
+    dragState = null;
+    document.body.style.userSelect = '';
+    // 画布宽度变化后重排居中（G6 的 ResizeObserver 会自动缩放画布，
+    // 节点坐标不变，重排使内容重新居中于新宽度）
+    var root = treeRoot();
+    if (root) relayoutTree(root);
+  });
+
+  function panelWidth() {
+    return parseInt(getComputedStyle(document.documentElement).getPropertyValue('--panel-w')) || 320;
+  }
+
   /* ---------- 工具 ---------- */
 
   // nodeLabel 两行节点标签：
