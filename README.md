@@ -110,6 +110,6 @@ docs/TD.md            系统设计文档（v2.0）
 
 ## 当前范围与限制
 
-- 仅支持 Go module 仓库；MVP 阶段未实现：MCP serve、增量构建、Joern/Semble/LLM 摘要
+- 仅支持 Go module 仓库；MVP 阶段未实现：MCP serve、增量构建、Semble/LLM 摘要
 - SCIP 的引用边未入库（scip-go 的 occurrence 无法归属引用者），引用关系由调用边覆盖
 - 构建/查询细节与设计文档的偏差见 `AGENTS.md`

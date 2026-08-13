@@ -54,8 +54,6 @@ func cmdQuery(args []string) int {
 	switch sub {
 	case "symbol":
 		return querySymbol(repo, target)
-	case "trace":
-		return queryTrace(repo, target)
 	case "callers", "callees", "impact":
 		d := depth
 		if d <= 0 {
@@ -71,37 +69,6 @@ func cmdQuery(args []string) int {
 		fmt.Fprintf(os.Stderr, "error: unknown query subcommand %q\n", sub)
 		return 2
 	}
-}
-
-// queryTrace 输出符号的数据流信息（TD.md 7.3 trace_data_flow）：
-// 方法内路径（source_var -> ... -> sink_var）与跨方法 DATA_FLOWS_TO 边。
-func queryTrace(repo *sqlite.Repo, input string) int {
-	n, err := resolveSymbol(repo, input)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		return 1
-	}
-	flows, facts, err := repo.GetDataFlows(n.ID)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		return 1
-	}
-	fmt.Printf("数据流（%s）:\n", n.Name)
-	if len(flows) == 0 && len(facts) == 0 {
-		fmt.Println("  无数据流信息（需启用 Joern 构建）")
-		return 0
-	}
-	for _, f := range flows {
-		fmt.Printf("  方法内: %s\n", f)
-	}
-	for _, f := range facts {
-		src := shortID(f.SourceID)
-		dst := shortID(f.TargetID)
-		srcVar, _ := f.Metadata["source"].(string)
-		dstVar, _ := f.Metadata["sink"].(string)
-		fmt.Printf("  跨方法: %s(%s) -> %s(%s)\n", src, srcVar, dst, dstVar)
-	}
-	return 0
 }
 
 // parseQueryFlags 手动解析 query 子命令的参数，支持 flags 与位置参数任意顺序。

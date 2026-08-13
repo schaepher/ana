@@ -188,7 +188,7 @@ func TestCLIFullFlow(t *testing.T) {
 	if !rootHit {
 		t.Errorf("roots = %+v, want main", roots)
 	}
-	// 构建状态：不允许 failed（joern 缺失时为 degraded）
+	// 构建状态：不允许 failed（适配器失败时为 degraded）
 	meta, err := repo.GetLatest()
 	if err != nil {
 		t.Fatalf("GetLatest: %v", err)

@@ -199,7 +199,7 @@ defer logger.Debug("exit <name>")
 - 仅单 module 仓库；包级初始化（var x = NewFoo()）中的调用不建 CALLS 边
 - sqlite-vec 向量表未创建（Semble 未接入）；schema 版本由 PRAGMA user_version=1 管理，
   版本不匹配时报错提示 `codeintel clean` 重建
-- 未实现：MCP serve（explore_symbol 等 5 工具）、增量构建、LLM 摘要、Joern/Semble
+- 未实现：MCP serve（explore_symbol 等 5 工具）、增量构建、LLM 摘要、Semble
 
 ## 测试
 

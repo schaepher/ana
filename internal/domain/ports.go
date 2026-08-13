@@ -12,7 +12,7 @@ type Item struct {
 // 返回错误时适配器应停止产出。
 type EmitFunc func(Item) error
 
-// IndexerPort 六边形架构端口：所有外部分析工具（SCIP/CodeGraph/Git/Joern）
+// IndexerPort 六边形架构端口：所有外部分析工具（SCIP/CodeGraph/Git 等）
 // 通过该端口接入，核心领域不依赖具体实现。
 type IndexerPort interface {
 	Name() string

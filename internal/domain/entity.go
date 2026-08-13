@@ -50,7 +50,6 @@ const (
 	ToolSCIP      = "scip"      // 符号与引用，置信度 1.0
 	ToolCodeGraph = "codegraph" // 调用图与依赖图，置信度 0.8
 	ToolGit       = "git"       // Git 历史，置信度 1.0
-	ToolJoern     = "joern"     // 数据流（MVP 未接入）
 )
 
 // CanonicalID 是 Code Entity 的内部唯一标识（值对象）。

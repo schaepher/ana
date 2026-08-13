@@ -825,12 +825,6 @@ document 测 processDocument（接口方法过滤/实现方向）。
 
 - MCP serve（explore_symbol 等 5 个工具）与 MCP 工具契约
 - 增量构建（Git Hook 触发、stale 包刷新）
-- **Joern（数据流）**：已接入（v2.1.1）——joern-parse（gosrc2cpg）+
-  joern-slice data-flow，产出方法内数据流路径（properties.data_flows）
-  与跨方法 DATA_FLOWS_TO 边（conf 0.7）。注意：gosrc2cpg 当前只产出
-  方法内 REACHING_DEF（跨方法参数流需 Joern 交互式分析，未接入）；
-  大项目切片耗时较长（radar 全量约 8-10 分钟），依赖 PATH 中的
-  joern-cli。失败时构建降级（degraded）。
 - Semble（语义向量，sqlite-vec 表未建）
 - LLM 摘要（LLMPort 未接入）
 

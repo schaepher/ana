@@ -342,31 +342,6 @@ func TestExpand(t *testing.T) {
 	}
 }
 
-func TestGetDataFlows(t *testing.T) {
-	r := newTestRepo(t)
-	n := node("symbol:go:example.com/m:a", "function", "a", "a.go")
-	n.Properties["data_flows"] = []any{"x -> y"}
-	save(t, r, []*domain.CodeEntity{n}, nil)
-	b := node("symbol:go:example.com/m:b", "function", "b", "b.go")
-	save(t, r, []*domain.CodeEntity{b}, nil)
-	save(t, r, nil, []*domain.Fact{{SourceID: n.ID, TargetID: b.ID, Kind: domain.FactDataFlowsTo, Confidence: 0.7}})
-
-	flows, facts, err := r.GetDataFlows(n.ID)
-	if err != nil {
-		t.Fatalf("GetDataFlows: %v", err)
-	}
-	if len(flows) != 1 || flows[0] != "x -> y" {
-		t.Errorf("flows = %v", flows)
-	}
-	if len(facts) != 1 || facts[0].Kind != domain.FactDataFlowsTo {
-		t.Errorf("facts = %+v", facts)
-	}
-	// 未知符号 → ErrNotFound
-	if _, _, err := r.GetDataFlows("nope"); !errors.Is(err, domain.ErrNotFound) {
-		t.Errorf("err = %v, want ErrNotFound", err)
-	}
-}
-
 func TestCounts(t *testing.T) {
 	r := newTestRepo(t)
 	nodes, edges, err := r.Counts()
