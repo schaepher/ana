@@ -301,15 +301,20 @@
             // 增量布局：已有节点保持原位置，新节点行插入（上层展开时
             // 不把已有节点往下推）；prevY 在 addNode 前已收集
             relayoutTree(root, prevY);
-            // 新上层节点超出画布顶部时自适应缩放，保证全部可见。
-            // updateNodeData 无返回（同步触发动画），fitView 须等动画
-            // 完成后再计算包围盒（否则按旧位置算，缩放无效）
-            var minY = Infinity;
+            // 布局行超出画布（顶部/底部，如深度修正后行数变多）时
+            // 自适应缩放保证全部可见。updateNodeData 无返回（同步触发
+            // 动画），fitView 须等动画完成后再计算包围盒（否则按旧
+            // 位置算，缩放无效）
+            var minY = Infinity, maxY = -Infinity;
             graph.getData().nodes.forEach(function (n) {
               var d = graph.getNodeData(n.id);
-              if (d && d.style && d.style.y < minY) minY = d.style.y;
+              if (d && d.style) {
+                if (d.style.y < minY) minY = d.style.y;
+                if (d.style.y > maxY) maxY = d.style.y;
+              }
             });
-            if (minY < 0 && typeof graph.fitView === 'function') {
+            var ch = container.clientHeight || 800;
+            if ((minY < 0 || maxY > ch) && typeof graph.fitView === 'function') {
               setTimeout(function () { graph.fitView(); }, 500);
             }
           }
@@ -473,6 +478,9 @@
       var targetClass = rowClass(parent, id);
       var siblings = rec.nodes.filter(function (cid) {
         if (cid === id || expandedMap.has(cid)) return false;
+        // 只隐藏调用关系的同侧兄弟：has_method/implements 等关联
+        // （接收者/接口）不是调用链分支，即使同侧也不隐藏
+        if (edgeKind(parent, cid) !== 'calls') return false;
         if (targetClass === null) return true; // 方向未知：按旧行为移除
         return rowClass(parent, cid) === targetClass;
       });
@@ -541,6 +549,16 @@
       if (!found && rec.nodes.indexOf(childId) >= 0) found = pid;
     });
     return found;
+  }
+
+  // edgeKind 返回 parent 与 child 之间第一条边的 kind（无则 null）。
+  function edgeKind(parent, child) {
+    var data = graph.getData();
+    var e = (data.edges || []).find(function (x) {
+      return (x.source === parent && x.target === child) ||
+             (x.source === child && x.target === parent);
+    });
+    return e ? ((e.data && e.data.kind) || '') : null;
   }
 
   // rowClass 判断节点 other 相对中心节点 center 的布局方向（与 arrangeLayers
@@ -663,6 +681,32 @@
       if (!rows.has(d)) rows.set(d, []);
       rows.get(d).push(nid);
     });
+    // 边方向修正：箭头始终向下——对图中所有边，source 深度必须小于
+    // target 深度（处理共享节点：如 BuildMeta 既是 FullBuild 的初始化
+    // 对象、又被传给 Save，BFS/tail 给它的行号可能与 passes_to 边方向
+    // 冲突）。须在 BFS 与 tail 定位之后、rows 分组之前执行（此时所有
+    // 节点已入 depths，rows 才能反映修正后的深度）。循环直至收敛。
+    var pass = 0;
+    var depthChanged = false; // 深度被修正过（prevY 与新深度错位，须整树重排）
+    while (pass++ < 50) {
+      var changed = false;
+      (data.edges || []).forEach(function (e) {
+        if (!depths.has(e.source) || !depths.has(e.target)) return;
+        var ds = depths.get(e.source), dt = depths.get(e.target);
+        if (ds >= dt) {
+          depths.set(e.source, dt - 1);
+          changed = true;
+          depthChanged = true;
+        }
+      });
+      if (!changed) break;
+    }
+    // 按行号分组
+    var rows = new Map();
+    depths.forEach(function (d, nid) {
+      if (!rows.has(d)) rows.set(d, []);
+      rows.get(d).push(nid);
+    });
     var tail = Array.from(tailSet);
     if (tail.length) {
       var maxD = 0;
@@ -676,32 +720,40 @@
     var startY = 80;
     // 行 y：已有节点（prevY）所在行优先取原 y；其余深度行插值
     var rowY = new Map();
-    depths.forEach(function (d, nid) {
-      if (prevY && prevY[nid] !== undefined && !rowY.has(d)) rowY.set(d, prevY[nid]);
-    });
-    var known = [];
-    rowY.forEach(function (_, d) { known.push(d); });
-    known.sort(function (a, b) { return a - b; });
-    // 全量布局（无 prevY，如收起）兜底：相对最小深度偏移
     var minD = Infinity;
     depths.forEach(function (d) { if (d < minD) minD = d; });
-    depths.forEach(function (d) {
-      if (rowY.has(d)) return;
-      var lo = null, hi = null;
-      for (var i = 0; i < known.length; i++) {
-        if (known[i] < d) lo = known[i];
-        else if (known[i] > d) { hi = known[i]; break; }
-      }
-      if (lo !== null && hi !== null) {
-        rowY.set(d, rowY.get(lo) + (d - lo) / (hi - lo) * (rowY.get(hi) - rowY.get(lo)));
-      } else if (hi !== null) {
-        rowY.set(d, rowY.get(hi) - (hi - d) * rowGap); // 顶部扩展（可能超出画布）
-      } else if (lo !== null) {
-        rowY.set(d, rowY.get(lo) + (d - lo) * rowGap); // 底部扩展
-      } else {
-        rowY.set(d, startY + (d - minD) * rowGap); // 全量布局：按深度分层
-      }
-    });
+    if (depthChanged) {
+      // 深度被边方向修正过（共享节点冲突，整链上移）：prevY 已与
+      // 新深度错位（如 BuildMeta 从 1 行提到 0 行但 prevY 还是旧行），
+      // 放弃"已有节点不动"，整树按新深度干净分层
+      depths.forEach(function (d) {
+        if (!rowY.has(d)) rowY.set(d, startY + (d - minD) * rowGap);
+      });
+    } else {
+      depths.forEach(function (d, nid) {
+        if (prevY && prevY[nid] !== undefined && !rowY.has(d)) rowY.set(d, prevY[nid]);
+      });
+      var known = [];
+      rowY.forEach(function (_, d) { known.push(d); });
+      known.sort(function (a, b) { return a - b; });
+      depths.forEach(function (d) {
+        if (rowY.has(d)) return;
+        var lo = null, hi = null;
+        for (var i = 0; i < known.length; i++) {
+          if (known[i] < d) lo = known[i];
+          else if (known[i] > d) { hi = known[i]; break; }
+        }
+        if (lo !== null && hi !== null) {
+          rowY.set(d, rowY.get(lo) + (d - lo) / (hi - lo) * (rowY.get(hi) - rowY.get(lo)));
+        } else if (hi !== null) {
+          rowY.set(d, rowY.get(hi) - (hi - d) * rowGap); // 顶部扩展（可能超出画布）
+        } else if (lo !== null) {
+          rowY.set(d, rowY.get(lo) + (d - lo) * rowGap); // 底部扩展
+        } else {
+          rowY.set(d, startY + (d - minD) * rowGap); // 全量布局：按深度分层
+        }
+      });
+    }
     var updates = [];
     rows.forEach(function (ids, d) {
       var y = Math.round(rowY.get(d));

@@ -151,6 +151,10 @@ defer logger.Debug("exit <name>")
     分层（startY + (d-minD)*rowGap）——曾写坏为全部行落 startY=80，
     收起后所有节点堆一行、箭头全向上（用 audit 探针：每步检查所有
     calls 边 source.y < target.y）。
+    **边方向修正**：BFS/tail 后对所有边做 source<target 循环修正（共享
+    节点方向冲突）；修正触发（depthChanged）时 prevY 错位，须整树按新
+    深度干净分层（否则 rowY[0] 被旧位置节点占据导致同层）；行超画布
+    底部也要 fitView。**剪枝只隐藏 calls 兄弟**（edgeKind 检查）。
     **信息栏**：右侧常驻 320px 侧边栏（#sidepanel），单击节点复用
     /api/expand 渲染分组信息（基本/文档注释/提交/关系按类型）。**坑**：
     G6 v5 给容器设内联 position:relative 会覆盖样式表的 absolute——
