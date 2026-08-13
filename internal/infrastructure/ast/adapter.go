@@ -248,8 +248,9 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 				if ok2 && calleeID != "" && objID != calleeID {
 					_ = emit(domain.Item{Node: nodeFor(repo, pkg, callee, calleeID, calleeKind, nil)})
 					_ = emit(domain.Item{Fact: &domain.Fact{
-						SourceID:   objID,
-						TargetID:   calleeID,
+						// 方向：接收函数 → 参数（用户确认：接收者指向参数）
+						SourceID:   calleeID,
+						TargetID:   objID,
 						Kind:       domain.FactPassesTo,
 						ToolSource: domain.ToolCodeGraph,
 						Confidence: 0.8,
@@ -326,8 +327,9 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 				_ = emit(domain.Item{Node: nodeFor(repo, pkg, fn, paramID, paramKind, nil)})
 				_ = emit(domain.Item{Node: nodeFor(repo, pkg, callee, calleeID, calleeKind, nil)})
 				_ = emit(domain.Item{Fact: &domain.Fact{
-					SourceID:   paramID,
-					TargetID:   calleeID,
+					// 方向：接收函数 → 参数函数（用户确认：run -参数→ callback）
+					SourceID:   calleeID,
+					TargetID:   paramID,
 					Kind:       domain.FactPassesTo,
 					ToolSource: domain.ToolCodeGraph,
 					Confidence: 0.8,
