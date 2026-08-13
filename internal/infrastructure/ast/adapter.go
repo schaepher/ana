@@ -528,10 +528,10 @@ func embeddedTypeName(t types.Type) string {
 	return types.TypeString(t, nil)
 }
 
-// emitMethodReceiver 为文件内每个带 receiver 的方法声明建立 has_receiver 边
-// （方法 → 接收者类型节点）。接收者类型节点如不存在则创建（与 createObject
-// 相同的轻量节点模式，SCIP 已建则 UPSERT 合并属性）。展开方法时前端即可
-// 连线到其 receiver 节点。
+// emitMethodReceiver 为文件内每个带 receiver 的方法声明建立 has_method 边
+// （方法线：接收者类型 → 方法）。接收者类型节点如不存在则创建（与
+// createObject 相同的轻量节点模式，SCIP 已建则 UPSERT 合并属性）。
+// 展开接收者（struct）节点时前端即可连线到它的方法们。
 func (a *Adapter) emitMethodReceiver(repo *domain.Repository, pkg *packages.Package, f *ast.File, emit domain.EmitFunc) error {
 	logger := zap.L()
 	logger.Debug("enter (Adapter).emitMethodReceiver")
@@ -575,9 +575,9 @@ func (a *Adapter) emitMethodReceiver(repo *domain.Repository, pkg *packages.Pack
 			LineEnd:   tpos.Line,
 		}})
 		_ = emit(domain.Item{Fact: &domain.Fact{
-			SourceID:   methodID,
-			TargetID:   recvID,
-			Kind:       domain.FactHasReceiver,
+			SourceID:   recvID, // 方法线方向：接收者 → 方法
+			TargetID:   methodID,
+			Kind:       domain.FactHasMethod,
 			ToolSource: domain.ToolCodeGraph,
 			Confidence: 0.8,
 		}})

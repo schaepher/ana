@@ -23,15 +23,16 @@
   // 展开树的根（用户选择的入口），收起后整树按层级重新布局
   var entryRootId = null;
 
+  // 每种节点类型一种颜色（与图例一致）
   var KIND_COLOR = {
-    function: '#1677ff',
-    method: '#1677ff',
-    struct: '#52c41a',
-    interface: '#722ed1',
-    package: '#fa8c16',
-    file: '#8c8c8c',
-    commit: '#595959',
-    object: '#00b96b'
+    function: '#1677ff', // 函数：蓝
+    method: '#13c2c2',   // 方法：青
+    struct: '#52c41a',   // 结构体：绿
+    interface: '#722ed1', // 接口：紫
+    package: '#fa8c16',  // 包：橙
+    file: '#8c8c8c',     // 文件：灰
+    commit: '#595959',   // 提交：深灰
+    object: '#00b96b'    // 对象：薄荷绿
   };
   var FLAG_COLOR = {
     main: '#eb2f96',
@@ -49,7 +50,7 @@
     uses: [6, 2],
     passes_to: [2, 2, 2, 4],
     of_type: [1, 4, 1, 4],
-    has_receiver: [5, 2]
+    has_method: [5, 2]
   };
   var EDGE_KIND_LABEL = {
     calls: '调用',
@@ -59,7 +60,7 @@
     uses: '使用',
     passes_to: '传给',
     of_type: '类型',
-    has_receiver: '接收者',
+    has_method: '方法',
     data_flows_to: '数据流'
   };
   var EDGE_OUT_COLOR = '#1677ff';
@@ -247,7 +248,7 @@
         if (myToken !== expandToken) return data;
         // 展开时过滤"其他父"：已有父的节点展开后，只保留父这个 caller，
         // 其他 calls 入边节点（潜在父）不展示，只保留子节点方向。
-        // 注意：只拦 calls 入边——has_receiver/implements/initializes 等
+        // 注意：只拦 calls 入边——has_method/implements/initializes 等
         // 入边是节点的关联（如接收者的方法们），双击接收者要能展开它们
         var parent = parentOf(id);
         var neighbors = data.neighbors || [];
@@ -807,7 +808,7 @@
   };
   var FLAG_LABEL = { main: 'main 入口', http: 'HTTP 服务', grpc: 'gRPC 服务', framework: '框架回调' };
   // 关系分组展示顺序（未知 kind 追加在最后）
-  var REL_ORDER = ['calls', 'implements', 'imports', 'initializes', 'uses', 'passes_to', 'of_type', 'has_receiver', 'data_flows_to'];
+  var REL_ORDER = ['calls', 'implements', 'imports', 'initializes', 'uses', 'passes_to', 'of_type', 'has_method', 'data_flows_to'];
 
   // showNodePanel 单击节点：复用 /api/expand 取节点的完整关系后渲染信息栏
   function showNodePanel(id) {
@@ -898,13 +899,13 @@
         if (out.length) html.push(relGroupHtml('调用（' + out.length + '）', out));
         return;
       }
-      if (kind === 'has_receiver') {
-        // 接收者关系按视角分组：方法节点视角=出边（其接收者），
-        // struct 节点视角=入边（它的方法们）
+      if (kind === 'has_method') {
+        // 方法线（接收者 → 方法）按视角分组：struct 节点视角=出边
+        // （它的方法们），方法节点视角=入边（指向它的接收者）
         var out = items.filter(function (g) { return g.dir === '出'; });
         var inn = items.filter(function (g) { return g.dir === '入'; });
-        if (out.length) html.push(relGroupHtml('接收者（' + out.length + '）', out));
-        if (inn.length) html.push(relGroupHtml('方法（' + inn.length + '）', inn));
+        if (out.length) html.push(relGroupHtml('方法（' + out.length + '）', out));
+        if (inn.length) html.push(relGroupHtml('接收者（' + inn.length + '）', inn));
         return;
       }
       items.sort(function (a, b) { return a.dir === b.dir ? 0 : (a.dir === '出' ? -1 : 1); });

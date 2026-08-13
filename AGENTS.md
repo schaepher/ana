@@ -140,11 +140,16 @@ defer logger.Debug("exit <name>")
     G6 v5 给容器设内联 position:relative 会覆盖样式表的 absolute——
     侧边布局必须用外层 wrapper（#main-area 绝对定位 right:320px，
     容器 100% 填充），否则 right 不生效且节点会被面板遮挡不可点。
-    **方法 receiver**：AST 适配器 emitMethodReceiver 为方法建立
-    has_receiver 边（方法 → 接收者类型，轻量节点模式同 createObject）；
-    前端边虚线 [5,2] 标注"接收者"。**坑**：三行布局中间行单个节点
-    （如 receiver）会落在中心节点正上方（placeRow 单个节点 start=cx）——
+    **方法线 has_method**：AST 适配器 emitMethodReceiver 建立
+    has_method 边（接收者类型 → 方法，方向为用户确认的"由接收者指向
+    方法"；曾为 method→receiver 的 has_receiver，2026-08-13 反转并更名，
+    重建需 clean 清库否则旧边残留）；轻量节点模式同 createObject；
+    前端边虚线 [5,2] 标注"方法"，信息栏按视角拆分（struct 出边=方法
+    （N）、方法入边=接收者（N））。**坑**：三行布局中间行单个节点
+    （如接收者）会落在中心节点正上方（placeRow 单个节点 start=cx）——
     须 offsetSingle 偏移到中心右侧。
+    **节点配色**：KIND_COLOR 每种类型独立色（函数蓝/方法青/结构体绿/
+    接口紫/包橙/文件灰/提交深灰/对象薄荷绿）。
     **源码弹窗**：函数/方法节点信息栏 Source Code 按钮 → /api/source。
     后端按需读文件 + go/parser 提取声明区间（LineStart 精确 → 行范围
     → 名称三级匹配，容忍文件修改后行号漂移）；仅 function/method，

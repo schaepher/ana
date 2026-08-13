@@ -41,7 +41,7 @@ const (
 	FactUses        FactKind = "uses"        // 对象的方法被调用（使用处）
 	FactPassesTo    FactKind = "passes_to"   // 对象被传给其他函数（去处）
 	FactOfType      FactKind = "of_type"      // 对象 → 其 struct 类型
-	FactHasReceiver FactKind = "has_receiver" // 方法 → 其 receiver 类型
+	FactHasMethod   FactKind = "has_method"   // receiver 类型 → 其方法（方法线）
 )
 
 // 工具来源标识，对应 edges.tool_source 列。
