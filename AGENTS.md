@@ -133,10 +133,12 @@ defer logger.Debug("exit <name>")
     接收者展开不出方法）。**收起顺序坑**：collectCollapse 须先递归回收
     整棵子树记录再判孤儿——边回收边判断会把连到后处理兄弟新增边的边
     误判为"有其他边"而残留节点。
-    **树布局**：relayoutTree 方向感知分层——行号仅以 calls 入边（isCaller）
-    为上一行，其余一律下一行（implements/imports 在三行布局中是上行依赖，
-    但链视图中是节点自身子项，排下一行），每行水平居中。入口节点首次选择
-    显式置于画布正中（addNode 网格位置在左上角，force 不移动孤立节点）。
+    **树布局**：relayoutTree 方向感知分层——**箭头始终向下**：isUp(parent,
+    child) 判断 child 是否通过任意关系（calls/has_method/implements 等）
+    指向 parent（child 是 source）→ child 在上一行，否则下一行；每行
+    水平居中。三行布局/rowClass/tail 定位同一原则（source 在上、target
+    在下）。入口节点首次选择显式置于画布正中（addNode 网格位置在左上角，
+    force 不移动孤立节点）。
     **增量布局**：展开时 relayoutTree(root, prevY)——已有节点保持 y，
     新节点行插值；prevY 必须在 addNode 前收集（否则新节点网格位置被当
     已有位置）；updateNodeData 无返回（非 promise），fitView 须 setTimeout

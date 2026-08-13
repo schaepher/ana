@@ -598,11 +598,16 @@ v2.0 设计树封闭后，MVP 实现过程中补充与调整的能力记录。�
   回收边判断，先处理的子节点会把连到后处理兄弟新增边的边误判为
   "有其他边"而残留（收起根后 flush 残留）。
 - **方向感知树布局**（2026-08-13 修正）：非根展开/收起后的整树布局
-  （relayoutTree）按行号分层：根=0，caller（calls 入边，isCaller）在
-  其父**上一行**，其余（callee/实现接口/导入包/对象关系）在下一行，
-  每行水平居中。保证链路垂直——展开 callee 后 cmdInit 始终居中在
-  FullBuild 正上方。注意树布局不用 rowClass 判断上下：implements/
-  imports 在三行布局中是上行依赖，但链视图中作为节点自身子项排下一行。
+  （relayoutTree）按行号分层：根=0，**箭头始终向下**——child 通过任意
+  关系指向 parent（child 是边的 source：caller/接收者/接口，isUp）在
+  其父**上一行**，parent 指向 child 在下一行；每行水平居中。保证链路
+  垂直——展开 callee 后 cmdInit 始终居中在 FullBuild 正上方。
+- **箭头方向统一原则**（2026-08-13）：所有关系类型（calls/has_method/
+  implements/initializes）的布局方向一致——**source 在上、target 在下**
+  （接收者在上、接口在上、调用方在上）。曾只对 calls 判方向，has_method
+  入边（接收者）和 implements 入边（接口）被排到下方、箭头朝上（示例
+  图 A→C→G 向上展开复现）；三行布局（arrangeLayers）/rowClass/树布局/
+  tail 定位全部统一按边方向。
 - **增量布局**（2026-08-13 修正）：展开时已有节点保持原位置，新节点行
   在相邻已知行之间插值——向上展开（出现更上层调用方）不再把整棵树
   往下推（用户确认）。prevY 须在 addNode **之前**收集（否则新节点的

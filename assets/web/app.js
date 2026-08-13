@@ -360,11 +360,10 @@
       switch (kind) {
         case 'calls':
         case 'initializes':
-          if (down) pushUniq(callees, other);
-          else pushUniq(callers, other);
-          break;
+        case 'has_method':
         case 'implements':
-          // 接口 → 实现者：接口出边（实现者）→ 下行，实现者入边（接口）→ 上行
+          // 箭头始终向下：出边（该方法/实现者等 target）→ 下行，
+          // 入边（接收者/接口等 source）→ 上行
           if (down) pushUniq(callees, other);
           else pushUniq(callers, other);
           break;
@@ -551,14 +550,13 @@
   // 注意：树布局（relayoutTree）不用本函数判断上下——implements/imports 虽
   // 在三行布局中视为上行依赖，但在链视图中是节点自身的子项，排下一行。
 
-  // isCaller 判断 child 是否为 parent 的 caller（calls 入边）。树布局行号
-  // 仅以 calls 入边为"上一行"（链路顶行），其余关系一律下一行，保证链路
-  // 垂直（展开 callee 后 cmdInit 仍居中在 FullBuild 上方）。
-  function isCaller(parent, child) {
+  // isUp 判断 child 是否通过任意关系指向 parent（child 是边的 source，
+  // 如 caller / 接收者 / 接口）。树布局行号原则：箭头始终向下——source
+  // 在 target 上方，适用于所有关系类型（calls/has_method/implements 等）。
+  function isUp(parent, child) {
     var data = graph.getData();
     return (data.edges || []).some(function (x) {
-      return x.source === child && x.target === parent &&
-        ((x.data && x.data.kind) || '') === 'calls';
+      return x.source === child && x.target === parent;
     });
   }
   function rowClass(center, other) {
@@ -575,7 +573,9 @@
       case 'initializes':
         return down ? 'down' : 'up';
       case 'implements':
-        // 接口 → 实现者（反转后）：接口出边=实现者下行，实现者入边=接口上行
+      case 'has_method':
+        // 接口 → 实现者 / 接收者 → 方法：出边（实现者/方法）下行，
+        // 入边（接口/接收者）上行——箭头始终向下
         return down ? 'down' : 'up';
       case 'imports':
         return down ? 'up' : 'down';
@@ -625,7 +625,9 @@
       var pd = depths.get(pid);
       rec.nodes.forEach(function (cid) {
         if (!nodeSet.has(cid) || depths.has(cid)) return; // 已分配/已删节点跳过
-        depths.set(cid, pd + (isCaller(pid, cid) ? -1 : 1));
+        // 箭头始终向下：child 通过任意关系指向 parent（child 是 source，
+        // 如 caller/接收者/接口）→ 上一行；parent 指向 child → 下一行
+        depths.set(cid, pd + (isUp(pid, cid) ? -1 : 1));
         queue.push(cid);
       });
     }
@@ -648,13 +650,9 @@
         if (!e) return;
         var other = e.source === tid ? e.target : e.source;
         var od = depths.get(other);
-        var kind = (e.data && e.data.kind) || '';
-        if (kind === 'calls') {
-          // 我调用其它（我是 caller）→ 在其上一行；其它调用我 → 下一行
-          depths.set(tid, e.source === tid ? od - 1 : od + 1);
-        } else {
-          depths.set(tid, od + 1); // 其余关系 → 下一行
-        }
+        // 箭头始终向下：我是边的 source（caller/接收者/接口）→ 上一行，
+        // 我是 target → 下一行（适用于所有关系类型）
+        depths.set(tid, e.source === tid ? od - 1 : od + 1);
         tailSet.delete(tid);
         progressed = true;
       });
