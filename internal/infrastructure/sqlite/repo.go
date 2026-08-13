@@ -613,18 +613,30 @@ func (r *Repo) Expand(id domain.CanonicalID) (facts []*domain.Fact, nodes []*dom
 	logger := zap.L()
 	logger.Debug("enter (Repo).Expand")
 	defer logger.Debug("exit (Repo).Expand")
+	// parameter 节点：代理到对应的 ssa_value 参数（数据流端点），
+	// 使展开能返回该参数的数据流上下游（field_trace.md 参数展开）
+	queryID := string(id)
+	var bridgeID string // 桥边：parameter → ssa_value（不落库，仅响应）
+	if n, gerr := r.GetSymbol(id); gerr == nil && n.Kind == domain.KindParameter {
+		queryID = paramValueID(string(id))
+		if queryID != "" {
+			if _, gerr := r.GetSymbol(domain.CanonicalID(queryID)); gerr == nil {
+				bridgeID = queryID // ssa_value 参数节点存在才搭桥
+			}
+		}
+	}
 	rows, err := r.Query(`
 SELECT e.source_id, e.target_id, e.kind, e.tool_source, e.confidence, e.metadata
 FROM edges e
 LEFT JOIN nodes n ON n.id = CASE WHEN e.source_id = ? THEN e.target_id ELSE e.source_id END
-WHERE (e.source_id = ? OR e.target_id = ?) AND e.kind IN ('calls', 'implements', 'imports', 'initializes', 'uses', 'passes_to', 'passes_result', 'of_type', 'has_method', 'has_param', 'has_result')
+WHERE (e.source_id = ? OR e.target_id = ?) AND e.kind IN ('calls', 'implements', 'imports', 'initializes', 'uses', 'passes_to', 'passes_result', 'of_type', 'has_method', 'has_param', 'has_result', 'data_flows_to', 'argument', 'returns', 'phi_operand', 'alias')
 ORDER BY CASE WHEN e.kind = 'has_param' THEN 0
               WHEN e.kind = 'has_result' THEN 1
               ELSE 2 END,
          COALESCE(CASE WHEN e.kind IN ('has_param','has_result')
                        THEN json_extract(n.properties, '$.index') END, 999),
          e.id
-LIMIT 500`, string(id), string(id), string(id), string(id))
+LIMIT 500`, queryID, queryID, queryID, queryID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("expand %s: %w", id, err)
 	}
@@ -632,6 +644,16 @@ LIMIT 500`, string(id), string(id), string(id), string(id))
 	facts, err = scanFacts(rows)
 	if err != nil {
 		return nil, nil, err
+	}
+	// 参数节点桥边：parameter → ssa_value（数据流链从参数声明到函数内值）
+	if bridgeID != "" {
+		facts = append(facts, &domain.Fact{
+			SourceID:   id,
+			TargetID:   domain.CanonicalID(bridgeID),
+			Kind:       domain.FactDataFlowsTo,
+			ToolSource: domain.ToolSSA,
+			Confidence: 1.0,
+		})
 	}
 	if len(facts) == 0 {
 		return facts, nil, nil
@@ -925,4 +947,21 @@ SELECT id, depth, name, edge_kinds, line, dir, kind, access FROM flows ORDER BY 
 		out = append(out, &row)
 	}
 	return out, rows.Err()
+}
+
+// paramValueID 将 parameter 节点 ID 转换为对应的 ssa_value 参数 ID：
+// #param.recv.<name> / #param.<name> → #<name>；非参数 slot 返回空。
+func paramValueID(id string) string {
+	hash := strings.LastIndex(id, "#")
+	if hash < 0 {
+		return ""
+	}
+	prefix, slot := id[:hash], id[hash+1:]
+	switch {
+	case strings.HasPrefix(slot, "param.recv."):
+		return prefix + "#" + strings.TrimPrefix(slot, "param.recv.")
+	case strings.HasPrefix(slot, "param."):
+		return prefix + "#" + strings.TrimPrefix(slot, "param.")
+	}
+	return ""
 }

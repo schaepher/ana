@@ -9,7 +9,9 @@ export const KIND_COLOR = {
   commit: '#595959',   // 提交：深灰
   object: '#00b96b',   // 对象：薄荷绿
   parameter: '#d48806', // 签名参数：金
-  result: '#f759ab'    // 返回值：粉
+  result: '#f759ab',   // 返回值：粉
+  field_access: '#7cb305', // 字段访问：酸橙
+  ssa_value: '#bfbfbf' // SSA 值：浅灰
 };
 export const FLAG_COLOR = {
   main: '#eb2f96',
@@ -28,7 +30,11 @@ export const EDGE_KIND_LINE = {
   of_type: [1, 4, 1, 4],
   has_method: [5, 2],
   has_param: [3, 3],
-  has_result: [1, 3, 1, 3]
+  has_result: [1, 3, 1, 3],
+  argument: [2, 2],
+  returns: [4, 4],
+  phi_operand: [6, 2],
+  alias: [1, 2]
 };
 export const EDGE_KIND_LABEL = {
   calls: '调用',
@@ -42,27 +48,31 @@ export const EDGE_KIND_LABEL = {
   has_method: '拥有方法',
   has_param: '参数',
   has_result: '返回',
+  argument: '参数传递',
+  returns: '返回值',
+  phi_operand: '分支输入',
+  alias: '别名',
   data_flows_to: '数据流'
 };
 export const EDGE_OUT_COLOR = '#1677ff';
 export const EDGE_IN_COLOR = '#f5222d';
 export const EDGE_DEFAULT_COLOR = '#000000';
 // 信息栏关系分组展示顺序（未知 kind 追加在最后）
-export const REL_ORDER = ['calls', 'implements', 'imports', 'initializes', 'uses', 'passes_to', 'passes_result', 'of_type', 'has_method', 'has_param', 'has_result', 'data_flows_to'];
+export const REL_ORDER = ['calls', 'implements', 'imports', 'initializes', 'uses', 'passes_to', 'passes_result', 'of_type', 'has_method', 'has_param', 'has_result', 'argument', 'returns', 'phi_operand', 'alias', 'data_flows_to'];
 // 隐藏规则可选项：展开时移除"同侧且属于这些关系类型"的兄弟
-export const HIDE_OPTIONS = ['calls', 'has_method', 'implements', 'initializes', 'imports', 'uses', 'passes_to', 'passes_result', 'of_type', 'has_param', 'has_result', 'data_flows_to'];
+export const HIDE_OPTIONS = ['calls', 'has_method', 'implements', 'initializes', 'imports', 'uses', 'passes_to', 'passes_result', 'of_type', 'has_param', 'has_result', 'argument', 'returns', 'phi_operand', 'alias', 'data_flows_to'];
 // 行内排列顺序：子节点按与父节点的边类型分组（相同类型相邻），
 // [调用]（calls）放最后；未知/悬浮节点（无父边）排最前
 export const ROW_KIND_RANK = {};
 ['implements', 'imports', 'initializes', 'uses', 'passes_to', 'passes_result',
- 'of_type', 'has_method', 'has_param', 'has_result', 'data_flows_to', 'calls'].forEach(function (k, i) {
+ 'of_type', 'has_method', 'has_param', 'has_result', 'argument', 'returns', 'phi_operand', 'alias', 'data_flows_to', 'calls'].forEach(function (k, i) {
   ROW_KIND_RANK[k] = i + 1;
 });
 // 信息栏类型/标记中文名
 export const KIND_LABEL = {
   function: '函数', method: '方法', struct: '结构体', interface: '接口',
   package: '包', file: '文件', commit: '提交', object: '对象',
-  parameter: '参数', result: '返回'
+  parameter: '参数', result: '返回', field_access: '字段访问', ssa_value: 'SSA 值'
 };
 export const FLAG_LABEL = { main: 'main 入口', http: 'HTTP 服务', grpc: 'gRPC 服务', framework: '框架回调' };
 

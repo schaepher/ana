@@ -41,6 +41,7 @@ export function renderNodePanel(data) {
   if (node.file) basic.push(kv('文件', node.file + (node.line ? ':' + node.line : '')));
   if (node.signature) basic.push(kv('签名', node.signature));
   if (node.type) basic.push(kv('类型', node.type));
+  if (node.fullPath) basic.push(kv('字段路径', node.fullPath));
   if (node.flags && node.flags.length) {
     basic.push(kv('标记', node.flags.map(function (f) { return FLAG_LABEL[f] || f; }).join('、')));
   }

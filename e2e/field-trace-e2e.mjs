@@ -125,6 +125,18 @@ check('返回按定义顺序（string→string→error）',
   s1 >= 0 && s2 > s1 && i1('→error') > s2,
   'results=' + orderText.slice(orderText.indexOf('返回（'), orderText.indexOf('返回（') + 80).replace(/\n/g, ' '));
 
+// 9. 双击参数节点：展开数据流上下游（桥边 → ssa_value → field_access）
+const RECV_ID = FN_ID + '#param.recv.m';
+await page.evaluate((id) => window.__codeintelGraph.emit('node:dblclick', { target: { id } }), RECV_ID);
+await page.waitForTimeout(1200);
+const afterKinds = await page.evaluate(() => window.__codeintelGraph.getData().nodes.map((n) => n.data.kind));
+check('双击参数节点展开 ssa_value/field_access',
+  afterKinds.includes('field_access') && afterKinds.includes('ssa_value'),
+  'kinds=' + afterKinds.join(','));
+const hasCfg = await page.evaluate(() => window.__codeintelGraph.getData().nodes.some(
+  (n) => n.data.label && n.data.label.indexOf('m.cfg') >= 0));
+check('展开含 m.cfg 字段访问节点', hasCfg);
+
 console.log('\n===== 字段追溯 e2e: ' + passed + ' passed, ' + failed + ' failed =====');
 await browser.close();
 process.exit(failed ? 1 : 0);

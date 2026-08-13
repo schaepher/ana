@@ -333,12 +333,13 @@ func TestExpand(t *testing.T) {
 	if err != nil || len(facts) != 0 {
 		t.Errorf("expand missing node = %+v, %v", facts, err)
 	}
-	// 限制 kind：未知 kind 的边不返回（如 data_flows_to 不在列表）
-	save(t, r, nil, []*domain.Fact{{SourceID: a.ID, TargetID: b.ID, Kind: domain.FactDataFlowsTo, Confidence: 0.7}})
+	// 限制 kind：白名单外的边不返回（data_flows_to 等数据流边自字段追溯起
+	// 加入白名单，见 TestExpandParameterDataFlow）
+	save(t, r, nil, []*domain.Fact{{SourceID: a.ID, TargetID: b.ID, Kind: "not_a_kind", Confidence: 0.7}})
 	facts, _, _ = r.Expand(a.ID)
 	for _, f := range facts {
-		if f.Kind == domain.FactDataFlowsTo {
-			t.Error("Expand must not return data_flows_to edges")
+		if f.Kind == "not_a_kind" {
+			t.Error("Expand must not return unknown-kind edges")
 		}
 	}
 }
@@ -674,4 +675,67 @@ func TestExpandParamResultDefinitionOrder(t *testing.T) {
 			t.Errorf("expand order[%d] = %s, want %s (full: %v)", i, got[i], want[i], got)
 		}
 	}
+}
+
+func TestExpandParameterDataFlow(t *testing.T) {
+	r := newTestRepo(t)
+	funcID := "symbol:go:example.com/m:f"
+	callerID := "symbol:go:example.com/m:g"
+	fn := node(funcID, "function", "f", "f.go")
+	caller := node(callerID, "function", "g", "g.go")
+	// 参数：parameter 节点（签名）+ ssa_value 参数（数据流端点）
+	param := mkParamNode(funcID+"#param.a", "a", 0, funcID)
+	paramVal := node(funcID+"#a", "ssa_value", "a", "f.go")
+	paramVal.Properties["func_id"] = funcID
+	// 下游：字段访问 a.X（data_flows_to a → 字段访问）
+	fa := faNodeAccess(funcID+"#a.X.read@3", funcID, "example.com/m.T.X", "a.X", 3, "read")
+	// 上游：调用方实参 t0 → 参数（argument 边）
+	argVal := node(callerID+"#t0", "ssa_value", "t0", "g.go")
+	argVal.Properties["func_id"] = callerID
+	save(t, r, []*domain.CodeEntity{fn, caller, param, paramVal, fa, argVal}, []*domain.Fact{
+		{SourceID: fn.ID, TargetID: param.ID, Kind: domain.FactHasParam, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: paramVal.ID, TargetID: fa.ID, Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: argVal.ID, TargetID: paramVal.ID, Kind: domain.FactArgument, ToolSource: domain.ToolSSA, Confidence: 1},
+	})
+
+	// 展开参数节点：应返回桥边（param→ssa_value）+ 上游 argument + 下游 data_flows_to
+	facts, neighbors, err := r.Expand(param.ID)
+	if err != nil {
+		t.Fatalf("Expand param: %v", err)
+	}
+	kinds := map[string]bool{}
+	for _, f := range facts {
+		kinds[string(f.Kind)] = true
+	}
+	if !kinds[string(domain.FactDataFlowsTo)] || !kinds[string(domain.FactArgument)] {
+		t.Errorf("expand param facts kinds = %v, want data_flows_to+argument", kinds)
+	}
+	// 桥边：parameter → ssa_value 参数
+	bridged := false
+	for _, f := range facts {
+		if f.SourceID == param.ID && f.TargetID == paramVal.ID {
+			bridged = true
+		}
+	}
+	if !bridged {
+		t.Errorf("bridge edge param->value missing: %+v", facts)
+	}
+	// 邻居包含：field_access、实参 ssa_value、函数
+	nid := map[string]bool{}
+	for _, n := range neighbors {
+		nid[string(n.ID)] = true
+	}
+	for _, want := range []string{string(fa.ID), string(argVal.ID), string(paramVal.ID)} {
+		if !nid[want] {
+			t.Errorf("expand param neighbors missing %s (have %v)", want, nid)
+		}
+	}
+}
+
+// mkParamNode 构造 parameter 节点。
+func mkParamNode(id, name string, index int, funcID string) *domain.CodeEntity {
+	n := node(id, "parameter", name, "f.go")
+	n.Properties["index"] = index
+	n.Properties["func_id"] = funcID
+	return n
 }

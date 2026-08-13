@@ -75,6 +75,7 @@ type NodeJSON struct {
 	Line       int             `json:"line,omitempty"`
 	Signature  string          `json:"signature,omitempty"`
 	Type       string          `json:"type,omitempty"`  // properties.type_string（参数/返回等）
+	FullPath   string          `json:"fullPath,omitempty"` // properties.full_path（字段访问）
 	Flags      []string        `json:"flags,omitempty"` // main / http / grpc
 	DocComment string          `json:"docComment,omitempty"` // properties.doc_comment
 	Message    string          `json:"message,omitempty"`    // commit 说明
@@ -209,6 +210,7 @@ func nodeToJSON(n *domain.CodeEntity) NodeJSON {
 		j.Flags = append(j.Flags, "grpc")
 	}
 	j.Type = n.Property("type_string")
+	j.FullPath = n.Property("full_path")
 	j.DocComment = n.Property("doc_comment")
 	j.Message = n.Property("message")
 	j.Date = n.Property("date")
