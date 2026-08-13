@@ -216,7 +216,7 @@ func queryTraceDir(repo *sqlite.Repo, field, funcPath string, maxDepth int, forw
 		if r.Line > 0 {
 			line = fmt.Sprintf(" (%d)", r.Line)
 		}
-		fmt.Printf("%s%s %s %s%s%s\n", strings.Repeat("  ", r.Depth), direction, edge, shortID(r.ID), line, mark)
+		fmt.Printf("%s%s %s %s%s%s\n", strings.Repeat("  ", r.Depth), direction, edge, r.Name, line, mark)
 	}
 	return 0
 }

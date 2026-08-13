@@ -394,10 +394,17 @@ func (ext *fieldExtractor) emitValue(v ssa.Value) (domain.CanonicalID, error) {
 	}
 	id := domain.CanonicalID(string(funcID) + "#" + slot)
 	ext.values[v] = id
+	// 展示名：能还原源码链的用 instancePath（局部变量 x、解引用 x、
+	// 字段链 x.a）；纯临时值（Phi/Call/BinOp 结果）保持 SSA 名 tN——
+	// 追溯链上"t91"应为实际变量名（Q68 展示层）
+	name := ext.instancePath(v)
+	if isSSAName(name) {
+		name = slot
+	}
 	n := &domain.CodeEntity{
 		ID:   id,
 		Kind: domain.KindSSAValue,
-		Name: slot,
+		Name: name,
 		Properties: map[string]any{
 			"origin_kind": originKind(v),
 			"ssa_op":      ssaOp(v),
@@ -466,9 +473,15 @@ func (ext *fieldExtractor) instancePathDepth(v ssa.Value, depth int) string {
 	}
 	switch x := v.(type) {
 	case *ssa.FieldAddr:
-		return ext.instancePathDepth(x.X, depth+1) + "." + fieldNameOf(x.X.Type(), x.Field)
+		if fn := fieldNameOf(x.X.Type(), x.Field); fn != "" {
+			return ext.instancePathDepth(x.X, depth+1) + "." + fn
+		}
+		return ext.instancePathDepth(x.X, depth+1)
 	case *ssa.Field:
-		return ext.instancePathDepth(x.X, depth+1) + "." + fieldNameOf(x.X.Type(), x.Field)
+		if fn := fieldNameOf(x.X.Type(), x.Field); fn != "" {
+			return ext.instancePathDepth(x.X, depth+1) + "." + fn
+		}
+		return ext.instancePathDepth(x.X, depth+1)
 	case *ssa.UnOp:
 		if x.Op == token.MUL { // 解引用：与 Alloc 连成变量名
 			return ext.instancePathDepth(x.X, depth+1)
@@ -557,4 +570,17 @@ type fieldExtractor struct {
 	slotsFor map[domain.CanonicalID]map[string]bool // 每函数 slot 占用（shadowing 消歧）
 	lines    map[string][]string             // 源码行缓存（filePath → 行数组）
 	funcData *funcData                       // 摘要收集（direct 读写 + 静态调用）
+}
+
+// isSSAName 判断是否为 SSA 临时名（t0、t91 等），用于决定展示名回退。
+func isSSAName(name string) bool {
+	if len(name) < 2 || name[0] != 't' {
+		return false
+	}
+	for _, c := range name[1:] {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
