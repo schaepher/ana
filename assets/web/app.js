@@ -882,7 +882,8 @@
       byKind[e.kind].push({
         dir: e.source === node.id ? '出' : '入',
         name: otherNode ? otherNode.name : other,
-        loc: locOf(e, node, otherNode)
+        file: otherNode ? otherNode.file : '',
+        line: e.line
       });
     });
     REL_ORDER.concat(restOrder).forEach(function (kind) {
@@ -904,22 +905,26 @@
     panelBody.innerHTML = html.join('');
   }
 
-  // locOf 关系的位置：出边的行号在节点自身文件，入边在对方文件
-  function locOf(e, node, otherNode) {
-    var f = e.source === node.id ? node.file : (otherNode ? otherNode.file : '');
-    if (!e.line) return f;
-    return f ? f + ':' + e.line : '';
-  }
-
-  // relGroupHtml 关系分组标题 + 条目列表（方向 →/←、对方节点、位置）
+  // relGroupHtml 关系分组：标题 + 按对方节点文件路径分组的条目列表
+  // （组头为文件路径，条目显示方向 →/←、对方节点、行号）
   function relGroupHtml(title, items) {
-    var lis = items.map(function (g) {
-      var loc = g.loc ? ' · ' + escapeHtml(g.loc) : '';
-      return '<div class="rel"><span class="dir">' + (g.dir === '出' ? '→' : '←') + '</span>' +
-        '<span class="name">' + escapeHtml(g.name) + '</span>' +
-        '<span class="loc">' + loc + '</span></div>';
+    var byFile = {};
+    items.forEach(function (g) {
+      var f = g.file || '（未知）';
+      if (!byFile[f]) byFile[f] = [];
+      byFile[f].push(g);
     });
-    return '<h3>' + title + '</h3>' + lis.join('');
+    var out = ['<h3>' + title + '</h3>'];
+    Object.keys(byFile).forEach(function (f) {
+      out.push('<div class="file-group">' + escapeHtml(f) + '</div>');
+      byFile[f].forEach(function (g) {
+        var loc = g.line ? ' · :' + g.line : '';
+        out.push('<div class="rel"><span class="dir">' + (g.dir === '出' ? '→' : '←') + '</span>' +
+          '<span class="name">' + escapeHtml(g.name) + '</span>' +
+          '<span class="loc">' + loc + '</span></div>');
+      });
+    });
+    return out.join('');
   }
 
   // kv 键值行
