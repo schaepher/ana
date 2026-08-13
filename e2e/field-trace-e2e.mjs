@@ -174,6 +174,24 @@ check('双击参数值节点后画布出现 has_param 边（回到所属函数�
   edgeKinds.includes('has_param'),
   'edges=' + edgeKinds.join(','));
 
+// 12. 数据值全链：信息栏"追踪此数据"按钮 → 函数上下文分组文本树
+await page.evaluate((id) => window.__codeintelGraph.emit('node:click', { target: { id } }), faInfo.id);
+await page.waitForTimeout(800);
+const hasVtBtn = await page.evaluate(() => !!document.getElementById('vt-btn'));
+check('数据节点信息栏有"追踪此数据"按钮', hasVtBtn);
+if (hasVtBtn) {
+  await page.click('#vt-btn');
+  await page.waitForTimeout(1000);
+  const vtText = await page.evaluate(() => {
+    const el = document.getElementById('vt-panel');
+    return el ? el.textContent : '';
+  });
+  check('全链视图按函数上下文分组（含跨函数与读写标记）',
+    vtText.indexOf('数据流全链') >= 0 && vtText.indexOf('(Manager).Run') >= 0 &&
+    vtText.indexOf('(Handler).PageChatSend') >= 0 && vtText.indexOf('[读]') >= 0,
+    'vt=' + vtText.slice(0, 120).replace(/\n/g, ' '));
+}
+
 console.log('\n===== 字段追溯 e2e: ' + passed + ' passed, ' + failed + ' failed =====');
 await browser.close();
 process.exit(failed ? 1 : 0);

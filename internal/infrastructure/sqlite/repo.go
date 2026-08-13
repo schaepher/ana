@@ -988,3 +988,80 @@ func paramValueID(id string) string {
 	}
 	return ""
 }
+
+// GetValueTrace 追踪一个数据值在整条链路上的处理过程（跨函数，无 func_id 限制）：
+// 以任意数据节点（field_access / ssa_value / parameter）为锚点，双向遍历
+// data_flows_to / argument / returns / phi_operand；
+// Dir=0 为产生链（反向），Dir=1 为使用链（正向）；行带 func_id 供函数上下文分组。
+func (r *Repo) GetValueTrace(nodeID domain.CanonicalID, maxDepth int) ([]*domain.TraceRow, error) {
+	logger := zap.L()
+	logger.Debug("enter (Repo).GetValueTrace")
+	defer logger.Debug("exit (Repo).GetValueTrace")
+	if maxDepth <= 0 {
+		maxDepth = 8
+	}
+	rows, err := r.Query(`WITH RECURSIVE vt(id, depth, name, edge_kinds, line, dir, kind, access, func_id) AS (
+    SELECT n.id, 0, n.name, '', n.line_start, 0, n.kind,
+           json_extract(n.properties, '$.access_kind'), json_extract(n.properties, '$.func_id')
+    FROM nodes n WHERE n.id = ?
+    UNION
+    -- 反向：流向当前节点（产生链）
+    SELECT e.source_id, d.depth + 1, n_prev.name,
+           CASE WHEN d.edge_kinds = '' THEN e.kind
+                ELSE d.edge_kinds || ',' || e.kind END, n_prev.line_start, 0,
+           n_prev.kind, json_extract(n_prev.properties, '$.access_kind'),
+           json_extract(n_prev.properties, '$.func_id')
+    FROM edges e
+    JOIN vt d ON e.target_id = d.id
+    JOIN nodes n_prev ON e.source_id = n_prev.id
+    WHERE e.kind IN ('data_flows_to','argument','returns','phi_operand')
+      AND (d.dir = 0 OR d.depth = 0) AND d.depth < ?
+    UNION
+    -- 正向：从当前节点流出（使用链）
+    SELECT e.target_id, d.depth + 1, n_next.name,
+           CASE WHEN d.edge_kinds = '' THEN e.kind
+                ELSE d.edge_kinds || ',' || e.kind END, n_next.line_start, 1,
+           n_next.kind, json_extract(n_next.properties, '$.access_kind'),
+           json_extract(n_next.properties, '$.func_id')
+    FROM edges e
+    JOIN vt d ON e.source_id = d.id
+    JOIN nodes n_next ON e.target_id = n_next.id
+    WHERE e.kind IN ('data_flows_to','argument','returns','phi_operand')
+      AND (d.dir = 1 OR d.depth = 0) AND d.depth < ?
+)
+SELECT id, depth, name, edge_kinds, line, dir, kind, access, func_id FROM vt ORDER BY dir, depth, id`,
+		string(nodeID), maxDepth, maxDepth)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*domain.TraceRow
+	for rows.Next() {
+		var (
+			row    domain.TraceRow
+			id     string
+			line   sql.NullInt64
+			dir    int
+			kind   string
+			access sql.NullString
+			funcID sql.NullString
+		)
+		if err := rows.Scan(&id, &row.Depth, &row.Name, &row.EdgeKinds, &line, &dir, &kind, &access, &funcID); err != nil {
+			return nil, err
+		}
+		row.ID = domain.CanonicalID(id)
+		row.Dir = dir
+		row.Kind = domain.EntityKind(kind)
+		if access.Valid {
+			row.Access = access.String
+		}
+		if funcID.Valid {
+			row.FuncID = funcID.String
+		}
+		if line.Valid {
+			row.Line = int(line.Int64)
+		}
+		out = append(out, &row)
+	}
+	return out, rows.Err()
+}

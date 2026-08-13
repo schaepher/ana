@@ -24,7 +24,7 @@ func cmdQuery(args []string) int {
 	logger.Debug("enter cmdQuery")
 	defer logger.Debug("exit cmdQuery")
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "error: query 需要一个子命令（symbol/fields/trace-backward/trace-forward/callers/callees/impact）")
+		fmt.Fprintln(os.Stderr, "error: query 需要一个子命令（symbol/fields/trace-backward/trace-forward/value-trace/callers/callees/impact）")
 		return 2
 	}
 	sub := args[0]
@@ -58,6 +58,8 @@ func cmdQuery(args []string) int {
 		return queryFields(repo, target)
 	case "trace-backward", "trace-forward":
 		return queryTraceDir(repo, target, f.funcPath, f.maxDepth, sub == "trace-forward")
+	case "value-trace":
+		return queryValueTrace(repo, target, f.maxDepth)
 	case "callers", "callees", "impact":
 		d := f.depth
 		if d <= 0 {
@@ -419,4 +421,61 @@ func printNodes(nodes []*domain.CodeEntity) {
 		}
 		fmt.Printf("  %s %s%s\n", n.Kind, n.Name, loc)
 	}
+}
+
+// queryValueTrace 输出数据值在整条链路上的处理过程，按函数上下文分组
+// （field_trace.md §14.2 数据值全链追踪）。
+func queryValueTrace(repo *sqlite.Repo, nodeID string, maxDepth int) int {
+	logger := zap.L()
+	logger.Debug("enter queryValueTrace")
+	defer logger.Debug("exit queryValueTrace")
+	rows, err := repo.GetValueTrace(domain.CanonicalID(nodeID), maxDepth)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+	if len(rows) == 0 {
+		fmt.Println("无数据流（节点不存在或无数据流边）")
+		return 0
+	}
+	fmt.Printf("数据值追踪（%s，--max-depth %d）:\n", nodeID, maxDepth)
+	var curFunc string
+	for _, r := range rows {
+		// 函数上下文分组
+		if r.FuncID != curFunc {
+			curFunc = r.FuncID
+			group := shortFuncName(curFunc)
+			if group == "" {
+				group = "（未知函数）"
+			}
+			fmt.Printf("\n【%s】\n", group)
+		}
+		arrow := "→"
+		if r.Dir == 0 {
+			arrow = "←"
+		}
+		edge := lastEdgeKind(r.EdgeKinds)
+		acc := ""
+		if r.Kind == domain.KindFieldAccess {
+			if r.Access == "read" {
+				acc = " [读]"
+			} else {
+				acc = " [写]"
+			}
+		}
+		line := ""
+		if r.Line > 0 {
+			line = fmt.Sprintf(":%d", r.Line)
+		}
+		fmt.Printf("  %s%s %s %s%s%s\n", strings.Repeat("  ", r.Depth), arrow, edge, r.Name+acc, line)
+	}
+	return 0
+}
+
+// shortFuncName 从函数 canonical ID 提取短名（symbol:go:<pkg>:<name> → <name>）。
+func shortFuncName(id string) string {
+	if i := strings.LastIndex(id, ":"); i >= 0 {
+		return id[i+1:]
+	}
+	return id
 }

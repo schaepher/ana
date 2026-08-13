@@ -791,3 +791,46 @@ func TestExpandSSAValueParamBridgesFunction(t *testing.T) {
 		}
 	}
 }
+
+func TestGetValueTrace(t *testing.T) {
+	r := newTestRepo(t)
+	callerID := "symbol:go:example.com/m:g"
+	funcID := "symbol:go:example.com/m:f"
+	// 链：caller#t0 --argument--> f#a --data_flows_to--> f#a.X.read@3
+	caller := node(callerID, "function", "g", "g.go")
+	fn := node(funcID, "function", "f", "f.go")
+	argVal := node(callerID+"#t0", "ssa_value", "t0", "g.go")
+	argVal.Properties["func_id"] = callerID
+	paramVal := node(funcID+"#a", "ssa_value", "a", "f.go")
+	paramVal.Properties["func_id"] = funcID
+	fa := faNodeAccess(funcID+"#a.X.read@3", funcID, "example.com/m.T.X", "a.X", 3, "read")
+	save(t, r, []*domain.CodeEntity{caller, fn, argVal, paramVal, fa}, []*domain.Fact{
+		{SourceID: argVal.ID, TargetID: paramVal.ID, Kind: domain.FactArgument, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: paramVal.ID, TargetID: fa.ID, Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+	})
+
+	// 以字段访问为锚点，反向应走到调用方实参（跨函数）
+	rows, err := r.GetValueTrace(fa.ID, 8)
+	if err != nil {
+		t.Fatalf("GetValueTrace: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("rows = %d, want 3 (fa + param + arg)", len(rows))
+	}
+	// 锚点 fa 属于 f；反向：param（f）→ arg（g）
+	for _, row := range rows {
+		if row.Depth == 0 && row.ID != fa.ID {
+			t.Errorf("anchor = %s", row.ID)
+		}
+		if row.Depth == 1 {
+			if row.ID != paramVal.ID || row.FuncID != funcID || row.Dir != 0 {
+				t.Errorf("depth1 = %+v, want param in f dir0", row)
+			}
+		}
+		if row.Depth == 2 {
+			if row.ID != argVal.ID || row.FuncID != callerID || row.Dir != 0 {
+				t.Errorf("depth2 = %+v, want arg in g dir0", row)
+			}
+		}
+	}
+}

@@ -42,6 +42,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/search", s.handleSearch)
 	mux.HandleFunc("/api/expand", s.handleExpand)
 	mux.HandleFunc("/api/flows", s.handleFlows)
+	mux.HandleFunc("/api/value-trace", s.handleValueTrace)
 	mux.HandleFunc("/api/source", s.handleSource)
 	mux.Handle("/", http.FileServer(http.FS(s.web)))
 	return mux
@@ -242,6 +243,47 @@ type FlowRowJSON struct {
 	Kind      string `json:"kind"` // field_access / ssa_value
 	Access    string `json:"access,omitempty"` // field_access 的 read/write
 	FullPath  string `json:"fullPath,omitempty"`
+	FuncID    string `json:"funcId,omitempty"`    // 所属函数 canonical ID
+	FuncName  string `json:"funcName,omitempty"`  // 所属函数短名（函数上下文分组）
+}
+
+// handleValueTrace 返回数据值全链（函数上下文分组渲染数据）。
+func (s *Server) handleValueTrace(w http.ResponseWriter, r *http.Request) {
+	logger := logging.FromContext(s.ctx)
+	logger.Debug("enter (Server).handleValueTrace")
+	defer logger.Debug("exit (Server).handleValueTrace")
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "missing id")
+		return
+	}
+	rows, err := s.repo.GetValueTrace(domain.CanonicalID(id), 8)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	flows := make([]FlowRowJSON, 0, len(rows))
+	for _, row := range rows {
+		edge := ""
+		if i := strings.LastIndex(row.EdgeKinds, ","); i >= 0 {
+			edge = row.EdgeKinds[i+1:]
+		} else {
+			edge = row.EdgeKinds
+		}
+		flows = append(flows, FlowRowJSON{
+			ID:       string(row.ID),
+			Name:     row.Name,
+			Depth:    row.Depth,
+			Dir:      row.Dir,
+			EdgeKind: edge,
+			Line:     row.Line,
+			Kind:     string(row.Kind),
+			Access:   row.Access,
+			FuncID:   row.FuncID,
+			FuncName: shortFuncName(row.FuncID),
+		})
+	}
+	writeJSON(w, map[string]any{"flows": flows})
 }
 
 // handleFlows 返回函数/方法节点内的完整字段数据流（文本树渲染数据）。

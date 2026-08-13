@@ -38,6 +38,7 @@ type TraceRow struct {
 	Dir       int  // 函数内数据流方向（GetFunctionFlows）：0=产生链（反向），1=使用链（正向）
 	Kind      EntityKind
 	Access    string // field_access 的 read/write
+	FuncID    string // 所属函数 canonical ID（GetValueTrace 函数上下文分组用）
 }
 
 // EmitFunc 将适配器产出的数据流式交给 Canonicalizer 消费。

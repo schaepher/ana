@@ -33,6 +33,11 @@ export function renderNodePanel(data) {
     html.push('<button id="source-btn">Source Code</button>');
     html.push('<button id="flows-btn" title="查看该函数内的字段数据流（字段读写点与 def-use 链）">字段数据流</button>');
   }
+  // 数据节点（字段访问/SSA 值/参数/返回）：追踪此数据在整条链路上的处理
+  if (node.kind === 'field_access' || node.kind === 'ssa_value' ||
+      node.kind === 'parameter' || node.kind === 'result') {
+    html.push('<button id="vt-btn" title="追踪该数据在整条链路（跨函数）上如何被处理">追踪此数据</button>');
+  }
 
   // 基本信息
   var basic = [];
@@ -207,4 +212,45 @@ function kv(k, v) {
 // closePanel 无选中时信息栏显示提示（信息栏为常驻侧边栏，不清空画布）
 export function closePanel() {
   state.panelBody.innerHTML = '<p class="doc">单击节点查看详细信息</p>';
+}
+
+// loadValueTrace 拉取数据值全链（/api/value-trace）并按函数上下文分组渲染：
+// 每个函数一个分组，组内行 = 方向 + 边类型 + 节点 + [读/写] + 行号。
+export function loadValueTrace(nodeId) {
+  var old = document.getElementById('vt-panel');
+  if (old) old.remove();
+  fetch('/api/value-trace?id=' + encodeURIComponent(nodeId))
+    .then(function (r) { return r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)); })
+    .then(function (data) {
+      var flows = data.flows || [];
+      var html = ['<div id="vt-panel"><h3>数据流全链（函数上下文）</h3>'];
+      if (!flows.length) {
+        html.push('<p class="doc">无数据流（节点不存在或无数据流边）</p>');
+      } else {
+        var cur = null;
+        flows.forEach(function (f) {
+          if (f.funcName !== cur) {
+            cur = f.funcName;
+            html.push('<h4>&#12304;' + escapeHtml(f.funcName || '（未知函数）') + '&#12305;</h4>');
+          }
+          var arrow = f.dir === 0 ? '←' : '→';
+          var label = f.edgeKind ? arrow + ' ' + f.edgeKind : '';
+          var acc = f.kind === 'field_access' ? (f.access === 'read' ? ' [读]' : ' [写]') : '';
+          var line = f.line ? ':' + f.line : '';
+          html.push('<div class="vt-row" style="padding-left:' + (f.depth * 12 + 4) + 'px">' +
+            escapeHtml(label + ' ' + f.name + acc + line) + '</div>');
+        });
+      }
+      html.push('</div>');
+      var el = document.createElement('div');
+      el.innerHTML = html.join('');
+      state.panelBody.appendChild(el);
+    })
+    .catch(function (err) {
+      console.error('load value-trace:', err);
+      var el = document.createElement('div');
+      el.id = 'vt-panel';
+      el.innerHTML = '<h3>数据流全链</h3><p class="doc">加载失败：' + escapeHtml(String(err)) + '</p>';
+      state.panelBody.appendChild(el);
+    });
 }
