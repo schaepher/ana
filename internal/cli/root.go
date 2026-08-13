@@ -55,5 +55,7 @@ func usage() {
   codeintel version                输出编译时的 commit hash
 
 符号可用 canonical ID（symbol:go:<pkg>:<name>）或名称精确/模糊查找。
+
+任意位置加 --verbose（或 --debug）输出 debug 级日志（默认 info 级）。
 `)
 }

@@ -14,7 +14,15 @@ import (
 )
 
 func main() {
-	tp, err := logging.Setup("codeintel")
+	// 全局标志：任意位置出现 --verbose / --debug 时输出 Debug 级日志（默认 Info 级）
+	verbose := false
+	for _, a := range os.Args[1:] {
+		if a == "--verbose" || a == "--debug" {
+			verbose = true
+			break
+		}
+	}
+	tp, err := logging.Setup("codeintel", verbose)
 	if err != nil {
 		// 追踪初始化失败不阻塞主流程：全局 provider 保持 noop，日志照常
 		zap.L().Warn("tracing setup failed, tracing disabled", zap.Error(err))

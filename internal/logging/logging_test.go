@@ -63,7 +63,7 @@ func TestFromContextSpanFields(t *testing.T) {
 }
 
 func TestSetup(t *testing.T) {
-	tp, err := Setup("test-service")
+	tp, err := Setup("test-service", false)
 	if err != nil {
 		t.Fatalf("Setup: %v", err)
 	}

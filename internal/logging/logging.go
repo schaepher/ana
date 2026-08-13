@@ -13,6 +13,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 // ctxKey 是 context 中 logger 的键（非导出，避免碰撞）。
@@ -48,14 +49,19 @@ func FromContext(ctx context.Context) *zap.Logger {
 }
 
 // Setup 初始化全局日志与追踪：
-//   - zap.ReplaceGlobals(zap.NewDevelopment())：debug 级日志输出到 stderr
+//   - zap development logger，输出到 stdout；默认 Info 级，
+//     debug=true（CLI --verbose/--debug）时输出 Debug 级
 //   - OTel TracerProvider（stdout 导出器），并设为全局 tracer provider
 //
 // 返回 TracerProvider 供入口创建 root span，退出时须 Shutdown。
-func Setup(serviceName string) (*sdktrace.TracerProvider, error) {
-	// 日志（含 debug 级）输出到 stdout
+func Setup(serviceName string, debug bool) (*sdktrace.TracerProvider, error) {
 	devCfg := zap.NewDevelopmentConfig()
 	devCfg.OutputPaths = []string{"stdout"}
+	level := zapcore.InfoLevel
+	if debug {
+		level = zapcore.DebugLevel
+	}
+	devCfg.Level = zap.NewAtomicLevelAt(level)
 	zap.ReplaceGlobals(zap.Must(devCfg.Build()))
 
 	exporter, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
