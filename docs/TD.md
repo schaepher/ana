@@ -710,6 +710,11 @@ v2.0 设计树封闭后，MVP 实现过程中补充与调整的能力记录。�
   参数函数（Ident / 方法引用 s.M / `http.HandlerFunc(f)` 解包）→ 接收
   函数（passes_to 边，标注"持有参数"）。接收者可为外部框架函数（如
   net/http 的 HandleFunc），为其建轻量节点（file_path 为空）使关系可见。
+- **调用图跨包覆盖**（2026-08-13 验证）：跨包场景全部支持——
+  函数调用、方法调用、构造器、函数/方法引用作为参数（passes_to）、
+  嵌套调用（passes_result）、构造器返回接口的链式调用（含跨包
+  return 分析）。实现基础：callee.Pkg()/fn.Pkg() 生成跨包 canonical
+  ID、isInModule 过滤、go/packages 共享 Fset、pkgsByPath 跨包函数体。
 - **嵌套调用持有返回参数**（2026-08-13）：`A(B(C()))` 参数位置的调用
   不建 calls，建 passes_result 链（标注"持有返回参数"）：A→B、B→C
   （递归处理 callee 的实参；非调用参数仍走 argFuncRef 持有参数）。
