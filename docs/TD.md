@@ -564,6 +564,11 @@ v2.0 设计树封闭后，MVP 实现过程中补充与调整的能力记录。�
   节点视角，即它的方法们））。数据复用 /api/expand（node+edges+
   neighbors），后端 NodeJSON 补充 doc_comment/message/date/fields
   字段。
+- **分组 [隐藏] 按钮**（2026-08-13）：信息栏关系分组标题带 [隐藏]
+  按钮——点击隐藏该分组涉及的节点（collectSubtree 清理 + setData
+  重建 + 增量重排 + 刷新信息栏）；**曾展开过（expandedMap 有记录）
+  的节点保留**。分组→节点 id 映射存于 panelGroupNodes（渲染时按
+  分组索引记录）。
 - **Source Code 弹窗**：函数/方法节点信息栏顶部有 Source Code 按钮，
   点击弹窗展示完整源码（`/api/source?id=`）。后端按需读取仓库文件并
   go/parser 定位声明提取源码区间（匹配策略：LineStart 精确 → 行范围

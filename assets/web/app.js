@@ -58,7 +58,7 @@
     imports: '导入',
     initializes: '初始化',
     uses: '使用',
-    passes_to: '传给',
+    passes_to: '持有参数',
     of_type: '类型',
     has_method: '拥有方法',
     data_flows_to: '数据流'
@@ -903,10 +903,68 @@
   var modalCode = document.getElementById('modal-code');
   // 当前信息栏节点（Source Code 按钮用）
   var currentPanelId = null;
+  // 当前信息栏关系分组 → 对方节点 id 列表（[隐藏] 按钮用）
+  var panelGroupNodes = {};
   // 委托：Source Code 按钮（函数/方法节点信息栏顶部）
   panelBody.addEventListener('click', function (evt) {
     if (evt.target.id === 'source-btn' && currentPanelId) showSource(currentPanelId);
+    // 分组 [隐藏] 按钮：隐藏该分组涉及的节点（曾展开过的保留）
+    if (evt.target.classList && evt.target.classList.contains('hide-group-btn')) {
+      var gi = evt.target.getAttribute('data-gi');
+      hideGroupNodes(panelGroupNodes[gi] || []);
+    }
   });
+
+  // hideGroupNodes 隐藏一组节点（及其子树边）：曾展开过（有展开记录）
+  // 的节点保留；隐藏后增量重排并刷新信息栏。
+  function hideGroupNodes(ids) {
+    if (!ids || !ids.length) return;
+    var toRemove = new Set();
+    var edgesToRemove = new Set();
+    ids.forEach(function (nid) {
+      if (expandedMap.has(nid)) return; // 曾展开过的节点保留
+      collectSubtree(nid, toRemove, edgesToRemove);
+    });
+    if (!toRemove.size) return;
+    var data = graph.getData();
+    var keepNodes = (data.nodes || []).filter(function (n) { return !toRemove.has(n.id); });
+    var keepEdges = (data.edges || []).filter(function (e) {
+      if (toRemove.has(e.source) || toRemove.has(e.target)) return false;
+      return !edgesToRemove.has(e.source + '→' + e.target + '|' + ((e.data && e.data.kind) || ''));
+    });
+    seenNodes.clear();
+    keepNodes.forEach(function (n) { seenNodes.add(n.id); });
+    seenEdges.clear();
+    keepEdges.forEach(function (e) {
+      seenEdges.add(e.source + '→' + e.target + '|' + ((e.data && e.data.kind) || ''));
+    });
+    // 清理 expandedMap 中被删节点及其记录
+    Array.from(expandedMap.keys()).forEach(function (k) {
+      if (!keepNodes.some(function (n) { return n.id === k; })) {
+        expandedMap.delete(k);
+        return;
+      }
+      var rec = expandedMap.get(k);
+      if (rec) {
+        rec.nodes = rec.nodes.filter(function (cid) {
+          return keepNodes.some(function (n) { return n.id === cid; });
+        });
+      }
+    });
+    graph.setData({ nodes: keepNodes, edges: keepEdges });
+    // 增量重排（已有节点保持位置）
+    var root = treeRoot();
+    if (root) {
+      var prevY = {};
+      graph.getData().nodes.forEach(function (n) {
+        var d = graph.getNodeData(n.id);
+        if (d && d.style) prevY[n.id] = d.style.y;
+      });
+      relayoutTree(root, prevY);
+    }
+    // 刷新信息栏（分组已变化）
+    if (currentPanelId) showNodePanel(currentPanelId);
+  }
   document.getElementById('modal-close').addEventListener('click', closeSource);
   modal.addEventListener('click', function (evt) {
     if (evt.target === modal) closeSource(); // 点击遮罩关闭
@@ -979,7 +1037,7 @@
 
     // 基本信息
     var basic = [];
-    basic.push(kv('名称', node.name));
+    basic.push(kv('名称', displayName(node)));
     basic.push(kv('类型', KIND_LABEL[node.kind] || node.kind));
     if (node.file) basic.push(kv('文件', node.file + (node.line ? ':' + node.line : '')));
     if (node.signature) basic.push(kv('签名', node.signature));
@@ -1008,9 +1066,12 @@
       html.push('<h3>提交信息</h3>' + c.join(''));
     }
 
-    // 关系：按类型分组
+    // 关系：按类型分组；panelGroupNodes[gi] = 该分组涉及的对方节点 id
+    // （[隐藏] 按钮用；已展开节点由 hideGroupNodes 保留）
     var byKind = {};
     var restOrder = [];
+    panelGroupNodes = {};
+    var gi = 0;
     edges.forEach(function (e) {
       if (!byKind[e.kind]) {
         byKind[e.kind] = [];
@@ -1019,6 +1080,7 @@
       var other = e.source === node.id ? e.target : e.source;
       var otherNode = byId[other];
       byKind[e.kind].push({
+        id: other,
         dir: e.source === node.id ? '出' : '入',
         name: otherNode ? otherNode.name : other,
         file: otherNode ? otherNode.file : '',
@@ -1033,8 +1095,8 @@
         // 入=调用该节点（caller）；caller（被调用）在上，与图布局一致
         var out = items.filter(function (g) { return g.dir === '出'; });
         var inn = items.filter(function (g) { return g.dir === '入'; });
-        if (inn.length) html.push(relGroupHtml('被调用（' + inn.length + '）', inn));
-        if (out.length) html.push(relGroupHtml('调用（' + out.length + '）', out));
+        if (inn.length) { panelGroupNodes[gi] = inn.map(function (g) { return g.id; }); html.push(relGroupHtml('被调用（' + inn.length + '）', inn, gi++)); }
+        if (out.length) { panelGroupNodes[gi] = out.map(function (g) { return g.id; }); html.push(relGroupHtml('调用（' + out.length + '）', out, gi++)); }
         return;
       }
       if (kind === 'has_method') {
@@ -1042,8 +1104,8 @@
         // （它的方法们），方法节点视角=入边（指向它的接收者）
         var out = items.filter(function (g) { return g.dir === '出'; });
         var inn = items.filter(function (g) { return g.dir === '入'; });
-        if (out.length) html.push(relGroupHtml('方法（' + out.length + '）', out));
-        if (inn.length) html.push(relGroupHtml('接收者（' + inn.length + '）', inn));
+        if (out.length) { panelGroupNodes[gi] = out.map(function (g) { return g.id; }); html.push(relGroupHtml('方法（' + out.length + '）', out, gi++)); }
+        if (inn.length) { panelGroupNodes[gi] = inn.map(function (g) { return g.id; }); html.push(relGroupHtml('接收者（' + inn.length + '）', inn, gi++)); }
         return;
       }
       if (kind === 'implements') {
@@ -1051,27 +1113,28 @@
         // 实现者节点视角=入边（它实现的接口）
         var out = items.filter(function (g) { return g.dir === '出'; });
         var inn = items.filter(function (g) { return g.dir === '入'; });
-        if (out.length) html.push(relGroupHtml('实现者（' + out.length + '）', out));
-        if (inn.length) html.push(relGroupHtml('实现（' + inn.length + '）', inn));
+        if (out.length) { panelGroupNodes[gi] = out.map(function (g) { return g.id; }); html.push(relGroupHtml('实现者（' + out.length + '）', out, gi++)); }
+        if (inn.length) { panelGroupNodes[gi] = inn.map(function (g) { return g.id; }); html.push(relGroupHtml('实现（' + inn.length + '）', inn, gi++)); }
         return;
       }
       items.sort(function (a, b) { return a.dir === b.dir ? 0 : (a.dir === '出' ? -1 : 1); });
-      html.push(relGroupHtml((EDGE_KIND_LABEL[kind] || kind) + '（' + items.length + '）', items));
+      panelGroupNodes[gi] = items.map(function (g) { return g.id; });
+      html.push(relGroupHtml((EDGE_KIND_LABEL[kind] || kind) + '（' + items.length + '）', items, gi++));
     });
 
     panelBody.innerHTML = html.join('');
   }
 
-  // relGroupHtml 关系分组：标题 + 按对方节点文件路径分组的条目列表
-  // （组头为文件路径，条目显示方向 →/←、对方节点、行号）
-  function relGroupHtml(title, items) {
+  // relGroupHtml 关系分组：标题（含 [隐藏] 按钮）+ 按对方节点文件路径
+  // 分组的条目列表（组头为文件路径，条目显示方向 →/←、对方节点、行号）
+  function relGroupHtml(title, items, gi) {
     var byFile = {};
     items.forEach(function (g) {
       var f = g.file || '（未知）';
       if (!byFile[f]) byFile[f] = [];
       byFile[f].push(g);
     });
-    var out = ['<h3>' + title + '</h3>'];
+    var out = ['<h3>' + title + ' <button class="hide-group-btn" data-gi="' + gi + '" title="隐藏该分组节点（已展开的保留）">隐藏</button></h3>'];
     Object.keys(byFile).forEach(function (f) {
       out.push('<div class="file-group">' + escapeHtml(f) + '</div>');
       byFile[f].forEach(function (g) {
@@ -1187,12 +1250,26 @@
 
   /* ---------- 工具 ---------- */
 
+  // displayName 符号显示名：方法已是 (T).m；纯函数加包名前缀 (pkg).f
+  // （与方法的接收者格式一致，接收者位置放包名，从 canonical ID 提取）。
+  function displayName(n) {
+    if (!n) return '';
+    if (n.kind === 'function') {
+      var m = /^symbol:go:([^:]+):/.exec(n.id || '');
+      if (m) {
+        var pkg = m[1].split('/').pop();
+        if (pkg) return '(' + pkg + ').' + (n.name || '');
+      }
+    }
+    return n.name || '';
+  }
+
   // nodeLabel 两行节点标签：
   //   第一行：文件所在目录 + basename（如 orchestrator/orchestrator.go）
-  //   第二行：符号名
+  //   第二行：符号显示名（方法 (T).m / 函数 (包名).f）
   // 无文件信息的节点（如 commit）只显示单行符号名。
   function nodeLabel(n) {
-    var name = n.name || '';
+    var name = displayName(n);
     var f = n.file || '';
     var parts = f.split('/');
     var line1 = parts.length >= 2
