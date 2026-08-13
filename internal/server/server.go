@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"strings"
 
 	"github.com/schaepher/codeintel/internal/domain"
 	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
@@ -40,6 +41,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/roots", s.handleRoots)
 	mux.HandleFunc("/api/search", s.handleSearch)
 	mux.HandleFunc("/api/expand", s.handleExpand)
+	mux.HandleFunc("/api/flows", s.handleFlows)
 	mux.HandleFunc("/api/source", s.handleSource)
 	mux.Handle("/", http.FileServer(http.FS(s.web)))
 	return mux
@@ -221,4 +223,54 @@ func nodeToJSON(n *domain.CodeEntity) NodeJSON {
 		}
 	}
 	return j
+}
+
+// FlowRowJSON 函数内字段数据流的一步（/api/flows 输出）。
+type FlowRowJSON struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Depth     int    `json:"depth"`
+	Dir       int    `json:"dir"` // 0=产生链（反向），1=使用链（正向）
+	EdgeKind  string `json:"edgeKind,omitempty"` // 进入该节点的边类型
+	Line      int    `json:"line,omitempty"`
+	Kind      string `json:"kind"` // field_access / ssa_value
+	Access    string `json:"access,omitempty"` // field_access 的 read/write
+	FullPath  string `json:"fullPath,omitempty"`
+}
+
+// handleFlows 返回函数/方法节点内的完整字段数据流（文本树渲染数据）。
+func (s *Server) handleFlows(w http.ResponseWriter, r *http.Request) {
+	logger := logging.FromContext(s.ctx)
+	logger.Debug("enter (Server).handleFlows")
+	defer logger.Debug("exit (Server).handleFlows")
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "missing id")
+		return
+	}
+	rows, err := s.repo.GetFunctionFlows(domain.CanonicalID(id), 8)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	flows := make([]FlowRowJSON, 0, len(rows))
+	for _, row := range rows {
+		edge := ""
+		if i := strings.LastIndex(row.EdgeKinds, ","); i >= 0 {
+			edge = row.EdgeKinds[i+1:]
+		} else {
+			edge = row.EdgeKinds
+		}
+		flows = append(flows, FlowRowJSON{
+			ID:       string(row.ID),
+			Name:     row.Name,
+			Depth:    row.Depth,
+			Dir:      row.Dir,
+			EdgeKind: edge,
+			Line:     row.Line,
+			Kind:     string(row.Kind),
+			Access:   row.Access,
+		})
+	}
+	writeJSON(w, map[string]any{"flows": flows})
 }

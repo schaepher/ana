@@ -844,3 +844,78 @@ SELECT id, depth, name, edge_kinds, line, is_usage FROM fwd_trace ORDER BY depth
 	}
 	return out, rows.Err()
 }
+
+// GetFunctionFlows 返回函数内完整字段数据流（前端 /api/flows 用）：
+// 起点 = 函数内全部 field_access 节点，双向遍历 data_flows_to / phi_operand
+// （func_id 限定在函数内，到参数/返回边界即止）；Dir=0 为产生链（反向），
+// Dir=1 为使用链（正向）。
+func (r *Repo) GetFunctionFlows(funcID domain.CanonicalID, maxDepth int) ([]*domain.TraceRow, error) {
+	logger := zap.L()
+	logger.Debug("enter (Repo).GetFunctionFlows")
+	defer logger.Debug("exit (Repo).GetFunctionFlows")
+	if maxDepth <= 0 {
+		maxDepth = 8
+	}
+	rows, err := r.Query(`WITH RECURSIVE flows(id, depth, name, edge_kinds, line, dir, kind, access) AS (
+    SELECT n.id, 0, n.name, '', n.line_start, 0, n.kind,
+           json_extract(n.properties, '$.access_kind')
+    FROM nodes n
+    WHERE n.kind = 'field_access'
+      AND json_extract(n.properties, '$.func_id') = ?
+    UNION
+    -- 反向：流向当前节点（产生链）
+    SELECT e.source_id, d.depth + 1, n_prev.name,
+           CASE WHEN d.edge_kinds = '' THEN e.kind
+                ELSE d.edge_kinds || ',' || e.kind END, n_prev.line_start, 0,
+           n_prev.kind, json_extract(n_prev.properties, '$.access_kind')
+    FROM edges e
+    JOIN flows d ON e.target_id = d.id
+    JOIN nodes n_prev ON e.source_id = n_prev.id
+    WHERE e.kind IN ('data_flows_to','phi_operand')
+      AND (d.dir = 0 OR d.depth = 0) AND d.depth < ?
+      AND json_extract(n_prev.properties, '$.func_id') = ?
+    UNION
+    -- 正向：从当前节点流出（使用链）
+    SELECT e.target_id, d.depth + 1, n_next.name,
+           CASE WHEN d.edge_kinds = '' THEN e.kind
+                ELSE d.edge_kinds || ',' || e.kind END, n_next.line_start, 1,
+           n_next.kind, json_extract(n_next.properties, '$.access_kind')
+    FROM edges e
+    JOIN flows d ON e.source_id = d.id
+    JOIN nodes n_next ON e.target_id = n_next.id
+    WHERE e.kind IN ('data_flows_to','phi_operand')
+      AND (d.dir = 1 OR d.depth = 0) AND d.depth < ?
+      AND json_extract(n_next.properties, '$.func_id') = ?
+)
+SELECT id, depth, name, edge_kinds, line, dir, kind, access FROM flows ORDER BY dir, depth, id`,
+		string(funcID), maxDepth, string(funcID), maxDepth, string(funcID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*domain.TraceRow
+	for rows.Next() {
+		var (
+			row    domain.TraceRow
+			id     string
+			line   sql.NullInt64
+			dir    int
+			kind   string
+			access sql.NullString
+		)
+		if err := rows.Scan(&id, &row.Depth, &row.Name, &row.EdgeKinds, &line, &dir, &kind, &access); err != nil {
+			return nil, err
+		}
+		row.ID = domain.CanonicalID(id)
+		row.Dir = dir
+		row.Kind = domain.EntityKind(kind)
+		if access.Valid {
+			row.Access = access.String
+		}
+		if line.Valid {
+			row.Line = int(line.Int64)
+		}
+		out = append(out, &row)
+	}
+	return out, rows.Err()
+}

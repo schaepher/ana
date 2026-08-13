@@ -28,9 +28,10 @@ export function renderNodePanel(data) {
   (data.neighbors || []).forEach(function (n) { byId[n.id] = n; });
   var html = [];
 
-  // 函数/方法：Source Code 按钮（弹窗展示源码）
+  // 函数/方法：Source Code 按钮（弹窗展示源码）+ 字段数据流按钮
   if (node.kind === 'function' || node.kind === 'method') {
     html.push('<button id="source-btn">Source Code</button>');
+    html.push('<button id="flows-btn" title="查看该函数内的字段数据流（字段读写点与 def-use 链）">字段数据流</button>');
   }
 
   // 基本信息
@@ -123,6 +124,52 @@ export function renderNodePanel(data) {
   });
 
   state.panelBody.innerHTML = html.join('');
+}
+
+// loadNodeFlows 拉取函数内字段数据流（/api/flows）并渲染文本树：
+// 产生链（← 反向：值从哪来）/ 使用链（→ 正向：值流向哪）。
+export function loadNodeFlows(nodeId) {
+  var old = document.getElementById('flows-panel');
+  if (old) old.remove();
+  fetch('/api/flows?id=' + encodeURIComponent(nodeId))
+    .then(function (r) { return r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)); })
+    .then(function (data) {
+      var flows = data.flows || [];
+      var html = ['<div id="flows-panel"><h3>字段数据流</h3>'];
+      if (!flows.length) {
+        html.push('<p class="doc">无字段访问（该函数无结构体字段读写，或未构建 SSA 字段追溯）</p>');
+      } else {
+        html.push(renderFlowsGroup(flows, 0, '产生链（← 反向）'));
+        html.push(renderFlowsGroup(flows, 1, '使用链（→ 正向）'));
+      }
+      html.push('</div>');
+      var el = document.createElement('div');
+      el.innerHTML = html.join('');
+      state.panelBody.appendChild(el);
+    })
+    .catch(function (err) {
+      console.error('load flows:', err);
+      var el = document.createElement('div');
+      el.id = 'flows-panel';
+      el.innerHTML = '<h3>字段数据流</h3><p class="doc">加载失败：' + escapeHtml(String(err)) + '</p>';
+      state.panelBody.appendChild(el);
+    });
+}
+
+// renderFlowsGroup 渲染单向数据流树（缩进 + 边类型 + 节点名 + 行号）。
+function renderFlowsGroup(flows, dir, title) {
+  var rows = flows.filter(function (f) { return f.dir === dir; });
+  if (!rows.length) return '';
+  var html = ['<h4>' + title + '</h4>', '<pre class="flows">'];
+  rows.forEach(function (f) {
+    var arrow = dir === 0 ? '←' : '→';
+    var label = f.edgeKind ? arrow + ' ' + f.edgeKind : '';
+    var access = f.kind === 'field_access' ? (f.access === 'read' ? ' [读]' : ' [写]') : '';
+    var line = f.line ? ' (' + f.line + ')' : '';
+    html.push(new Array(f.depth * 2 + 1).join(' ') + label + ' ' + f.name + access + line);
+  });
+  html.push('</pre>');
+  return html.join('');
 }
 
 // relGroupHtml 关系分组：标题（含 [隐藏]/[展开] 按钮）+ 按对方节点文件

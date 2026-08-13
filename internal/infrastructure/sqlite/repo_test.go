@@ -442,11 +442,15 @@ func TestOpenSchemaVersionMismatch(t *testing.T) {
 
 // faNode 构造 field_access 节点（properties 含 full_path/func_id）。
 func faNode(id, funcID, field, instance string, line int) *domain.CodeEntity {
+	return faNodeAccess(id, funcID, field, instance, line, "write")
+}
+
+func faNodeAccess(id, funcID, field, instance string, line int, access string) *domain.CodeEntity {
 	return &domain.CodeEntity{
 		ID: domain.CanonicalID(id), Kind: domain.KindFieldAccess, Name: instance,
 		FilePath: "main.go", LineStart: line,
 		Properties: map[string]any{"full_path": field, "instance_path": instance,
-			"access_kind": "write", "func_id": funcID},
+			"access_kind": access, "func_id": funcID},
 	}
 }
 
@@ -555,5 +559,75 @@ func TestGetSymbolByNameExcludesFieldTrace(t *testing.T) {
 	got, err = r.GetSymbolByName(funcID + "#cfg")
 	if err != nil || len(got) != 0 {
 		t.Errorf("search by field_access id = %+v, err %v", got, err)
+	}
+}
+
+func TestGetFunctionFlows(t *testing.T) {
+	r := newTestRepo(t)
+	funcID := "symbol:go:example.com/m:f"
+	// 函数内链：write(field) → result → read(field)
+	write := faNode(funcID+"#x.A.write@3", funcID, "example.com/m.T.A", "x.A", 3)
+	result := svNode(funcID+"#t1", funcID)
+	read := faNodeAccess(funcID+"#x.A.read@5", funcID, "example.com/m.T.A", "x.A", 5, "read")
+	// 函数外节点：不应出现在结果里（func_id 限定）
+	other := faNode("symbol:go:example.com/m:g#y.B.write@9", "symbol:go:example.com/m:g",
+		"example.com/m.T.B", "y.B", 9)
+	save(t, r, []*domain.CodeEntity{write, result, read, other},
+		[]*domain.Fact{
+			dfEdge(write.ID, result.ID),
+			dfEdge(result.ID, read.ID),
+			dfEdge(write.ID, other.ID), // 跨函数边：目标不在 func_id 内，不扩展
+		})
+
+	rows, err := r.GetFunctionFlows(domain.CanonicalID(funcID), 8)
+	if err != nil {
+		t.Fatalf("GetFunctionFlows: %v", err)
+	}
+	// 锚点 = 全部访问点（write/read 两个 dir0），双向扩展：
+	//   产生链 dir0：read ← result ← write（反向）
+	//   使用链 dir1：write → result → read（正向）
+	// 同一节点可同时出现在两条链（write/read 是锚点，result 两向都可达）
+	if len(rows) != 6 {
+		t.Fatalf("rows = %d, want 6: %+v", len(rows), rows)
+	}
+	for _, row := range rows {
+		if row.Kind != domain.KindFieldAccess && row.Kind != domain.KindSSAValue {
+			t.Errorf("unexpected kind %s: %+v", row.Kind, row)
+		}
+		if string(row.ID) == string(other.ID) {
+			t.Errorf("cross-function node leaked into flows: %s", other.ID)
+		}
+	}
+	// 使用链（dir=1）：result@1 → read@2
+	var resultFwd, readFwd *domain.TraceRow
+	for _, row := range rows {
+		if row.Dir != 1 {
+			continue
+		}
+		if row.ID == result.ID {
+			resultFwd = row
+		}
+		if row.ID == read.ID {
+			readFwd = row
+		}
+	}
+	if resultFwd == nil || readFwd == nil {
+		t.Fatalf("forward chain missing: %+v", rows)
+	}
+	if resultFwd.Depth != 1 {
+		t.Errorf("result forward depth = %d, want 1", resultFwd.Depth)
+	}
+	if readFwd.Depth != 2 || readFwd.Access != "read" {
+		t.Errorf("read forward = depth %d access %q, want 2/read", readFwd.Depth, readFwd.Access)
+	}
+	// 产生链（dir=0）：result@1（从 read 反向）→ write@2
+	var writeBack *domain.TraceRow
+	for _, row := range rows {
+		if row.Dir == 0 && row.ID == write.ID && row.Depth == 2 {
+			writeBack = row
+		}
+	}
+	if writeBack == nil {
+		t.Errorf("backward chain write@2 missing: %+v", rows)
 	}
 }

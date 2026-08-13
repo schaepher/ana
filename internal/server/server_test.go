@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -239,5 +240,60 @@ func TestNodeToJSON(t *testing.T) {
 	}}
 	if j4 := nodeToJSON(n4); len(j4.Fields) != 0 {
 		t.Errorf("bad fields = %+v", j4.Fields)
+	}
+}
+
+func TestFlowsEndpoint(t *testing.T) {
+	repoDir := t.TempDir()
+	db, err := sqlite.Open(repoDir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	r := sqlite.NewRepo(db)
+	funcID := "symbol:go:example.com/app:Greet"
+	greet := &domain.CodeEntity{
+		ID: domain.CanonicalID(funcID), Kind: domain.KindFunction, Name: "Greet",
+		FilePath: "app.go", LineStart: 1,
+		Properties: map[string]any{"signature": "func Greet(s string) string"},
+	}
+	write := &domain.CodeEntity{
+		ID: domain.CanonicalID(funcID + "#s.Name.write@2"), Kind: domain.KindFieldAccess,
+		Name: "s.Name", FilePath: "app.go", LineStart: 2,
+		Properties: map[string]any{"full_path": "example.com/app.T.Name",
+			"instance_path": "s.Name", "access_kind": "write", "func_id": funcID},
+	}
+	result := &domain.CodeEntity{
+		ID: domain.CanonicalID(funcID + "#t0"), Kind: domain.KindSSAValue, Name: "t0",
+		Properties: map[string]any{"func_id": funcID},
+	}
+	if _, err := r.SaveBatchStats([]*domain.CodeEntity{greet, write, result}, []*domain.Fact{{
+		SourceID: write.ID, TargetID: result.ID, Kind: domain.FactDataFlowsTo,
+		ToolSource: domain.ToolSSA, Confidence: 1,
+	}}, nil); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	web := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<html>x</html>")}}
+	ts := httptest.NewServer(New(context.Background(), r, web, repoDir).Handler())
+	t.Cleanup(ts.Close)
+
+	resp, body := get(t, ts, "/api/flows?id="+url.QueryEscape(funcID))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d: %v", resp.StatusCode, body)
+	}
+	flows, ok := body["flows"].([]any)
+	if !ok {
+		t.Fatalf("flows missing: %v", body)
+	}
+	if len(flows) != 2 {
+		t.Fatalf("flows = %d, want 2 (anchor + result)", len(flows))
+	}
+	first := flows[0].(map[string]any)
+	if first["kind"] != "field_access" || first["access"] != "write" {
+		t.Errorf("anchor row = %v", first)
+	}
+	second := flows[1].(map[string]any)
+	if second["dir"].(float64) != 1 || second["edgeKind"] != "data_flows_to" {
+		t.Errorf("use-chain row = %v", second)
 	}
 }

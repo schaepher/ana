@@ -35,6 +35,9 @@ type TraceRow struct {
 	EdgeKinds string // 到达该节点经过的边类型（逗号连接）
 	Line      int
 	IsUsage   bool // S3：该节点是否为匹配 full_path 的使用点
+	Dir       int  // 函数内数据流方向（GetFunctionFlows）：0=产生链（反向），1=使用链（正向）
+	Kind      EntityKind
+	Access    string // field_access 的 read/write
 }
 
 // EmitFunc 将适配器产出的数据流式交给 Canonicalizer 消费。
