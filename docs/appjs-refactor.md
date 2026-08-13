@@ -49,7 +49,8 @@
 ### 1.6 布局引擎
 - **arrangeLayers**（根/无父展开，三行）：callers 上行 / 节点中间 /
   callees 下行；calls/initializes/has_method/implements 方向化
-  （出=下行、入=上行）；单个 mid 节点偏移中心右侧（防重叠）
+  （出=下行、入=上行）；单个 mid 节点偏移中心右侧（防重叠）；
+  垂直行距 140px（与树布局一致，2026-08-13 由 240 收紧）
 - **relayoutTree**（树布局）：
   1. BFS 深度：根=0，child 通过任意边指向 parent（isUp）→ 上一行
   2. tail 定位：不在展开树的节点（悬浮分支/共享节点）——第一轮与
@@ -57,7 +58,9 @@
   3. 边方向修正循环：所有边 source 深度 < target 深度
   4. rows 分组（含 tail 行 y 补丁）
   5. rowY 分配：增量（prevY 优先 + 插值）或全量
-     （depthChanged/suspended 时按 minD 分层——prevY 与新深度错位）
+     （depthChanged/suspended 时按 minD 分层——prevY 与新深度错位）；
+     垂直行距 140px（2026-08-13 由 200 收紧——四行标签约 100px 高，
+     140 仍留 ~40px 空隙，箭头指向的父子行不过分疏远）
 - `rowClass`（方向分类）、`isUp`、`edgeKind`、`hasOtherEdge`
 
 ### 1.7 交互与选中

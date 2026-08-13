@@ -113,7 +113,7 @@ export function relayoutTree(rootId, prevY) {
   var w = state.container.clientWidth || 1200;
   var h = state.container.clientHeight || 800;
   var cx = w / 2;
-  var rowGap = 200;
+  var rowGap = 140;
   var startY = 80;
   // 行 y：已有节点（prevY）所在行优先取原 y；其余深度行插值
   var rowY = new Map();

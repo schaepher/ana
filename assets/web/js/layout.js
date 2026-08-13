@@ -42,7 +42,7 @@ export function arrangeLayers(id) {
     }
   });
   var updates = [{ id: id, style: { x: cx, y: cy } }];
-  var rowGap = 240;
+  var rowGap = 140;
   var rowWidth = w - 140;
   // 中间行：非 calls 关联水平分布在节点两侧；
   // offsetSingle：单个节点（如接收者）偏移到中心右侧，避免与中心节点重叠
