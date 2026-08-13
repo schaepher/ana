@@ -261,6 +261,18 @@
         var parent = parentOf(id);
         var neighbors = data.neighbors || [];
         var edges = data.edges || [];
+        // 展开 struct 节点时不展示它的方法们（has_method 出边）：
+        // 方法是 struct 的细节，探索链时避免其它方法涌入
+        if (data.node && data.node.kind === 'struct') {
+          neighbors = neighbors.filter(function (n) {
+            return !edges.some(function (e) {
+              return e.kind === 'has_method' && e.source === id && e.target === n.id;
+            });
+          });
+          edges = edges.filter(function (e) {
+            return !(e.kind === 'has_method' && e.source === id);
+          });
+        }
         if (parent) {
           // 展开 down/mid 类节点才过滤其他调用方；up 类（caller）展示调用方
           var filterCallers = rowClass(parent, id) !== 'up';
@@ -962,6 +974,9 @@
       });
       relayoutTree(root, prevY);
     }
+    // 显式重绘：setData 后不自动渲染，须 draw（否则隐藏要等下次
+    // 状态变化（如点空白）才可见）
+    graph.draw();
     // 刷新信息栏（分组已变化）
     if (currentPanelId) showNodePanel(currentPanelId);
   }
