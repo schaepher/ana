@@ -309,7 +309,9 @@
         // 布局：有父的节点展开用整树层级布局（根最上、逐层向下），
         // 避免多级链三行布局把每层父节点都排到同一行导致重叠；
         // 根（无父）展开用三行排布（caller 上行/节点中间/callee 下行）
-        if (parentOf(id)) {
+        if (parent || graph.getData().nodes.length > 1) {
+          // 有父，或图中已有其他节点（如收起后悬浮分支再展开，parentOf
+          // 为空但非入口场景）：用整树布局——悬浮节点走 tail 锚点传播
           var root = treeRoot();
           if (root) {
             // 增量布局：已有节点保持原位置，新节点行插入（上层展开时
@@ -440,20 +442,26 @@
   // removeEdgeData/removeNodeData 增量删除在批处理时可能引用已删节点
   // （"Node not found"），全量重建规避该坑。
   function collapseNode(id) {
-    var children = expandedMap.get(id);
-    if (!children || children.size === 0) return;
+    var rec = expandedMap.get(id);
+    if (!rec || !rec.nodes.length) return;
 
     // 停止布局动画并取消飞行中的展开回调
     if (typeof graph.stopLayout === 'function') graph.stopLayout();
     expandToken++;
 
-    // 递归收集要删除的节点（孤儿才删）与要删除的边（本次展开添加的边）
+    // 只收一层：删除本次展开新增的边；子节点去掉这些边后若无其他
+    // 引用（孤儿）才删除——共享节点（被其他边引用）保留，不递归
+    // 收子节点的展开分支（双击根不再收起整棵树）
     var toRemove = new Set();
     var edgesToRemove = new Set();
-    collectCollapse(id, toRemove, edgesToRemove);
+    expandedMap.delete(id);
+    rec.edges.forEach(function (k) { edgesToRemove.add(k); });
+    var data = graph.getData();
+    rec.nodes.forEach(function (cid) {
+      if (!hasOtherEdge(cid, id, toRemove, edgesToRemove)) toRemove.add(cid);
+    });
 
     // 全量重建：保留所有不在删除集合中的节点与边
-    var data = graph.getData();
     var keepNodes = (data.nodes || []).filter(function (n) { return !toRemove.has(n.id); });
     var keepEdges = (data.edges || []).filter(function (e) {
       if (toRemove.has(e.source) || toRemove.has(e.target)) return false;
@@ -466,15 +474,48 @@
     keepEdges.forEach(function (e) {
       seenEdges.add(e.source + '→' + e.target + '|' + ((e.data && e.data.kind) || ''));
     });
+    // 清理 expandedMap 中被删节点的记录（保留节点的记录不动）
+    Array.from(expandedMap.keys()).forEach(function (k) {
+      if (!keepNodes.some(function (n) { return n.id === k; })) {
+        expandedMap.delete(k);
+        return;
+      }
+      var r = expandedMap.get(k);
+      if (r) {
+        r.nodes = r.nodes.filter(function (cid) {
+          return keepNodes.some(function (n) { return n.id === cid; });
+        });
+      }
+    });
 
     graph.setData({ nodes: keepNodes, edges: keepEdges });
-    // 收起后对展开树按层级重新布局（根在上、逐层向下，每层水平均匀），
-    // 避免长链收起后远处节点漂移导致层次混乱
+    // 收起后重排（已有节点保持位置）
     var root = treeRoot();
     if (root) {
-      relayoutTree(root);
+      var prevY = {};
+      graph.getData().nodes.forEach(function (n) {
+        var d = graph.getNodeData(n.id);
+        if (d && d.style) prevY[n.id] = d.style.y;
+      });
+      relayoutTree(root, prevY);
     }
     graph.draw();
+  }
+
+  // hasOtherEdge 判断 cid 在移除指定边（edgesToRemove）后是否仍有
+  // 其他边连接到保留节点（共享节点不删）
+  function hasOtherEdge(cid, id, toRemove, edgesToRemove) {
+    var data = graph.getData();
+    return (data.edges || []).some(function (e) {
+      if (e.source === cid || e.target === cid) {
+        var other = e.source === cid ? e.target : e.source;
+        var k1 = e.source + '→' + e.target + '|' + ((e.data && e.data.kind) || '');
+        var k2 = e.target + '→' + e.source + '|' + ((e.data && e.data.kind) || '');
+        return other !== id && !toRemove.has(other) &&
+          !edgesToRemove.has(k1) && !edgesToRemove.has(k2);
+      }
+      return false;
+    });
   }
 
   // pruneSiblings 展开节点后的剪枝（用 setData 全量重建）：
@@ -672,6 +713,10 @@
     data.nodes.forEach(function (n) {
       if (!depths.has(n.id)) tailSet.add(n.id);
     });
+    // 有节点需要 tail 定位（收起后悬浮分支/共享节点）：旧 prevY 与
+    // 新深度不可靠（如 main 旧位置在底部、新深度在顶部），rowY 分配
+    // 放弃 prevY 按深度干净分层
+    var suspended = tailSet.size > 0;
     var progressed = true;
     while (tailSet.size && progressed) {
       progressed = false;
@@ -689,6 +734,39 @@
         tailSet.delete(tid);
         progressed = true;
       });
+    }
+    // 剩余未定位节点（如非递归收起后保留的多个悬浮分支：互相引用但
+    // 都与已分层节点无边）：每轮取一个作锚点（当前最大深度 +2，避免
+    // 与主树/其他分支深度碰撞），再沿边传播相对深度——保证每个分支
+    // 内部的箭头方向正确（否则全部堆同一行）。suspended 已在 tail
+    // 收集时定义（有 tail 节点即放弃 prevY）
+    while (tailSet.size) {
+      var maxD0 = 0;
+      depths.forEach(function (d) { if (d > maxD0) maxD0 = d; });
+      var anchor = null;
+      tailSet.forEach(function (tid) {
+        if (anchor === null) {
+          depths.set(tid, maxD0 + 2);
+          tailSet.delete(tid);
+          anchor = tid;
+        }
+      });
+      var progressed2 = true;
+      while (tailSet.size && progressed2) {
+        progressed2 = false;
+        tailSet.forEach(function (tid) {
+          var e = (data.edges || []).find(function (x) {
+            return (x.source === tid || x.target === tid) &&
+              depths.has(x.source === tid ? x.target : x.source);
+          });
+          if (!e) return;
+          var other = e.source === tid ? e.target : e.source;
+          var od = depths.get(other);
+          depths.set(tid, e.source === tid ? od - 1 : od + 1);
+          tailSet.delete(tid);
+          progressed2 = true;
+        });
+      }
     }
     // 按行号分组
     var rows = new Map();
@@ -737,7 +815,7 @@
     var rowY = new Map();
     var minD = Infinity;
     depths.forEach(function (d) { if (d < minD) minD = d; });
-    if (depthChanged) {
+    if (depthChanged || suspended) {
       // 深度被边方向修正过（共享节点冲突，整链上移）：prevY 已与
       // 新深度错位（如 BuildMeta 从 1 行提到 0 行但 prevY 还是旧行），
       // 放弃"已有节点不动"，整树按新深度干净分层
@@ -768,6 +846,12 @@
           rowY.set(d, startY + (d - minD) * rowGap); // 全量布局：按深度分层
         }
       });
+    }
+    // tail 行（未定位节点）不在 depths，rowY 未分配——补在最大行下方
+    if (tail.length && !rowY.has(maxD + 1)) {
+      var maxYv = -Infinity;
+      rowY.forEach(function (yv) { if (yv > maxYv) maxYv = yv; });
+      rowY.set(maxD + 1, maxYv === -Infinity ? startY : maxYv + rowGap);
     }
     var updates = [];
     rows.forEach(function (ids, d) {
