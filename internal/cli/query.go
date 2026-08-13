@@ -467,7 +467,7 @@ func queryValueTrace(repo *sqlite.Repo, nodeID string, maxDepth int) int {
 		if r.Line > 0 {
 			line = fmt.Sprintf(":%d", r.Line)
 		}
-		fmt.Printf("  %s%s %s %s%s%s\n", strings.Repeat("  ", r.Depth), arrow, edge, r.Name+acc, line)
+		fmt.Printf("  %s%s %s %s%s\n", strings.Repeat("  ", r.Depth), arrow, edge, r.Name+acc, line)
 	}
 	return 0
 }
