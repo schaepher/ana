@@ -76,6 +76,7 @@ type NodeJSON struct {
 	Signature  string          `json:"signature,omitempty"`
 	Type       string          `json:"type,omitempty"`  // properties.type_string（参数/返回等）
 	FullPath   string          `json:"fullPath,omitempty"` // properties.full_path（字段访问）
+	FuncName   string          `json:"funcName,omitempty"` // 所属函数短名（字段访问/SSA 值）
 	Flags      []string        `json:"flags,omitempty"` // main / http / grpc
 	DocComment string          `json:"docComment,omitempty"` // properties.doc_comment
 	Message    string          `json:"message,omitempty"`    // commit 说明
@@ -211,6 +212,7 @@ func nodeToJSON(n *domain.CodeEntity) NodeJSON {
 	}
 	j.Type = n.Property("type_string")
 	j.FullPath = n.Property("full_path")
+	j.FuncName = shortFuncName(n.Property("func_id"))
 	j.DocComment = n.Property("doc_comment")
 	j.Message = n.Property("message")
 	j.Date = n.Property("date")
@@ -277,4 +279,13 @@ func (s *Server) handleFlows(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, map[string]any{"flows": flows})
+}
+
+// shortFuncName 从 canonical ID 提取函数短名（symbol:go:<pkg>:<name> → <name>，
+// 方法保留 (T).m 形式）——字段访问/SSA 值节点所属函数的展示用。
+func shortFuncName(funcID string) string {
+	if i := strings.LastIndex(funcID, ":"); i >= 0 {
+		return funcID[i+1:]
+	}
+	return funcID
 }

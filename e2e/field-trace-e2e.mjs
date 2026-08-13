@@ -137,6 +137,29 @@ const hasCfg = await page.evaluate(() => window.__codeintelGraph.getData().nodes
   (n) => n.data.label && n.data.label.indexOf('m.cfg') >= 0));
 check('展开含 m.cfg 字段访问节点', hasCfg);
 
+// 10. 字段访问节点显示所属函数与读写（后端字段 + 画布标签 + 信息栏）
+const expParam = await api('/api/expand?id=' + encodeURIComponent(RECV_ID));
+const faNode0 = expParam.neighbors.find((n) => n.kind === 'field_access');
+check('expand 返回字段访问节点带 funcName',
+  faNode0 && faNode0.funcName && faNode0.funcName.indexOf('(Manager).Run') >= 0,
+  'funcName=' + (faNode0 ? faNode0.funcName : 'none'));
+const faInfo = await page.evaluate(() => {
+  const g = window.__codeintelGraph;
+  const n = g.getData().nodes.find((x) => x.data.kind === 'field_access');
+  return n ? { label: n.data.label, id: n.id } : null;
+});
+check('画布字段访问节点标签含所属函数与[写]',
+  faInfo && faInfo.label.indexOf('(Manager).Run') >= 0 && faInfo.label.indexOf('[写]') >= 0,
+  'label=' + (faInfo ? faInfo.label.replace(/\n/g, '|') : 'none'));
+if (faInfo) {
+  await page.evaluate((id) => window.__codeintelGraph.emit('node:click', { target: { id } }), faInfo.id);
+  await page.waitForTimeout(800);
+  const faPanel = await page.evaluate(() => document.getElementById('panel-body').textContent);
+  check('信息栏显示所属函数',
+    faPanel.indexOf('所属函数') >= 0 && faPanel.indexOf('(Manager).Run') >= 0,
+    'panel=' + faPanel.slice(0, 60).replace(/\n/g, ' '));
+}
+
 console.log('\n===== 字段追溯 e2e: ' + passed + ' passed, ' + failed + ' failed =====');
 await browser.close();
 process.exit(failed ? 1 : 0);

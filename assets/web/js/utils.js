@@ -27,9 +27,24 @@ export function nodeLabel(n) {
   var parts = f.split('/');
   var line1 = parts.length >= 2 ? parts[parts.length - 2] : '';
   var line2 = parts.length >= 1 ? parts[parts.length - 1] : f;
-  // 拆前缀：方法 (T).m → (T) / m；函数裸名 → 从 id 取包名 (pkg) / 函数名
+  // 字段访问/SSA 值：第三行显示所属函数，第四行带读写标记与行号
   var line3 = '';
   var line4 = name;
+  if (n.kind === 'field_access' || n.kind === 'ssa_value') {
+    if (n.funcName) line3 = n.funcName;
+    if (n.kind === 'field_access') {
+      line4 = name + ' ' + (n.access === 'read' ? '[读]' : '[写]') +
+        (n.line ? ':' + n.line : '');
+    }
+    var lines = [];
+    if (line1) lines.push(line1);
+    if (line2) lines.push(line2);
+    if (line3) lines.push(line3);
+    lines.push(line4);
+    return lines.join('\n');
+  }
+  // 拆前缀：方法 (T).m → (T) / m；函数裸名 → 从 id 取包名 (pkg) / 函数名
+  line3 = '';
   var m = /^\(([^)]+)\)\.(.+)$/.exec(name);
   if (m) {
     line3 = '(' + m[1] + ')';
