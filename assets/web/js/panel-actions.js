@@ -3,13 +3,14 @@ import { state } from './state.js';
 import { collectSubtree, treeRoot } from './expand.js';
 import { addNode, addEdge } from './graph-ops.js';
 import { relayoutTree } from './layout-tree.js';
-import { showNodePanel } from './panel.js';
+import { showNodePanel, loadNodeFlows } from './panel.js';
 
 // bindPanelActions 绑定信息栏事件委托（main.js 调用）：
 // Source Code 按钮 + 分组 [隐藏]/[展开] 按钮
 export function bindPanelActions() {
   state.panelBody.addEventListener('click', function (evt) {
     if (evt.target.id === 'source-btn' && state.currentPanelId) showSource(state.currentPanelId);
+    if (evt.target.id === 'flows-btn' && state.currentPanelId) loadNodeFlows(state.currentPanelId);
     // 分组 [隐藏] 按钮：隐藏该分组涉及的节点（曾展开过的保留）
     if (evt.target.classList && evt.target.classList.contains('hide-group-btn')) {
       var gi = evt.target.getAttribute('data-gi');

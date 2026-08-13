@@ -2,11 +2,12 @@
 # version 通过 -ldflags 注入编译时的 git commit hash。
 
 BINARY     := codeintel
+E2E_REPO   ?= ../radar
 GIT_COMMIT := $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
 VERSION_PKG := github.com/schaepher/codeintel/internal/cli
 LDFLAGS    := -X '$(VERSION_PKG).gitCommit=$(GIT_COMMIT)'
 
-.PHONY: build install test it vet clean version
+.PHONY: build install test it e2e vet clean version
 
 ## build: 编译二进制（注入 commit hash）
 build:
@@ -24,6 +25,17 @@ test:
 ##     需要 scip-go 在 PATH 或 GOBIN/GOPATH/bin，缺失时自动跳过）
 it:
 	go test -count=1 -tags integration ./integration/
+
+## e2e: 前端回归（playwright）。serve 指定仓库（E2E_REPO，默认 ../radar，
+##      须已构建索引）后运行 e2e/field-trace-e2e.mjs 全量断言。
+e2e:
+	go build -o /tmp/codeintel-e2e ./cmd/codeintel
+	@/tmp/codeintel-e2e serve --repo $(E2E_REPO) --addr :8096 >/dev/null 2>&1 & \
+	  echo $$! > /tmp/codeintel-e2e.pid
+	@sleep 2
+	@cd e2e && node field-trace-e2e.mjs; status=$$?; \
+	  kill $$(cat /tmp/codeintel-e2e.pid) 2>/dev/null; \
+	  rm -f /tmp/codeintel-e2e /tmp/codeintel-e2e.pid; exit $$status
 
 ## vet: 静态检查
 vet:

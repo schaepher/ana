@@ -80,14 +80,18 @@ func setup() {
 `)
 	writeFile(t, filepath.Join(dir, "svc", "svc.go"), `package svc
 
-type Service struct{}
+type Service struct {
+	Name string
+}
 
 type Handler interface {
 	Handle()
 }
 
-func (s *Service) Handle() {
+func (s *Service) Handle() string {
+	s.Name = "x"
 	s.helper()
+	return s.Name
 }
 
 func (s *Service) helper() {}
@@ -109,6 +113,22 @@ func writeFile(t *testing.T, path, content string) {
 func runCLI(t *testing.T, args ...string) int {
 	t.Helper()
 	return cli.Main(context.Background(), args)
+}
+
+// runCLIOut 同 runCLI，额外捕获 stdout（CLI 输出断言用）。
+func runCLIOut(t *testing.T, args ...string) (int, string) {
+	t.Helper()
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	code := cli.Main(context.Background(), args)
+	w.Close()
+	os.Stdout = old
+	var buf strings.Builder
+	if _, err := io.Copy(&buf, r); err != nil {
+		return code, ""
+	}
+	return code, buf.String()
 }
 
 // TestCLIFullFlow：init → DB 内容验证 → query → clean 全流程。
@@ -212,6 +232,31 @@ func TestCLIFullFlow(t *testing.T) {
 		t.Errorf("query impact exit = %d", code)
 	}
 
+	// 4. 字段追溯命令（SSA 字段追溯，field_trace.md）
+	handleID := "symbol:go:example.com/app/svc:(Service).Handle"
+	code, out := runCLIOut(t, "query", "fields", handleID, "--repo", dir)
+	if code != 0 {
+		t.Errorf("query fields exit = %d", code)
+	}
+	if !strings.Contains(out, "direct_write") || !strings.Contains(out, "example.com/app/svc.Service.Name") {
+		t.Errorf("query fields output = %q", out)
+	}
+	if code := runCLI(t, "query", "trace-backward", "example.com/app/svc.Service.Name",
+		"--func", handleID, "--repo", dir); code != 0 {
+		t.Errorf("trace-backward exit = %d", code)
+	}
+	if code := runCLI(t, "query", "trace-forward", "example.com/app/svc.Service.Name",
+		"--func", handleID, "--repo", dir); code != 0 {
+		t.Errorf("trace-forward exit = %d", code)
+	}
+	exportPath := filepath.Join(dir, "analysis.json")
+	if code := runCLI(t, "export", "--repo", dir, "--out", exportPath); code != 0 {
+		t.Errorf("export exit = %d", code)
+	}
+	if _, err := os.Stat(exportPath); err != nil {
+		t.Errorf("export file missing: %v", err)
+	}
+
 	// 4. clean 删除索引
 	if code := runCLI(t, "clean", "--repo", dir, "--force"); code != 0 {
 		t.Fatalf("clean exit = %d", code)
@@ -230,6 +275,7 @@ func TestServerEndToEnd(t *testing.T) {
 	if code := runCLI(t, "init", "--repo", dir); code != 0 {
 		t.Fatalf("init exit = %d", code)
 	}
+	handleID := "symbol:go:example.com/app/svc:(Service).Handle"
 
 	db, err := sqlite.Open(dir)
 	if err != nil {
@@ -334,6 +380,54 @@ func TestServerEndToEnd(t *testing.T) {
 		t.Errorf("source = %q", src)
 	}
 	// 外部包节点展开：HandleFunc → handler（持有参数）
+	code, m = getJSON("/api/expand?id=symbol:go:net/http:HandleFunc")
+	if code != 200 {
+		t.Fatalf("expand HandleFunc status = %d", code)
+	}
+
+	// 参数/返回节点展开（has_param / has_result）
+	code, m = getJSON("/api/expand?id=" + handleID)
+	if code != 200 {
+		t.Fatalf("expand handle status = %d", code)
+	}
+	edges, _ = m["edges"].([]any)
+	paramHit, resultHit := false, false
+	paramNode, resultNode := false, false
+	for _, raw := range edges {
+		e := raw.(map[string]any)
+		if e["kind"] == "has_param" {
+			paramHit = true
+		}
+		if e["kind"] == "has_result" {
+			resultHit = true
+		}
+	}
+	if !paramHit || !resultHit {
+		t.Errorf("expand handle edges = %v, want has_param+has_result", edges)
+	}
+	if nodes, _ := m["neighbors"].([]any); len(nodes) > 0 {
+		for _, raw := range nodes {
+			n := raw.(map[string]any)
+			switch n["kind"] {
+			case "parameter":
+				paramNode = true
+			case "result":
+				resultNode = true
+			}
+		}
+	}
+	if !paramNode || !resultNode {
+		t.Errorf("expand handle neighbors = %v, want parameter+result nodes", m["neighbors"])
+	}
+
+	// /api/flows：函数内字段数据流
+	code, m = getJSON("/api/flows?id=" + handleID)
+	if code != 200 {
+		t.Fatalf("flows status = %d", code)
+	}
+	if flows, _ := m["flows"].([]any); len(flows) == 0 {
+		t.Errorf("flows empty for %s", handleID)
+	}
 	code, m = getJSON("/api/expand?id=symbol:go:net/http:HandleFunc")
 	if code != 200 {
 		t.Fatalf("expand HandleFunc status = %d", code)
