@@ -666,9 +666,10 @@ v2.0 设计树封闭后，MVP 实现过程中补充与调整的能力记录。�
   方法时也不建节点/不建调用边（isInterfaceMethod：接收者类型是接口）。
 - **选中染色**：单击节点后，其出边蓝色 `#1677ff`、入边红色 `#f5222d`，
   其他边及未选中时黑色。
-- **节点标签（两行）**：第一行文件所在目录 + basename（如
-  `orchestrator/orchestrator.go`），第二行符号名；无文件信息节点
-  （commit 等）单行显示符号名。字号 10。
+- **节点标签（三行）**：第一行文件所在目录 + basename（如
+  `orchestrator/orchestrator.go`），第二行方法接收者 `(T)` / 函数
+  包名 `(pkg)`（从 canonical ID 提取），第三行方法名 / 函数名；
+  无文件信息节点（commit 等）单行显示符号名。字号 10。
 - **G6 v5 setElementState 异步绘制坑**（2026-08-13 实测）：选中切换
   （A→B）必须先更新 selectedId 再调用 setElementState。setElementState
   内部 await element.draw，样式函数在绘制时才求值（读闭包 selectedId）：

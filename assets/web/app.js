@@ -1279,19 +1279,37 @@
     return n.name || '';
   }
 
-  // nodeLabel 两行节点标签：
+  // nodeLabel 三行节点标签：
   //   第一行：文件所在目录 + basename（如 orchestrator/orchestrator.go）
-  //   第二行：符号显示名（方法 (T).m / 函数 (包名).f）
+  //   第二行：方法接收者 (T) / 函数包名 (pkg)
+  //   第三行：方法名 / 函数名
   // 无文件信息的节点（如 commit）只显示单行符号名。
   function nodeLabel(n) {
-    var name = displayName(n);
+    var name = n.name || '';
     var f = n.file || '';
     var parts = f.split('/');
     var line1 = parts.length >= 2
       ? parts[parts.length - 2] + '/' + parts[parts.length - 1]
       : f;
-    if (!line1) return name;
-    return line1 + '\n' + name;
+    // 拆前缀：方法 (T).m → (T) / m；函数裸名 → 从 id 取包名 (pkg) / 函数名
+    var line2 = '';
+    var line3 = name;
+    var m = /^\(([^)]+)\)\.(.+)$/.exec(name);
+    if (m) {
+      line2 = '(' + m[1] + ')';
+      line3 = m[2];
+    } else if (n.kind === 'function') {
+      var pm = /^symbol:go:([^:]+):/.exec(n.id || '');
+      if (pm) {
+        var pkg = pm[1].split('/').pop();
+        if (pkg) line2 = '(' + pkg + ')';
+      }
+    }
+    var lines = [];
+    if (line1) lines.push(line1);
+    if (line2) lines.push(line2);
+    lines.push(line3);
+    return lines.join('\n');
   }
 
   function escapeHtml(s) {
