@@ -1,6 +1,7 @@
 // 信息栏动作（原 app.js 1.8 节）：[隐藏]/[展开] 分组节点、Source Code 弹窗
 import { state } from './state.js';
-import { collectSubtree, expandNode, treeRoot } from './expand.js';
+import { collectSubtree, treeRoot } from './expand.js';
+import { addNode, addEdge } from './graph-ops.js';
 import { relayoutTree } from './layout-tree.js';
 import { showNodePanel } from './panel.js';
 
@@ -14,7 +15,7 @@ export function bindPanelActions() {
       var gi = evt.target.getAttribute('data-gi');
       hideGroupNodes(state.panelGroupNodes[gi] || []);
     }
-    // 分组 [展开] 按钮：依次展开该分组涉及的节点（等待前一个完成）
+    // 分组 [展开] 按钮：只把该分组节点显示到图上（一层，不展开关系）
     if (evt.target.classList && evt.target.classList.contains('expand-group-btn')) {
       var gi = evt.target.getAttribute('data-gi');
       expandGroupNodes(state.panelGroupNodes[gi] || []);
@@ -26,22 +27,57 @@ export function bindPanelActions() {
   });
 }
 
-// expandGroupNodes 依次展开分组里的节点：等 expanding 释放后再展开
-// 下一个（expandNode 内部有 expanding 锁，fetch+渲染期间会跳过调用）
+// expandGroupNodes 只把分组节点显示到图上（一层）：分组里的节点加入
+// 画布、补上与当前节点的边，不展开它们各自的关系（想继续可双击单节点）。
+// 数据用 renderNodePanel 缓存的 panelNeighbors/panelEdges，不发请求。
 function expandGroupNodes(ids) {
   if (!ids || !ids.length) return;
-  var i = 0;
-  function next() {
-    if (i >= ids.length) return;
-    if (state.expanding) {
-      setTimeout(next, 300);
-      return;
-    }
-    var id = ids[i++];
-    expandNode(id);
-    setTimeout(next, 300);
+  var cur = state.currentPanelId;
+  // 增量布局：prevY 须在 addNode 之前收集（同 expandNode 的坑）
+  var prevY = {};
+  state.graph.getData().nodes.forEach(function (n) {
+    var d = state.graph.getNodeData(n.id);
+    if (d && d.style) prevY[n.id] = d.style.y;
+  });
+  var newIds = [];
+  var newEdgeKeys = [];
+  ids.forEach(function (id) {
+    if (state.seenNodes.has(id)) return;
+    var n = state.panelNeighbors[id];
+    if (n && addNode(n)) newIds.push(id);
+  });
+  // 补上与当前节点的边（分组节点之间的边不在 /api/expand 数据内）
+  (state.panelEdges || []).forEach(function (e) {
+    if (ids.indexOf(e.source) < 0 && ids.indexOf(e.target) < 0) return;
+    var key = e.source + '→' + e.target + '|' + e.kind;
+    if (addEdge(e)) newEdgeKeys.push(key);
+  });
+  if (!newIds.length && !newEdgeKeys.length) return;
+  // 展开记录挂当前节点名下（已有记录则合并）：双击当前节点可收起这层
+  var rec = state.expandedMap.get(cur);
+  if (rec) {
+    newIds.forEach(function (x) { if (rec.nodes.indexOf(x) < 0) rec.nodes.push(x); });
+    newEdgeKeys.forEach(function (x) { if (rec.edges.indexOf(x) < 0) rec.edges.push(x); });
+  } else {
+    state.expandedMap.set(cur, { nodes: newIds, edges: newEdgeKeys });
   }
-  next();
+  // 增量重排（已有节点位置不变），越界时 fitView 兜底
+  var root = treeRoot();
+  if (root) relayoutTree(root, prevY);
+  state.graph.draw();
+  var minY = Infinity, maxY = -Infinity;
+  state.graph.getData().nodes.forEach(function (n) {
+    var d = state.graph.getNodeData(n.id);
+    if (d && d.style) {
+      if (d.style.y < minY) minY = d.style.y;
+      if (d.style.y > maxY) maxY = d.style.y;
+    }
+  });
+  var ch = state.container.clientHeight || 800;
+  if ((minY < 0 || maxY > ch) && typeof state.graph.fitView === 'function') {
+    setTimeout(function () { state.graph.fitView(); }, 500);
+  }
+  state.tip.textContent = '显示 ' + newIds.length + ' 个节点 · 双击可收起';
 }
 
 // hideGroupNodes 隐藏一组节点（及其子树边）：曾展开过（有展开记录）

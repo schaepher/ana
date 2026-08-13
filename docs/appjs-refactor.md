@@ -76,7 +76,13 @@
 - **panelGroupNodes**：分组索引 → 对方节点 id（[隐藏]/[展开] 按钮数据）
 - [隐藏] 按钮：hideGroupNodes（collectSubtree 清理 + setData + draw +
   刷新）；曾展开节点保留
-- [展开] 按钮：expandGroupNodes（串行，等 expanding 释放）
+- [展开] 按钮（2026-08-13 改为只显示一层）：expandGroupNodes 不再
+  逐个 fetch/expandNode（那会展开两层），而是直接用渲染时缓存的
+  panelNeighbors/panelEdges：分组节点 addNode + 补上与当前节点的边，
+  不展开它们各自的关系；展开记录挂当前节点名下（已有记录合并），
+  双击当前节点可收起这层；[隐藏]/[展开] 按钮样式统一
+  （.hide-group-btn/.expand-group-btn 共用基础样式，hover 隐藏红/
+  展开蓝）
 - Source Code 按钮 + 弹窗（/api/source，hljs 高亮，CDN 失败降级）
 - 拖拽调整宽度（#panel-resize，CSS 变量 --panel-w，240–520px）
 
@@ -104,7 +110,8 @@
 5. 收起只收一层：孤儿删、共享保留、不递归——双击根不收起整棵树
 6. 所有边 source.y < target.y（箭头始终向下）
 7. 选中切换颜色跟随最后点击节点（无需点空白）
-8. 信息栏分组渲染、[隐藏]（已展开保留）、[展开]（依次展开）
+8. 信息栏分组渲染、[隐藏]（已展开保留）、[展开]（只显示分组节点
+   一层：新增数 = 分组数，不展开它们的关系）；两按钮样式统一
 9. 标签四行；边标注：调用/拥有方法/拥有实现/持有参数/持有返回参数
 10. 隐藏规则可配置（localStorage）
 

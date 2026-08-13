@@ -172,14 +172,19 @@ const n10 = await names();
 check('隐藏按钮隐藏分组节点', !n10.includes('(Repo).Counts') && !n10.includes('FromContext'), 'Counts/FromContext 不在');
 check('隐藏保留已展开节点', n10.includes('cmdInit'), 'cmdInit 在');
 
-// 11. 展开按钮：依次展开分组节点
-await page.evaluate(() => {
-  const h3 = Array.from(document.querySelectorAll('#panel-body h3')).find((h) => h.textContent.trim().startsWith('被调用（'));
-  h3.querySelector('.expand-group-btn').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+// 11. 展开按钮：只把分组节点显示到图上（一层，不展开它们的关系）
+// 用例 10 刚隐藏了 root 的"调用"分组全部节点（现在都不在图上）。
+// 点击 [展开] 后新增节点数应恰等于分组节点数——再多一个就是展开了两层
+const expInfo = await page.evaluate(() => {
+  const h3 = Array.from(document.querySelectorAll('#panel-body h3')).find((h) => h.textContent.trim().startsWith('调用（'));
+  const m = h3 ? h3.textContent.match(/调用（(\d+)）/) : null;
+  const before = window.__codeintelGraph.getData().nodes.length;
+  if (h3) h3.querySelector('.expand-group-btn').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  return { n: m ? parseInt(m[1]) : 0, before };
 });
-await page.waitForTimeout(4000);
-const n11 = await names();
-check('展开按钮生效', n11.some((x) => x.includes('Main')) || n11.length > 10, `节点数 ${n11.length}`);
+await page.waitForTimeout(2500);
+const n11 = await count();
+check('展开按钮只显示一层', expInfo.n > 0 && n11 - expInfo.before === expInfo.n, `分组 ${expInfo.n} 新增 ${n11 - expInfo.before}`);
 
 // 12. 标签四行 + 边标注
 const labels = await page.evaluate(() => window.__codeintelGraph.getData().nodes.map((n) => n.data.label));

@@ -64,10 +64,13 @@ export function renderNodePanel(data) {
     html.push('<h3>提交信息</h3>' + c.join(''));
   }
 
-  // 关系：按类型分组；panelGroupNodes[gi] = 该分组涉及的对方节点 id
+  // 关系：按类型分组；panelGroupNodes[gi] = 该分组涉及的对方节点 id。
+  // 同时缓存完整邻居/边数据供 [展开] 按钮"只显示一层"使用
   var byKind = {};
   var restOrder = [];
   state.panelGroupNodes = {};
+  state.panelNeighbors = byId;
+  state.panelEdges = edges;
   var gi = 0;
   edges.forEach(function (e) {
     if (!byKind[e.kind]) {
@@ -133,7 +136,7 @@ function relGroupHtml(title, items, gi) {
   });
   var out = ['<h3>' + title +
     ' <button class="hide-group-btn" data-gi="' + gi + '" title="隐藏该分组节点（已展开的保留）">隐藏</button>' +
-    ' <button class="expand-group-btn" data-gi="' + gi + '" title="依次展开该分组节点">展开</button></h3>'];
+    ' <button class="expand-group-btn" data-gi="' + gi + '" title="把该分组节点显示到图上（只一层，不展开关系）">展开</button></h3>'];
   Object.keys(byFile).forEach(function (f) {
     out.push('<div class="file-group">' + escapeHtml(f) + '</div>');
     byFile[f].forEach(function (g) {

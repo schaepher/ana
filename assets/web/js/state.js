@@ -74,6 +74,10 @@ export const state = {
   selectedId: null,
   currentPanelId: null,
   panelGroupNodes: {},
+  // 信息栏渲染时缓存的当前节点完整数据（[展开] 按钮"只显示一层"用）：
+  // panelNeighbors = id → 邻居完整节点；panelEdges = 当前节点的全部边
+  panelNeighbors: {},
+  panelEdges: [],
   hideKinds: new Set(['calls']),
   searchTimer: null,
   searchSeq: 0
