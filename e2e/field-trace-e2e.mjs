@@ -112,6 +112,19 @@ if (hasBtn) {
     'tree=' + flowsText.slice(0, 100).replace(/\n/g, ' '));
 }
 
+// 8. 入参/返回按定义顺序（信息栏分组条目顺序，此时面板为 (Manager).Run）
+const orderText = await page.evaluate(() => document.getElementById('panel-body').textContent);
+const i1 = (s) => orderText.indexOf(s);
+const paramSeg = orderText.slice(orderText.indexOf('参数（'), orderText.indexOf('返回（'));
+check('参数按定义顺序（m→ctx→sessionID→userMessage）',
+  i1('→m') >= 0 && i1('→ctx') > i1('→m') && i1('→sessionID') > i1('→ctx') && i1('→userMessage') > i1('→sessionID'),
+  'params=' + paramSeg.replace(/\n/g, ' '));
+const s1 = i1('→string');
+const s2 = orderText.indexOf('→string', s1 + 1);
+check('返回按定义顺序（string→string→error）',
+  s1 >= 0 && s2 > s1 && i1('→error') > s2,
+  'results=' + orderText.slice(orderText.indexOf('返回（'), orderText.indexOf('返回（') + 80).replace(/\n/g, ' '));
+
 console.log('\n===== 字段追溯 e2e: ' + passed + ' passed, ' + failed + ' failed =====');
 await browser.close();
 process.exit(failed ? 1 : 0);

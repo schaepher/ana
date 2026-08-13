@@ -614,10 +614,17 @@ func (r *Repo) Expand(id domain.CanonicalID) (facts []*domain.Fact, nodes []*dom
 	logger.Debug("enter (Repo).Expand")
 	defer logger.Debug("exit (Repo).Expand")
 	rows, err := r.Query(`
-SELECT source_id, target_id, kind, tool_source, confidence, metadata
-FROM edges
-WHERE (source_id = ? OR target_id = ?) AND kind IN ('calls', 'implements', 'imports', 'initializes', 'uses', 'passes_to', 'passes_result', 'of_type', 'has_method', 'has_param', 'has_result')
-LIMIT 500`, string(id), string(id))
+SELECT e.source_id, e.target_id, e.kind, e.tool_source, e.confidence, e.metadata
+FROM edges e
+LEFT JOIN nodes n ON n.id = CASE WHEN e.source_id = ? THEN e.target_id ELSE e.source_id END
+WHERE (e.source_id = ? OR e.target_id = ?) AND e.kind IN ('calls', 'implements', 'imports', 'initializes', 'uses', 'passes_to', 'passes_result', 'of_type', 'has_method', 'has_param', 'has_result')
+ORDER BY CASE WHEN e.kind = 'has_param' THEN 0
+              WHEN e.kind = 'has_result' THEN 1
+              ELSE 2 END,
+         COALESCE(CASE WHEN e.kind IN ('has_param','has_result')
+                       THEN json_extract(n.properties, '$.index') END, 999),
+         e.id
+LIMIT 500`, string(id), string(id), string(id), string(id))
 	if err != nil {
 		return nil, nil, fmt.Errorf("expand %s: %w", id, err)
 	}

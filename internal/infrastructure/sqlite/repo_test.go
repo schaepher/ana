@@ -631,3 +631,47 @@ func TestGetFunctionFlows(t *testing.T) {
 		t.Errorf("backward chain write@2 missing: %+v", rows)
 	}
 }
+
+func TestExpandParamResultDefinitionOrder(t *testing.T) {
+	r := newTestRepo(t)
+	funcID := "symbol:go:example.com/m:f"
+	fn := node(funcID, "function", "f", "f.go")
+	mk := func(id, kind, name string, index int) *domain.CodeEntity {
+		n := node(id, kind, name, "f.go")
+		n.Properties["index"] = index
+		return n
+	}
+	recv := mk(funcID+"#param.recv.s", "parameter", "s", -1)
+	p0 := mk(funcID+"#param.a", "parameter", "a", 0)
+	p1 := mk(funcID+"#param.b", "parameter", "b", 1)
+	r0 := mk(funcID+"#result.0", "result", "int", 0)
+	r1 := mk(funcID+"#result.1", "result", "error", 1)
+	callee := node("symbol:go:example.com/m:g", "function", "g", "g.go")
+	save(t, r, []*domain.CodeEntity{fn, recv, p0, p1, r0, r1, callee}, nil)
+	// 乱序插入：返回先、参数后、calls 夹中间
+	edges := []*domain.Fact{
+		{SourceID: fn.ID, TargetID: r1.ID, Kind: domain.FactHasResult, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: fn.ID, TargetID: p1.ID, Kind: domain.FactHasParam, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: fn.ID, TargetID: r0.ID, Kind: domain.FactHasResult, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: fn.ID, TargetID: p0.ID, Kind: domain.FactHasParam, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: fn.ID, TargetID: callee.ID, Kind: domain.FactCalls, Confidence: 1},
+		{SourceID: fn.ID, TargetID: recv.ID, Kind: domain.FactHasParam, ToolSource: domain.ToolSSA, Confidence: 1},
+	}
+	save(t, r, nil, edges)
+
+	facts, _, err := r.Expand(fn.ID)
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	// 定义顺序：has_param 按 index（receiver -1 最前）→ has_result 按 index → 其他边
+	want := []string{string(recv.ID), string(p0.ID), string(p1.ID), string(r0.ID), string(r1.ID), string(callee.ID)}
+	got := make([]string, 0, len(facts))
+	for _, f := range facts {
+		got = append(got, string(f.TargetID))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("expand order[%d] = %s, want %s (full: %v)", i, got[i], want[i], got)
+		}
+	}
+}
