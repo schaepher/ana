@@ -769,6 +769,19 @@ v2.0 设计树封闭后，MVP 实现过程中补充与调整的能力记录。�
   `logging.FromContext(ctx)`（有 ctx）+ enter/exit Debug 日志；
   幂等可重跑；排除 `internal/logging` 自身与 scripts/。
 
+### 12.9 允许展开一层外部包（2026-08-13）
+
+**问题**：函数作为参数传给**外部包函数**时（如 `mux.HandleFunc(path, s.handleRoots)`），
+调用链（cmdServe → New/Handler）展开看不到外部接收者（net/http.HandleFunc），
+持有参数关系（HandleFunc → handleRoots）不可达——外部函数原本不建 calls 边。
+
+**方案**（ast adapter）：在"函数作为参数"处理块中，当接收函数是外部包函数时，
+补 `调用者 → 外部接收函数` 的 calls 边（conf 0.8）。链变为：
+`(Server).Handler → (ServeMux).HandleFunc [calls] → handleRoots [passes_to]`，
+展开 Handler 即可见外部包层，再展开 HandleFunc 可见 4 个 handler。
+**限定范围**：仅"函数作为参数"场景（普通外部调用如 fmt.Println 仍不建边，
+避免图爆炸）；同一调用者多处调用合并（UNIQUE 边去重）。
+
 ### 12.8 单元测试覆盖（2026-08-13）
 
 为全部 Go 包补充单元测试（`make test` = `go test -race -count=1 -cover ./...`，

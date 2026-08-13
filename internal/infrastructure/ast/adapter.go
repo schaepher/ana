@@ -335,6 +335,11 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 		// 接收者可为外部框架函数（如 net/http.HandleFunc），为其建轻量节点
 		// （file_path 为空），使"作为谁的参数"关系可见。须在外部函数
 		// 跳过逻辑之前处理。
+		// externalCallee：接收函数是外部包函数时，补调用者 → 接收函数的
+		// calls 边——"允许展开一层外部包"：从调用链（如 New）展开即可见
+		// 外部接收者（HandleFunc），进而展开它的持有参数关系。仅限"函数
+		// 作为参数"场景（普通外部调用如 fmt.Println 不建边，避免图爆炸）。
+		externalCallee := callee.Pkg() != nil && !isInModule(callee.Pkg().Path(), repo.Module)
 		if calleeID != "" && calleeID != callerID {
 			for _, arg := range call.Args {
 				fn := argFuncRef(pkg, arg)
@@ -355,6 +360,16 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 					ToolSource: domain.ToolCodeGraph,
 					Confidence: 0.8,
 				}})
+				if externalCallee {
+					_ = emit(domain.Item{Fact: &domain.Fact{
+						// 调用者 → 外部接收函数：允许展开一层外部包
+						SourceID:   callerID,
+						TargetID:   calleeID,
+						Kind:       domain.FactCalls,
+						ToolSource: domain.ToolCodeGraph,
+						Confidence: 0.8,
+					}})
+				}
 			}
 		}
 		if callee.Pkg() == nil || !isInModule(callee.Pkg().Path(), repo.Module) {

@@ -151,6 +151,34 @@ func TestIndexFunctionAsArgPassesTo(t *testing.T) {
 	}
 }
 
+func TestIndexExternalCalleeAsArg(t *testing.T) {
+	// 外部包函数作为参数接收者（如 net/http.HandleFunc）：
+	// 调用者 → 外部接收函数建 calls 边（允许展开一层外部包），
+	// 外部接收函数 → 参数函数建 passes_to 边
+	_, facts := indexFixture(t, map[string]string{
+		"go.mod":  fixtureGoMod,
+		"main.go": "package main\n\nimport \"net/http\"\n\nfunc handler(w http.ResponseWriter, r *http.Request) {}\n\nfunc setup() {\n\thttp.HandleFunc(\"/x\", handler)\n}\n",
+	})
+	// setup → (ServeMux).HandleFunc（calls，外部包展开层）
+	findFact(t, facts,
+		"symbol:go:example.com/mtest:setup",
+		"symbol:go:net/http:HandleFunc",
+		"calls")
+	// (ServeMux).HandleFunc → handler（passes_to，持有参数）
+	findFact(t, facts,
+		"symbol:go:net/http:HandleFunc",
+		"symbol:go:example.com/mtest:handler",
+		"passes_to")
+	// 普通外部调用（fmt.Println）不建边
+	_, facts2 := indexFixture(t, map[string]string{
+		"go.mod":  fixtureGoMod,
+		"main.go": "package main\n\nimport \"fmt\"\n\nfunc logIt() {\n\tfmt.Println(\"hello\")\n}\n",
+	})
+	if hasFact(facts2, "symbol:go:example.com/mtest:logIt", "symbol:go:fmt:Println", "calls") {
+		t.Error("plain external call must not create calls edge")
+	}
+}
+
 func TestIndexInitializesAndUses(t *testing.T) {
 	// s := &Service{} → initializes（main → Service）+ uses（Service → 方法）
 	_, facts := indexFixture(t, map[string]string{
