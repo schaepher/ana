@@ -28,6 +28,8 @@ const (
 	KindFieldAccess    EntityKind = "field_access"    // 结构体字段访问（实例槽）
 	KindSSAValue       EntityKind = "ssa_value"       // SSA 值（参数/局部/Phi/Alloc 等）
 	KindExternalSummary EntityKind = "external_summary" // 外部库摘要函数
+	KindParameter      EntityKind = "parameter"       // 函数/方法签名参数（含 receiver）
+	KindResult         EntityKind = "result"          // 函数/方法返回值
 )
 
 // FactKind 事实（关系）种类，对应 edges.kind 列。
@@ -56,6 +58,8 @@ const (
 	FactPhiOperand    FactKind = "phi_operand"    // Phi 节点 → 前驱值
 	FactIndirectWrite FactKind = "indirect_write" // 调用者函数 → 被调函数/虚拟字段节点
 	FactSummaryIO     FactKind = "summary_io"     // 外部摘要函数 → 字段路径
+	FactHasParam      FactKind = "has_param"      // 函数 → 签名参数节点
+	FactHasResult     FactKind = "has_result"     // 函数 → 返回值节点
 )
 
 // 工具来源标识，对应 edges.tool_source 列。

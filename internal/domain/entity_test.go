@@ -56,6 +56,7 @@ func TestFactKindsDefined(t *testing.T) {
 		FactModifiedBy: false, FactDataFlowsTo: false,
 		FactArgument: false, FactReturns: false, FactAlias: false,
 		FactPhiOperand: false, FactIndirectWrite: false, FactSummaryIO: false,
+		FactHasParam: false, FactHasResult: false,
 	}
 	for k := range defined {
 		if k == "" {

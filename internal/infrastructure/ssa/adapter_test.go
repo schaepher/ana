@@ -168,3 +168,54 @@ func main() {}
 		t.Errorf("Get kind = %s, want method", m.Kind)
 	}
 }
+
+func TestSignatureNodes(t *testing.T) {
+	nodes, facts := indexFixture(t, map[string]string{
+		"go.mod":  moduleGoMod,
+		"main.go": `package m
+
+type T struct {
+	A int
+}
+
+func (s *T) Handle(req string, n int) (int, error) {
+	return n, nil
+}
+
+func plain(x bool) bool {
+	return x
+}
+`,
+	})
+	mID := "symbol:go:example.com/mtest:(T).Handle"
+	fID := "symbol:go:example.com/mtest:plain"
+
+	// 方法：接收者 + 2 参数（has_param 边），2 个返回（has_result 边，索引后缀）
+	recv := findNode(t, nodes, mID+"#param.recv.s")
+	if recv.Kind != domain.KindParameter || recv.Property("receiver") != "true" {
+		t.Errorf("receiver node = %+v", recv)
+	}
+	if recv.Property("type_string") != "*example.com/mtest.T" {
+		t.Errorf("receiver type = %q", recv.Property("type_string"))
+	}
+	findNode(t, nodes, mID+"#param.req")
+	findNode(t, nodes, mID+"#param.n")
+	r0 := findNode(t, nodes, mID+"#result.0")
+	if r0.Kind != domain.KindResult || r0.Property("type_string") != "int" {
+		t.Errorf("result.0 = %+v", r0)
+	}
+	findNode(t, nodes, mID+"#result.1")
+
+	findFact(t, facts, mID, mID+"#param.recv.s", string(domain.FactHasParam))
+	findFact(t, facts, mID, mID+"#result.0", string(domain.FactHasResult))
+	if findFact(t, facts, mID, mID+"#param.n", string(domain.FactHasParam)).TargetID != domain.CanonicalID(mID+"#param.n") {
+		t.Error("has_param edge for n wrong")
+	}
+
+	// 普通函数：单返回无索引后缀
+	p := findNode(t, nodes, fID+"#param.x")
+	if p.Kind != domain.KindParameter || p.Property("receiver") != "" {
+		t.Errorf("plain param = %+v", p)
+	}
+	findNode(t, nodes, fID+"#result")
+}

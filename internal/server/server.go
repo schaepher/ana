@@ -74,6 +74,7 @@ type NodeJSON struct {
 	File       string          `json:"file,omitempty"`
 	Line       int             `json:"line,omitempty"`
 	Signature  string          `json:"signature,omitempty"`
+	Type       string          `json:"type,omitempty"`  // properties.type_string（参数/返回等）
 	Flags      []string        `json:"flags,omitempty"` // main / http / grpc
 	DocComment string          `json:"docComment,omitempty"` // properties.doc_comment
 	Message    string          `json:"message,omitempty"`    // commit 说明
@@ -207,6 +208,7 @@ func nodeToJSON(n *domain.CodeEntity) NodeJSON {
 	if n.Property("serves_grpc") == "true" {
 		j.Flags = append(j.Flags, "grpc")
 	}
+	j.Type = n.Property("type_string")
 	j.DocComment = n.Property("doc_comment")
 	j.Message = n.Property("message")
 	j.Date = n.Property("date")

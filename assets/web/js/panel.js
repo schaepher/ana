@@ -40,6 +40,7 @@ export function renderNodePanel(data) {
   basic.push(kv('类型', KIND_LABEL[node.kind] || node.kind));
   if (node.file) basic.push(kv('文件', node.file + (node.line ? ':' + node.line : '')));
   if (node.signature) basic.push(kv('签名', node.signature));
+  if (node.type) basic.push(kv('类型', node.type));
   if (node.flags && node.flags.length) {
     basic.push(kv('标记', node.flags.map(function (f) { return FLAG_LABEL[f] || f; }).join('、')));
   }
