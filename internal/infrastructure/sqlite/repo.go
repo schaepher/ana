@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/mattn/go-sqlite3"
 	"strings"
 
 	"github.com/schaepher/codeintel/internal/domain"
@@ -135,13 +136,14 @@ func marshalProps(props map[string]any) ([]byte, error) {
 }
 
 // isFKError 判断是否为外键约束错误（SQLITE_CONSTRAINT_FOREIGNKEY = 787）。
+// go-sqlite3 的 sqlite3.Error 用 ExtendedCode 存扩展错误码。
 func isFKError(err error) bool {
 	logger := zap.L()
 	logger.Debug("enter isFKError")
 	defer logger.Debug("exit isFKError")
-	var sqliteErr interface{ ErrorCode() int }
-	if errors.As(err, &sqliteErr) {
-		return sqliteErr.ErrorCode() == 787
+	var e sqlite3.Error
+	if errors.As(err, &e) {
+		return e.ExtendedCode == 787
 	}
 	return false
 }
@@ -281,11 +283,11 @@ func (r *Repo) walkEdges(id string, depth int, minConfidence float64, dir string
 	logger := zap.L()
 	logger.Debug("enter (Repo).walkEdges")
 	defer logger.Debug("exit (Repo).walkEdges")
-	var anchor, other, walkCol string
+	var anchor, walkCol string
 	if dir == "callers" {
-		anchor, other, walkCol = "target_id", "source_id", "src"
+		anchor, walkCol = "target_id", "src"
 	} else {
-		anchor, other, walkCol = "source_id", "target_id", "tgt"
+		anchor, walkCol = "source_id", "tgt"
 	}
 	q := fmt.Sprintf(`
 WITH RECURSIVE walk(src, tgt, kind, tool_source, confidence, metadata, d) AS (
@@ -297,7 +299,7 @@ WITH RECURSIVE walk(src, tgt, kind, tool_source, confidence, metadata, d) AS (
     WHERE w.d < ? AND e.kind = 'calls' AND e.confidence >= ?
 )
 SELECT DISTINCT src, tgt, kind, tool_source, confidence, metadata FROM walk`,
-		anchor, other, walkCol)
+		anchor, anchor, walkCol)
 
 	rows, err := r.Query(q, id, minConfidence, depth, minConfidence)
 	if err != nil {
@@ -691,8 +693,9 @@ func (r *Repo) GetLatest() (*domain.BuildMeta, error) {
 	logger.Debug("enter (Repo).GetLatest")
 	defer logger.Debug("exit (Repo).GetLatest")
 	m := &domain.BuildMeta{}
+	// timestamp 为秒级：同一秒内多次构建须按写入顺序取最新（rowid 递增）
 	err := r.QueryRow(`SELECT build_id, commit_sha, tool_name, status, duration_ms, error_message
-		FROM build_metadata ORDER BY timestamp DESC LIMIT 1`).
+		FROM build_metadata ORDER BY timestamp DESC, rowid DESC LIMIT 1`).
 		Scan(&m.BuildID, &m.CommitSHA, &m.ToolName, &m.Status, &m.DurationMs, &m.ErrorMsg)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, domain.ErrNotFound

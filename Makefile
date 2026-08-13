@@ -16,9 +16,9 @@ build:
 install:
 	go install -ldflags "$(LDFLAGS)" ./cmd/codeintel
 
-## test: 运行全部测试
+## test: 运行全部测试（-race 竞态检测 + -count=1 禁用缓存 + 覆盖率汇总）
 test:
-	go test ./...
+	go test -race -count=1 -cover ./...
 
 ## vet: 静态检查
 vet:

@@ -112,13 +112,23 @@ func shortSHA(sha string) string {
 	return sha
 }
 
-// normalizePath 处理 git 输出的 rename 标记（"old => new" 与引号包裹）。
+// normalizePath 处理 git 输出的 rename 标记（"{old => new}/路径" 与引号包裹）。
+// 修复：rename 块取 new 后须移除 "}"——旧实现只切 "=>" 后面，} 残留在
+// 路径中（"new}"）。
 func normalizePath(p string) string {
 	logger := zap.L()
 	logger.Debug("enter normalizePath")
 	defer logger.Debug("exit normalizePath")
+	p = strings.TrimSpace(p)
 	if i := strings.Index(p, "=>"); i >= 0 {
-		p = p[i+2:]
+		// {old => new}[路径后缀]：取 new 后内容并移除 }
+		rest := p[i+2:]
+		if j := strings.Index(rest, "}"); j >= 0 {
+			p = rest[:j] + rest[j+1:]
+		} else {
+			p = rest
+		}
+		p = strings.TrimSpace(p)
 	}
-	return strings.Trim(p, "\" ")
+	return strings.Trim(p, "\"")
 }

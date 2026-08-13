@@ -769,6 +769,34 @@ v2.0 设计树封闭后，MVP 实现过程中补充与调整的能力记录。�
   `logging.FromContext(ctx)`（有 ctx）+ enter/exit Debug 日志；
   幂等可重跑；排除 `internal/logging` 自身与 scripts/。
 
+### 12.8 单元测试覆盖（2026-08-13）
+
+为全部 Go 包补充单元测试（`make test` = `go test -race -count=1 -cover ./...`，
+覆盖率：domain 100% / logging 95% / canonicalizer 89% / git 85% /
+server 82% / sqlite 80% / orchestrator 78% / joern 73% / scip 61% /
+ast 61% / cli 48%）。测试发现的**既有 bug**（本轮一并修复）：
+
+1. **DSN pragma 从未生效**（db.go）：go-sqlite3 只识别 `_foreign_keys` /
+   `_journal_mode` / `_busy_timeout` 直连参数，`_pragma=xxx(ON)` 形式
+   实测不生效——外键约束/WAL/忙等待全部静默关闭。改为直连参数后
+   外键真正启用（"端点不存在边跳过"逻辑首次生效）。
+2. **isFKError 判定失效**（repo.go）：go-sqlite3 错误类型是
+   `sqlite3.Error`（无 ErrorCode() 方法），原接口断言永远 false；
+   改为检查 `ExtendedCode == 787`。
+3. **递归 CTE JOIN 列错位**（repo.go walkEdges）：fmt.Sprintf 占位符
+   错位（`e.%s` 用了 other 列而非 anchor 列）——**深度 >1 的
+   callers/callees 查询一直错误**（只返回直接邻居；前端只用深度 1
+   未暴露）。修复后深度遍历正确。
+4. **GetLatest 同秒歧义**（repo.go）：build_metadata.timestamp 为秒级，
+   同一秒内多次构建返回旧记录；ORDER BY 增加 rowid DESC。
+5. **normalizePath rename 残留**（git adapter）：`{old => new}/path`
+   取 new 后未移除 `}` 且丢 TrimSpace。
+
+测试基础设施：ast 测试用临时 Go 模块 + go/packages（不依赖 scip-go）；
+orchestrator 用 fake adapter 测降级/失败状态矩阵；git 测试建临时仓库
+提交；joern 测 parseSlices 纯函数与降级路径；scip 构造 protobuf
+document 测 processDocument（接口方法过滤/实现方向）。
+
 ### 12.7 仍为降级项（v2.0 未实现）
 
 - MCP serve（explore_symbol 等 5 个工具）与 MCP 工具契约

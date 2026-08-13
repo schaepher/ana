@@ -74,7 +74,9 @@ func Open(repoPath string) (*DB, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create .codeintel dir: %w", err)
 	}
-	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)",
+	// 注意：go-sqlite3 只识别 _foreign_keys/_journal_mode/_busy_timeout 这类
+	// 直连参数；_pragma=xxx(ON) 形式实测不生效（外键/WAL 会静默关闭）
+	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=ON",
 		filepath.Join(dir, "codeintel.db"))
 	raw, err := sql.Open("sqlite3", dsn)
 	if err != nil {
