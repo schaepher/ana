@@ -576,6 +576,14 @@ v2.0 设计树封闭后，MVP 实现过程中补充与调整的能力记录。�
   calls/initializes 出=down，implements/imports 出=up，其余=mid）。
   此前为"移除全部未展开兄弟"，展开 callee 会把唯一顶行 caller（如
   cmdInit）也剪掉导致链路断头（用户实测反馈后修正）。
+- **展开过滤只拦 calls 入边**（2026-08-13 修正）：有父节点时展开，
+  "过滤其他父"仅针对 calls 入边（潜在 caller）；has_receiver/
+  implements/initializes 等入边是节点的关联须展示——否则双击接收者
+  节点（struct）时它的方法们全部被拦掉，什么都展开不出来。
+- **收起孤儿判断顺序**（2026-08-13 修正）：collectCollapse 先递归回收
+  整棵子树的展开记录（edgesToRemove 完整）再做孤儿判断——原实现边
+  回收边判断，先处理的子节点会把连到后处理兄弟新增边的边误判为
+  "有其他边"而残留（收起根后 flush 残留）。
 - **方向感知树布局**（2026-08-13 修正）：非根展开/收起后的整树布局
   （relayoutTree）按行号分层：根=0，caller（calls 入边，isCaller）在
   其父**上一行**，其余（callee/实现接口/导入包/对象关系）在下一行，

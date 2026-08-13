@@ -245,8 +245,10 @@
       .then(function (data) {
         // 期间发生了收起/其他展开：放弃本次结果，避免已删节点复活
         if (myToken !== expandToken) return data;
-        // 展开时过滤"其他父"：已有父的节点展开后，caller 方向只保留父，
-        // 其他入边节点（潜在父）不展示，只保留子节点方向
+        // 展开时过滤"其他父"：已有父的节点展开后，只保留父这个 caller，
+        // 其他 calls 入边节点（潜在父）不展示，只保留子节点方向。
+        // 注意：只拦 calls 入边——has_receiver/implements/initializes 等
+        // 入边是节点的关联（如接收者的方法们），双击接收者要能展开它们
         var parent = parentOf(id);
         var neighbors = data.neighbors || [];
         var edges = data.edges || [];
@@ -257,7 +259,7 @@
             var e = edges.find(function (x) {
               return (x.source === id && x.target === n.id) || (x.source === n.id && x.target === id);
             });
-            if (e && e.direction === 'in') { blocked.add(n.id); return false; }
+            if (e && e.direction === 'in' && e.kind === 'calls') { blocked.add(n.id); return false; }
             return true;
           });
           edges = edges.filter(function (e) {
@@ -630,14 +632,17 @@
   // collectCollapse 递归收集收起子树中应删除的节点与边：
   // - edgesToRemove：各层展开时新增的边（key 为 "source→target|kind"）
   // - toRemove：孤儿子节点（无指向保留节点的边）才删除
+  // 先递归回收整棵子树的展开记录（edgesToRemove 完整）再做孤儿判断——
+  // 否则先处理的子节点会把连到后处理兄弟新增边的边误判为"有其他边"
+  // 而残留（如 flush→Orchestrator 在收起根时残留）
   function collectCollapse(id, toRemove, edgesToRemove) {
     var record = expandedMap.get(id);
     if (!record) return;
     expandedMap.delete(id);
     record.edges.forEach(function (k) { edgesToRemove.add(k); });
+    record.nodes.forEach(function (cid) { collectCollapse(cid, toRemove, edgesToRemove); });
     var data = graph.getData();
     record.nodes.forEach(function (cid) {
-      collectCollapse(cid, toRemove, edgesToRemove);
       if (toRemove.has(cid)) return;
       var hasOtherEdge = (data.edges || []).some(function (e) {
         if (e.source === cid || e.target === cid) {
