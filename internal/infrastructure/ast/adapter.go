@@ -354,9 +354,27 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 			return true
 		}
 		if isInterfaceMethod(callee) {
-			// 接口方法不作为独立节点（用户确认）：只保障调用者节点，
-			// 不建接口方法节点与调用边
+			// 接口方法不作为独立节点（用户确认）。但链式调用场景
+			// （NewService().DoSth()）仍要建调用边：静态分析接收者
+			// 表达式的实际类型——NewService 返回接口但 return 具体
+			// 类型 → 指向具体类型的实现方法；无法确定 → 指向接口类型
 			_ = emit(domain.Item{Node: nodeFor(repo, pkg, caller, callerID, callerKind, serviceFlags[callerID])})
+			targetID, targetKind, targetNode := a.concreteMethodFor(pkg, call, callee, repo)
+			if targetID == "" {
+				return true
+			}
+			if targetNode != nil {
+				_ = emit(domain.Item{Node: targetNode})
+			}
+			_ = emit(domain.Item{Fact: &domain.Fact{
+				SourceID:   callerID,
+				TargetID:   targetID,
+				Kind:       domain.FactCalls,
+				ToolSource: domain.ToolCodeGraph,
+				Confidence: 0.8,
+				Metadata:   map[string]any{"line_num": pkg.Fset.PositionFor(call.Pos(), false).Line},
+			}})
+			_ = targetKind
 			return true
 		}
 		// 保障两端节点存在（INSERT OR IGNORE，不覆盖 SCIP 的完整节点）
@@ -873,6 +891,127 @@ func (a *Adapter) handleNestedArg(pkg *packages.Package, call *ast.CallExpr, rec
 			Confidence: 0.8,
 		}})
 	}
+}
+
+// concreteMethodFor 解析链式调用接收者表达式的实际方法目标：
+//   - callee 是接口方法时，分析接收者表达式（如 NewService().DoSth() 的
+//     NewService()）的实际返回类型——函数声明返回接口但 return 具体类型
+//     （return impl{}）→ 解析到该具体类型的同名实现方法（main → (impl).DoSth）
+//   - 无法确定（跨包/多态）→ 回退指向接口类型节点（main → Service）
+//
+// 返回 (targetID, targetKind, node)；targetID 为空表示放弃建边。
+func (a *Adapter) concreteMethodFor(pkg *packages.Package, call *ast.CallExpr, callee *types.Func,
+	repo *domain.Repository) (domain.CanonicalID, domain.EntityKind, *domain.CodeEntity) {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return "", "", nil
+	}
+	t := a.concreteReturnType(pkg, sel.X)
+	named, ok := derefNamed(t)
+	if !ok {
+		return "", "", nil
+	}
+	if isInterfaceType(named) {
+		// 无法确定具体实现：指向接口类型节点
+		id := canonicalizer.GoSymbolID(named.Obj().Pkg().Path(), named.Obj().Name())
+		return id, domain.KindInterface, &domain.CodeEntity{ID: id, Kind: domain.KindInterface, Name: named.Obj().Name()}
+	}
+	// 具体类型：查找同名实现方法
+	for i := 0; i < named.NumMethods(); i++ {
+		m := named.Method(i)
+		if m.Name() != callee.Name() {
+			continue
+		}
+		mid, mkind := fnID(m)
+		if mid == "" {
+			continue
+		}
+		return mid, mkind, nodeFor(repo, pkg, m, mid, mkind, nil)
+	}
+	return "", "", nil
+}
+
+// concreteReturnType 解析表达式的"实际返回类型"：若声明返回类型是接口
+// （如 NewService() Service），分析函数体的 return 语句找具体类型
+// （return impl{} → impl）；无法确定时返回静态类型。
+func (a *Adapter) concreteReturnType(pkg *packages.Package, expr ast.Expr) types.Type {
+	t := pkg.TypesInfo.TypeOf(expr)
+	named, ok := derefNamed(t)
+	if !ok || !isInterfaceType(named) {
+		return t // 非接口：静态类型即可
+	}
+	// 接收者是函数调用：分析其 return
+	call, ok := expr.(*ast.CallExpr)
+	if !ok {
+		return t
+	}
+	fn, ok2 := resolveCallee(pkg.TypesInfo, call.Fun)
+	if !ok2 || fn == nil {
+		return t
+	}
+	decl := findFuncDecl(pkg, fn)
+	if decl == nil || decl.Body == nil {
+		return t
+	}
+	var found types.Type
+	ast.Inspect(decl.Body, func(n ast.Node) bool {
+		rs, isRs := n.(*ast.ReturnStmt)
+		if !isRs {
+			return true
+		}
+		for _, re := range rs.Results {
+			rt := pkg.TypesInfo.TypeOf(re)
+			rn, ok3 := derefNamed(rt)
+			if ok3 && !isInterfaceType(rn) {
+				found = rt
+				return false
+			}
+		}
+		return true
+	})
+	if found != nil {
+		return found
+	}
+	return t
+}
+
+// findFuncDecl 通过位置查找 *types.Func 对应的 FuncDecl（同包内）。
+func findFuncDecl(pkg *packages.Package, fn *types.Func) *ast.FuncDecl {
+	pos := pkg.Fset.PositionFor(fn.Pos(), false)
+	if pos.Filename == "" {
+		return nil
+	}
+	for _, f := range pkg.Syntax {
+		for _, d := range f.Decls {
+			fd, ok := d.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			p := pkg.Fset.PositionFor(fd.Pos(), false)
+			if p.Filename == pos.Filename && p.Line == pos.Line {
+				return fd
+			}
+		}
+	}
+	return nil
+}
+
+// derefNamed 解引用指针后取具名类型。
+func derefNamed(t types.Type) (*types.Named, bool) {
+	if p, ok := t.(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	n, ok := t.(*types.Named)
+	return n, ok
+}
+
+// isInterfaceType 判断具名类型是否为接口。
+func isInterfaceType(n *types.Named) bool {
+	if n == nil {
+		return false
+	}
+	_, ok := n.Underlying().(*types.Interface)
+	return ok
 }
 
 // isInterfaceMethod 判断 *types.Func 是否为接口方法（接收者类型是接口）。

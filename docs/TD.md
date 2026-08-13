@@ -713,6 +713,11 @@ v2.0 设计树封闭后，MVP 实现过程中补充与调整的能力记录。�
   不建 calls，建 passes_result 链（标注"持有返回参数"）：A→B、B→C
   （递归处理 callee 的实参；非调用参数仍走 argFuncRef 持有参数）。
   判定 isArgCall：最近的调用点 Args 里含当前 CallExpr。
+- **链式调用接口方法**（2026-08-13）：`NewService().DoSth()` 且
+  NewService 声明返回接口时——静态分析其函数体 return 语句：返回
+  具体类型（return impl{}）→ 调用边指向具体类型的实现方法
+  （main → (impl).DoSth）；无法确定（多态/跨包）→ 回退指向接口类型
+  节点（main → Service）。接口方法本身仍不建节点。
 - **REFERENCES 引用边未实现**：scip-go 的定义 occurrence 只覆盖符号名
   （不含函数体），引用无法归属到引用者，引用关系由 CALLS 边覆盖。
 - **signature 由 AST 适配器生成**（`types.ObjectString`）：SCIP v0.7.1
