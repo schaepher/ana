@@ -175,6 +175,10 @@ defer logger.Debug("exit <name>")
     前端三行布局/rowClass 的 implements 分类对调（接口出边=下行、
     实现者入边=上行），信息栏按视角拆分（接口=实现者（N）、
     实现者=实现（N））。重建需 clean 清库。
+    **嵌套调用**：参数位置的调用（isArgCall 判定）不建 calls——
+    handleNestedArg 递归建 passes_result（"持有返回参数"）：A(B(C()))
+    → A→B、B→C；callee 的非调用实参（函数引用）走 argFuncRef 持有
+    参数（passes_to）。
     **接口整体节点**：接口方法（desc[2] 为 Term）不建独立节点——
     canonicalizer 标记 IsInterfaceMethod；SCIP 适配器跳过节点与方法级
     implements；AST 适配器 isInterfaceMethod（接收者类型是接口）跳过

@@ -585,7 +585,7 @@ func (r *Repo) Expand(id domain.CanonicalID) (facts []*domain.Fact, nodes []*dom
 	rows, err := r.Query(`
 SELECT source_id, target_id, kind, tool_source, confidence, metadata
 FROM edges
-WHERE (source_id = ? OR target_id = ?) AND kind IN ('calls', 'implements', 'imports', 'initializes', 'uses', 'passes_to', 'of_type', 'has_method')
+WHERE (source_id = ? OR target_id = ?) AND kind IN ('calls', 'implements', 'imports', 'initializes', 'uses', 'passes_to', 'passes_result', 'of_type', 'has_method')
 LIMIT 500`, string(id), string(id))
 	if err != nil {
 		return nil, nil, fmt.Errorf("expand %s: %w", id, err)

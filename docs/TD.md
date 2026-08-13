@@ -707,8 +707,12 @@ v2.0 设计树封闭后，MVP 实现过程中补充与调整的能力记录。�
   struct（排除 map/slice 等复合字面量）；跨函数参数流暂不追踪。
 - **函数作为参数传入**（回调）：`mux.HandleFunc("/", handler)` 等场景，
   参数函数（Ident / 方法引用 s.M / `http.HandlerFunc(f)` 解包）→ 接收
-  函数（passes_to 边）。接收者可为外部框架函数（如 net/http 的
-  HandleFunc），为其建轻量节点（file_path 为空）使关系可见。
+  函数（passes_to 边，标注"持有参数"）。接收者可为外部框架函数（如
+  net/http 的 HandleFunc），为其建轻量节点（file_path 为空）使关系可见。
+- **嵌套调用持有返回参数**（2026-08-13）：`A(B(C()))` 参数位置的调用
+  不建 calls，建 passes_result 链（标注"持有返回参数"）：A→B、B→C
+  （递归处理 callee 的实参；非调用参数仍走 argFuncRef 持有参数）。
+  判定 isArgCall：最近的调用点 Args 里含当前 CallExpr。
 - **REFERENCES 引用边未实现**：scip-go 的定义 occurrence 只覆盖符号名
   （不含函数体），引用无法归属到引用者，引用关系由 CALLS 边覆盖。
 - **signature 由 AST 适配器生成**（`types.ObjectString`）：SCIP v0.7.1

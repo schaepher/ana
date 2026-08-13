@@ -215,6 +215,11 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 		if callerID == "" {
 			return true
 		}
+		// 参数位置的调用（如 A(B(C())) 里的 B(C())）：由外层调用处理为
+		// "持有返回参数"链，不建 calls
+		if isArgCall(stack, call) {
+			return true
+		}
 
 		// 对象使用处：x.Method()（x 是初始化的对象）→ uses 边（对象 → 方法）
 		if sel, isSel := call.Fun.(*ast.SelectorExpr); isSel {
@@ -236,6 +241,12 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 		// 对象去处：f(x) / f(&T{}) → passes_to 边（对象 → 接收函数）
 		if callee.Pkg() != nil && isInModule(callee.Pkg().Path(), repo.Module) {
 			calleeID, calleeKind := fnID(callee)
+			// 参数位置的嵌套调用：接收者持有返回参数（A(B(C)) → A→B、B→C）
+			for _, arg := range call.Args {
+				if inner, isCall := arg.(*ast.CallExpr); isCall {
+					a.handleNestedArg(pkg, inner, calleeID, emit, repo)
+				}
+			}
 			for _, arg := range call.Args {
 				var objID domain.CanonicalID
 				var ok2 bool
@@ -789,6 +800,79 @@ func findCallerDecl(stack []ast.Node) *ast.FuncDecl {
 		}
 	}
 	return nil
+}
+
+// isArgCall 判断 call 是否处于另一个调用点的参数位置（嵌套调用，
+// 如 A(B(C())) 里的 B(C())）。参数位置的调用由外层处理为"持有返回
+// 参数"链，不建 calls。
+func isArgCall(stack []ast.Node, call *ast.CallExpr) bool {
+	logger := zap.L()
+	logger.Debug("enter isArgCall")
+	defer logger.Debug("exit isArgCall")
+	for i := len(stack) - 1; i >= 0; i-- {
+		outer, ok := stack[i].(*ast.CallExpr)
+		if !ok || outer == call {
+			continue
+		}
+		for _, arg := range outer.Args {
+			if arg == call {
+				return true
+			}
+		}
+		return false // 最近的调用点不含当前 call
+	}
+	return false
+}
+
+// handleNestedArg 处理参数位置的嵌套调用：接收者持有返回参数。
+// A(B(C())) → A→B、B→C（passes_result），参数位置的调用不建 calls。
+func (a *Adapter) handleNestedArg(pkg *packages.Package, call *ast.CallExpr, receiverID domain.CanonicalID,
+	emit domain.EmitFunc, repo *domain.Repository) {
+	logger := zap.L()
+	logger.Debug("enter (Adapter).handleNestedArg")
+	defer logger.Debug("exit (Adapter).handleNestedArg")
+	callee, ok := resolveCallee(pkg.TypesInfo, call.Fun)
+	if !ok {
+		return
+	}
+	if callee.Pkg() == nil || !isInModule(callee.Pkg().Path(), repo.Module) {
+		return
+	}
+	calleeID, calleeKind := fnID(callee)
+	if calleeID == "" || calleeID == receiverID {
+		return
+	}
+	_ = emit(domain.Item{Node: nodeFor(repo, pkg, callee, calleeID, calleeKind, nil)})
+	_ = emit(domain.Item{Fact: &domain.Fact{
+		SourceID:   receiverID, // 接收者持有返回参数
+		TargetID:   calleeID,
+		Kind:       domain.FactPassesResult,
+		ToolSource: domain.ToolCodeGraph,
+		Confidence: 0.8,
+	}})
+	// 递归处理 callee 的实参：调用 → 持有返回参数；函数引用 → 持有参数
+	for _, inner := range call.Args {
+		if ic, isCall := inner.(*ast.CallExpr); isCall {
+			a.handleNestedArg(pkg, ic, calleeID, emit, repo)
+			continue
+		}
+		fn := argFuncRef(pkg, inner)
+		if fn == nil || fn.Pkg() == nil || !isInModule(fn.Pkg().Path(), repo.Module) {
+			continue
+		}
+		paramID, paramKind := fnID(fn)
+		if paramID == "" || paramID == calleeID {
+			continue
+		}
+		_ = emit(domain.Item{Node: nodeFor(repo, pkg, fn, paramID, paramKind, nil)})
+		_ = emit(domain.Item{Fact: &domain.Fact{
+			SourceID:   calleeID, // 接收者持有参数
+			TargetID:   paramID,
+			Kind:       domain.FactPassesTo,
+			ToolSource: domain.ToolCodeGraph,
+			Confidence: 0.8,
+		}})
+	}
 }
 
 // isInterfaceMethod 判断 *types.Func 是否为接口方法（接收者类型是接口）。

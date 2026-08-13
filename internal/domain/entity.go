@@ -40,6 +40,7 @@ const (
 	FactInitializes FactKind = "initializes" // struct 实例化（&T{} / T{} / new(T)）
 	FactUses        FactKind = "uses"        // 对象的方法被调用（使用处）
 	FactPassesTo    FactKind = "passes_to"   // 对象被传给其他函数（去处）
+	FactPassesResult FactKind = "passes_result" // 接收者持有返回参数（A(B(C)) 嵌套调用）
 	FactOfType      FactKind = "of_type"      // 对象 → 其 struct 类型
 	FactHasMethod   FactKind = "has_method"   // receiver 类型 → 其方法（方法线）
 )

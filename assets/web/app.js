@@ -49,6 +49,7 @@
     initializes: [1, 3],
     uses: [6, 2],
     passes_to: [2, 2, 2, 4],
+    passes_result: [2, 2, 2, 4],
     of_type: [1, 4, 1, 4],
     has_method: [5, 2]
   };
@@ -59,6 +60,7 @@
     initializes: '初始化',
     uses: '使用',
     passes_to: '持有参数',
+    passes_result: '持有返回参数',
     of_type: '类型',
     has_method: '拥有方法',
     data_flows_to: '数据流'
@@ -1019,7 +1021,7 @@
   };
   var FLAG_LABEL = { main: 'main 入口', http: 'HTTP 服务', grpc: 'gRPC 服务', framework: '框架回调' };
   // 关系分组展示顺序（未知 kind 追加在最后）
-  var REL_ORDER = ['calls', 'implements', 'imports', 'initializes', 'uses', 'passes_to', 'of_type', 'has_method', 'data_flows_to'];
+  var REL_ORDER = ['calls', 'implements', 'imports', 'initializes', 'uses', 'passes_to', 'passes_result', 'of_type', 'has_method', 'data_flows_to'];
 
   // showNodePanel 单击节点：复用 /api/expand 取节点的完整关系后渲染信息栏
   function showNodePanel(id) {
@@ -1196,7 +1198,7 @@
 
   // 可配置：展开时移除"同侧且属于这些关系类型"的兄弟节点。
   // 默认仅 calls（调用）；选择持久化到 localStorage。
-  var HIDE_OPTIONS = ['calls', 'has_method', 'implements', 'initializes', 'imports', 'uses', 'passes_to', 'of_type', 'data_flows_to'];
+  var HIDE_OPTIONS = ['calls', 'has_method', 'implements', 'initializes', 'imports', 'uses', 'passes_to', 'passes_result', 'of_type', 'data_flows_to'];
   var hideKinds = new Set();
   (function initHideKinds() {
     var saved = null;
