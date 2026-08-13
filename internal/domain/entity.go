@@ -23,6 +23,11 @@ const (
 	KindInterface EntityKind = "interface"
 	KindCommit    EntityKind = "commit"
 	KindObject    EntityKind = "object" // struct 实例化产生的对象
+
+	// 字段追溯（SSA 适配器，field_trace.md §4.1）
+	KindFieldAccess    EntityKind = "field_access"    // 结构体字段访问（实例槽）
+	KindSSAValue       EntityKind = "ssa_value"       // SSA 值（参数/局部/Phi/Alloc 等）
+	KindExternalSummary EntityKind = "external_summary" // 外部库摘要函数
 )
 
 // FactKind 事实（关系）种类，对应 edges.kind 列。
@@ -43,6 +48,14 @@ const (
 	FactPassesResult FactKind = "passes_result" // 接收者持有返回参数（A(B(C)) 嵌套调用）
 	FactOfType      FactKind = "of_type"      // 对象 → 其 struct 类型
 	FactHasMethod   FactKind = "has_method"   // receiver 类型 → 其方法（方法线）
+
+	// 字段追溯（SSA 适配器，field_trace.md §4.2）
+	FactArgument      FactKind = "argument"       // 实参节点 → 形参节点（跨过程）
+	FactReturns       FactKind = "returns"        // 被调返回值 → 调用点接收变量
+	FactAlias         FactKind = "alias"          // 指针别名（may_alias，conf 0.8）
+	FactPhiOperand    FactKind = "phi_operand"    // Phi 节点 → 前驱值
+	FactIndirectWrite FactKind = "indirect_write" // 调用者函数 → 被调函数/虚拟字段节点
+	FactSummaryIO     FactKind = "summary_io"     // 外部摘要函数 → 字段路径
 )
 
 // 工具来源标识，对应 edges.tool_source 列。
@@ -50,6 +63,7 @@ const (
 	ToolSCIP      = "scip"      // 符号与引用，置信度 1.0
 	ToolCodeGraph = "codegraph" // 调用图与依赖图，置信度 0.8
 	ToolGit       = "git"       // Git 历史，置信度 1.0
+	ToolSSA       = "ssa"       // 字段追溯（SSA def-use，置信度 1.0；alias 0.8）
 )
 
 // CanonicalID 是 Code Entity 的内部唯一标识（值对象）。

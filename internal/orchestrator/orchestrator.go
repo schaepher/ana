@@ -21,6 +21,7 @@ import (
 	"github.com/schaepher/codeintel/internal/infrastructure/ast"
 	"github.com/schaepher/codeintel/internal/infrastructure/git"
 	"github.com/schaepher/codeintel/internal/infrastructure/scip"
+	"github.com/schaepher/codeintel/internal/infrastructure/ssa"
 	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
 	"github.com/schaepher/codeintel/internal/logging"
 	"go.uber.org/zap"
@@ -69,6 +70,7 @@ func New(repo *domain.Repository, db *sqlite.DB) *Orchestrator {
 			&scip.Adapter{},
 			&ast.Adapter{},
 			&git.Adapter{},
+			&ssa.Adapter{},
 		},
 	}
 }
