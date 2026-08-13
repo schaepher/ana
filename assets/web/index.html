@@ -31,6 +31,24 @@
     }
     #kind-legend.hidden { display: none; }
     #kind-legend .ki { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #333; padding: 3px 0; }
+    #hide-legend-wrap { position: relative; }
+    #hide-legend-btn {
+      background: #2a2a3d; color: #c9c9d4; border: 1px solid #43435c;
+      border-radius: 4px; font-size: 12px; padding: 2px 8px; cursor: pointer;
+    }
+    #hide-legend-btn:hover { color: #fff; }
+    #hide-legend {
+      position: absolute; top: calc(100% + 6px); right: 0; min-width: 170px;
+      background: #fff; border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.2);
+      padding: 8px 10px; z-index: 30;
+    }
+    #hide-legend.hidden { display: none; }
+    #hide-legend .hl-tip { font-size: 11px; color: #86909c; margin-bottom: 6px; }
+    #hide-legend label {
+      display: flex; align-items: center; gap: 6px; font-size: 12px;
+      color: #333; padding: 3px 0; cursor: pointer;
+    }
+    #hide-legend input { cursor: pointer; }
     #search-box { position: relative; flex: 1; max-width: 420px; margin: 0 16px; }
     #entry-input {
       width: 100%; padding: 6px 12px; border-radius: 6px; border: 1px solid #43435c;
@@ -146,6 +164,13 @@
       <div id="kind-legend-wrap">
         <button id="kind-legend-btn" title="节点类型颜色">节点类型 ▾</button>
         <div id="kind-legend" class="hidden"></div>
+      </div>
+      <div id="hide-legend-wrap">
+        <button id="hide-legend-btn" title="展开时隐藏哪些关系类型的兄弟">隐藏规则 ▾</button>
+        <div id="hide-legend" class="hidden">
+          <div class="hl-tip">展开时隐藏以下关系类型的兄弟节点</div>
+          <div id="hide-list"></div>
+        </div>
       </div>
     </div>
   </div>

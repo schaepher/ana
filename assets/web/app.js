@@ -478,9 +478,10 @@
       var targetClass = rowClass(parent, id);
       var siblings = rec.nodes.filter(function (cid) {
         if (cid === id || expandedMap.has(cid)) return false;
-        // 只隐藏调用关系的同侧兄弟：has_method/implements 等关联
-        // （接收者/接口）不是调用链分支，即使同侧也不隐藏
-        if (edgeKind(parent, cid) !== 'calls') return false;
+        // 按配置只隐藏勾选的关系类型（默认仅 calls）：has_method/
+        // implements 等未勾选的关联（接收者/接口）即使同侧也不隐藏
+        var k = edgeKind(parent, cid);
+        if (k === null || !hideKinds.has(k)) return false;
         if (targetClass === null) return true; // 方向未知：按旧行为移除
         return rowClass(parent, cid) === targetClass;
       });
@@ -1112,6 +1113,42 @@
   document.addEventListener('click', function () {
     kindLegend.classList.add('hidden');
   });
+
+  /* ---------- 展开隐藏规则配置 ---------- */
+
+  // 可配置：展开时移除"同侧且属于这些关系类型"的兄弟节点。
+  // 默认仅 calls（调用）；选择持久化到 localStorage。
+  var HIDE_OPTIONS = ['calls', 'has_method', 'implements', 'initializes', 'imports', 'uses', 'passes_to', 'of_type', 'data_flows_to'];
+  var hideKinds = new Set();
+  (function initHideKinds() {
+    var saved = null;
+    try { saved = JSON.parse(localStorage.getItem('codeintel.hideKinds')); } catch (e) {}
+    if (Array.isArray(saved) && saved.length) {
+      saved.forEach(function (k) { if (HIDE_OPTIONS.indexOf(k) >= 0) hideKinds.add(k); });
+    } else {
+      hideKinds.add('calls'); // 默认：只隐藏调用关系
+    }
+    var list = document.getElementById('hide-list');
+    HIDE_OPTIONS.forEach(function (k) {
+      var label = document.createElement('label');
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = hideKinds.has(k);
+      cb.addEventListener('change', function () {
+        if (cb.checked) hideKinds.add(k); else hideKinds.delete(k);
+        localStorage.setItem('codeintel.hideKinds', JSON.stringify(Array.from(hideKinds)));
+      });
+      label.appendChild(cb);
+      label.appendChild(document.createTextNode(EDGE_KIND_LABEL[k] || k));
+      list.appendChild(label);
+    });
+  })();
+  var hideLegend = document.getElementById('hide-legend');
+  document.getElementById('hide-legend-btn').addEventListener('click', function (evt) {
+    evt.stopPropagation();
+    hideLegend.classList.toggle('hidden');
+  });
+  document.addEventListener('click', function () { hideLegend.classList.add('hidden'); });
 
   /* ---------- 侧边栏拖拽调整宽度 ---------- */
 
