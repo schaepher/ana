@@ -83,7 +83,12 @@
 ### 1.9 配置与图例
 - hideKinds（隐藏规则下拉）：勾选展开时隐藏的关系类型，
   localStorage（codeintel.hideKinds），默认 {calls}
-- kind-legend（节点类型颜色图例下拉）
+- **统一图例**（「图例 ▾」下拉，2026-08-13 由节点类型下拉扩为四节）：
+  ① 节点类型（KIND_COLOR×KIND_LABEL 填充色圆点）② 入口标记
+  （FLAG_COLOR×FLAG_LABEL 描边色方块）③ 连线类型（EDGE_KIND_LINE×
+  EDGE_KIND_LABEL，内联 SVG 画线：stroke-dasharray 取线型数组 +
+  三角箭头）④ 选中态（出边蓝/入边红/默认黑实线）。头部不再有
+  静态图例行，只有「图例 ▾」「隐藏规则 ▾」两按钮
 
 ### 1.10 工具函数
 - `displayName`：方法 (T).m；函数 (pkg).f（从 canonical ID 取包名）

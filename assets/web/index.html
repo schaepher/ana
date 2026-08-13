@@ -25,12 +25,19 @@
     }
     #kind-legend-btn:hover { color: #fff; }
     #kind-legend {
-      position: absolute; top: calc(100% + 6px); right: 0; min-width: 132px;
+      position: absolute; top: calc(100% + 6px); right: 0; min-width: 190px;
       background: #fff; border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.2);
-      padding: 8px 10px; z-index: 30;
+      padding: 8px 10px; z-index: 30; max-height: calc(100vh - 80px); overflow-y: auto;
     }
     #kind-legend.hidden { display: none; }
+    #kind-legend .lg-sec { font-size: 11px; color: #86909c; font-weight: 600; margin: 8px 0 3px; }
+    #kind-legend .lg-sec:first-child { margin-top: 0; }
     #kind-legend .ki { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #333; padding: 3px 0; }
+    #kind-legend .ki .lbl { flex: 1; }
+    #kind-legend .sq {
+      width: 10px; height: 10px; border-radius: 2px; display: inline-block;
+      flex: 0 0 10px; background: #fff;
+    }
     #hide-legend-wrap { position: relative; }
     #hide-legend-btn {
       background: #2a2a3d; color: #c9c9d4; border: 1px solid #43435c;
@@ -159,16 +166,8 @@
       <ul id="entry-list"></ul>
     </div>
     <div class="legend">
-      <span><i class="dot" style="background:#eb2f96"></i>main 入口</span>
-      <span><i class="dot" style="background:#fa541c"></i>HTTP 服务</span>
-      <span><i class="dot" style="background:#f5222d"></i>gRPC 服务</span>
-      <span><i class="dot" style="background:#531dab"></i>框架回调</span>
-      <span style="color:#aaa">—</span>
-      <span><i class="dot" style="background:#1677ff"></i>选中节点出边</span>
-      <span><i class="dot" style="background:#f5222d"></i>选中节点入边</span>
-      <span><i class="dot" style="background:#000"></i>默认</span>
       <div id="kind-legend-wrap">
-        <button id="kind-legend-btn" title="节点类型颜色">节点类型 ▾</button>
+        <button id="kind-legend-btn" title="节点类型 / 入口标记 / 连线类型 / 选中态图例">图例 ▾</button>
         <div id="kind-legend" class="hidden"></div>
       </div>
       <div id="hide-legend-wrap">
