@@ -739,3 +739,55 @@ func mkParamNode(id, name string, index int, funcID string) *domain.CodeEntity {
 	n.Properties["func_id"] = funcID
 	return n
 }
+
+func TestExpandSSAValueParamBridgesFunction(t *testing.T) {
+	r := newTestRepo(t)
+	funcID := "symbol:go:example.com/m:f"
+	fn := node(funcID, "function", "f", "f.go")
+	// 参数 ssa_value（receiver 参数）+ 下游字段访问
+	recvVal := node(funcID+"#m", "ssa_value", "m", "f.go")
+	recvVal.Properties["origin_kind"] = "receiver"
+	recvVal.Properties["func_id"] = funcID
+	fa := faNodeAccess(funcID+"#m.cfg.write@3", funcID, "example.com/m.T.cfg", "m.cfg", 3, "write")
+	save(t, r, []*domain.CodeEntity{fn, recvVal, fa},
+		[]*domain.Fact{{SourceID: recvVal.ID, TargetID: fa.ID, Kind: domain.FactDataFlowsTo,
+			ToolSource: domain.ToolSSA, Confidence: 1}})
+
+	facts, neighbors, err := r.Expand(recvVal.ID)
+	if err != nil {
+		t.Fatalf("Expand: %v", err)
+	}
+	// 所属函数桥边：函数 → 参数值（has_param）
+	bridged := false
+	for _, f := range facts {
+		if f.SourceID == fn.ID && f.TargetID == recvVal.ID && f.Kind == domain.FactHasParam {
+			bridged = true
+		}
+	}
+	if !bridged {
+		t.Errorf("func bridge edge missing: %+v", facts)
+	}
+	// 邻居含所属函数 + 下游字段访问
+	nid := map[string]bool{}
+	for _, n := range neighbors {
+		nid[string(n.ID)] = true
+	}
+	if !nid[string(fn.ID)] || !nid[string(fa.ID)] {
+		t.Errorf("neighbors = %v, want fn + fa", nid)
+	}
+
+	// 非参数 ssa_value（call_result）不加桥
+	callVal := node(funcID+"#t5", "ssa_value", "t5", "f.go")
+	callVal.Properties["origin_kind"] = "call_result"
+	callVal.Properties["func_id"] = funcID
+	save(t, r, []*domain.CodeEntity{callVal}, nil)
+	facts, _, err = r.Expand(callVal.ID)
+	if err != nil {
+		t.Fatalf("Expand callVal: %v", err)
+	}
+	for _, f := range facts {
+		if f.Kind == domain.FactHasParam {
+			t.Errorf("non-param ssa_value must not bridge function: %+v", facts)
+		}
+	}
+}

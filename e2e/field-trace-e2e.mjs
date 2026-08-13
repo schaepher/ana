@@ -160,6 +160,20 @@ if (faInfo) {
     'panel=' + faPanel.slice(0, 60).replace(/\n/g, ' '));
 }
 
+// 11. 链上参数 ssa_value 可展开到所属函数（has_param 桥边）
+const M_VALUE_ID = FN_ID + '#m';
+const expVal = await api('/api/expand?id=' + encodeURIComponent(M_VALUE_ID));
+check('ssa_value 参数展开返回所属函数桥边',
+  expVal.edges.some((e) => e.kind === 'has_param' && e.target === M_VALUE_ID) &&
+  expVal.neighbors.some((n) => (n.kind === 'function' || n.kind === 'method') && n.name === '(Manager).Run'),
+  'edges=' + expVal.edges.map((e) => e.kind).join(','));
+await page.evaluate((id) => window.__codeintelGraph.emit('node:dblclick', { target: { id } }), M_VALUE_ID);
+await page.waitForTimeout(1000);
+const edgeKinds = await page.evaluate(() => window.__codeintelGraph.getData().edges.map((e) => e.data.kind));
+check('双击参数值节点后画布出现 has_param 边（回到所属函数）',
+  edgeKinds.includes('has_param'),
+  'edges=' + edgeKinds.join(','));
+
 console.log('\n===== 字段追溯 e2e: ' + passed + ' passed, ' + failed + ' failed =====');
 await browser.close();
 process.exit(failed ? 1 : 0);

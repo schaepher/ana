@@ -617,11 +617,23 @@ func (r *Repo) Expand(id domain.CanonicalID) (facts []*domain.Fact, nodes []*dom
 	// 使展开能返回该参数的数据流上下游（field_trace.md 参数展开）
 	queryID := string(id)
 	var bridgeID string // 桥边：parameter → ssa_value（不落库，仅响应）
-	if n, gerr := r.GetSymbol(id); gerr == nil && n.Kind == domain.KindParameter {
+	cur, gerr := r.GetSymbol(id)
+	if gerr == nil && cur.Kind == domain.KindParameter {
 		queryID = paramValueID(string(id))
 		if queryID != "" {
 			if _, gerr := r.GetSymbol(domain.CanonicalID(queryID)); gerr == nil {
 				bridgeID = queryID // ssa_value 参数节点存在才搭桥
+			}
+		}
+	}
+	// ssa_value 参数（param/receiver）：附加所属函数桥边（函数 → 参数值，
+	// has_param，不落库）——链上参数可展开到其所属函数
+	var funcBridgeID string
+	if gerr == nil && cur.Kind == domain.KindSSAValue {
+		ok := cur.Property("origin_kind") == "param" || cur.Property("origin_kind") == "receiver"
+		if ok && cur.Property("func_id") != "" {
+			if _, gerr := r.GetSymbol(domain.CanonicalID(cur.Property("func_id"))); gerr == nil {
+				funcBridgeID = cur.Property("func_id")
 			}
 		}
 	}
@@ -651,6 +663,17 @@ LIMIT 500`, queryID, queryID, queryID, queryID)
 			SourceID:   id,
 			TargetID:   domain.CanonicalID(bridgeID),
 			Kind:       domain.FactDataFlowsTo,
+			ToolSource: domain.ToolSSA,
+			Confidence: 1.0,
+		})
+	}
+	// ssa_value 参数桥边：所属函数 → 参数值（has_param），
+	// 展开参数节点可回到所属函数继续探索
+	if funcBridgeID != "" {
+		facts = append(facts, &domain.Fact{
+			SourceID:   domain.CanonicalID(funcBridgeID),
+			TargetID:   id,
+			Kind:       domain.FactHasParam,
 			ToolSource: domain.ToolSSA,
 			Confidence: 1.0,
 		})
