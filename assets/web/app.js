@@ -684,6 +684,9 @@
     var known = [];
     rowY.forEach(function (_, d) { known.push(d); });
     known.sort(function (a, b) { return a - b; });
+    // 全量布局（无 prevY，如收起）兜底：相对最小深度偏移
+    var minD = Infinity;
+    depths.forEach(function (d) { if (d < minD) minD = d; });
     depths.forEach(function (d) {
       if (rowY.has(d)) return;
       var lo = null, hi = null;
@@ -698,7 +701,7 @@
       } else if (lo !== null) {
         rowY.set(d, rowY.get(lo) + (d - lo) * rowGap); // 底部扩展
       } else {
-        rowY.set(d, startY); // 全部为新节点（无 prevY 时）
+        rowY.set(d, startY + (d - minD) * rowGap); // 全量布局：按深度分层
       }
     });
     var updates = [];

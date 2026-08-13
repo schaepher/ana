@@ -145,6 +145,10 @@ defer logger.Debug("exit <name>")
     父）按边定位——calls 出边（该节点是 caller）在相邻节点上一行、其余
     下一行，保证箭头始终向下；无法定位才追加最后一行（曾一律丢最后行
     导致父节点掉到底部、箭头朝上）。
+    **全量重排兜底**：relayoutTree 无 prevY（收起/全量）时按 minD 偏移
+    分层（startY + (d-minD)*rowGap）——曾写坏为全部行落 startY=80，
+    收起后所有节点堆一行、箭头全向上（用 audit 探针：每步检查所有
+    calls 边 source.y < target.y）。
     **信息栏**：右侧常驻 320px 侧边栏（#sidepanel），单击节点复用
     /api/expand 渲染分组信息（基本/文档注释/提交/关系按类型）。**坑**：
     G6 v5 给容器设内联 position:relative 会覆盖样式表的 absolute——
