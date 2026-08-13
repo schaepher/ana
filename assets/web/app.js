@@ -54,7 +54,7 @@
   };
   var EDGE_KIND_LABEL = {
     calls: '调用',
-    implements: '实现',
+    implements: '拥有实现',
     imports: '导入',
     initializes: '初始化',
     uses: '使用',
