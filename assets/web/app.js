@@ -629,20 +629,46 @@
         queue.push(cid);
       });
     }
-    // 未在展开树中的节点（如共享节点）追加到最后一行
-    var tail = [];
+    // 未在展开树中的节点（如剪枝/收起后保留的共享节点）按与已分层
+    // 节点的边关系定位：calls 入边（其它节点调用它）在其上一行、
+    // 其余关系在下一行——保证箭头始终向下，父节点不会掉到底部。
+    // 无法定位的（与任何已分层节点无边）才追加到最后一行。
+    var tailSet = new Set();
     data.nodes.forEach(function (n) {
-      if (!depths.has(n.id)) tail.push(n.id);
+      if (!depths.has(n.id)) tailSet.add(n.id);
     });
+    var progressed = true;
+    while (tailSet.size && progressed) {
+      progressed = false;
+      tailSet.forEach(function (tid) {
+        var e = (data.edges || []).find(function (x) {
+          return (x.source === tid || x.target === tid) &&
+            depths.has(x.source === tid ? x.target : x.source);
+        });
+        if (!e) return;
+        var other = e.source === tid ? e.target : e.source;
+        var od = depths.get(other);
+        var kind = (e.data && e.data.kind) || '';
+        if (kind === 'calls') {
+          // 我调用其它（我是 caller）→ 在其上一行；其它调用我 → 下一行
+          depths.set(tid, e.source === tid ? od - 1 : od + 1);
+        } else {
+          depths.set(tid, od + 1); // 其余关系 → 下一行
+        }
+        tailSet.delete(tid);
+        progressed = true;
+      });
+    }
     // 按行号分组
     var rows = new Map();
     depths.forEach(function (d, nid) {
       if (!rows.has(d)) rows.set(d, []);
       rows.get(d).push(nid);
     });
+    var tail = Array.from(tailSet);
     if (tail.length) {
       var maxD = 0;
-      rows.forEach(function (_, d) { if (d > maxD) maxD = d; });
+      depths.forEach(function (d) { if (d > maxD) maxD = d; });
       rows.set(maxD + 1, tail);
     }
     var w = container.clientWidth || 1200;

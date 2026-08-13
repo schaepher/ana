@@ -141,6 +141,10 @@ defer logger.Debug("exit <name>")
     新节点行插值；prevY 必须在 addNode 前收集（否则新节点网格位置被当
     已有位置）；updateNodeData 无返回（非 promise），fitView 须 setTimeout
     等动画完成（否则包围盒按旧位置算，缩放无效）；收起走全量重排。
+    **无记录节点定位**：不在展开树中的节点（剪枝后作为邻居重新出现的
+    父）按边定位——calls 出边（该节点是 caller）在相邻节点上一行、其余
+    下一行，保证箭头始终向下；无法定位才追加最后一行（曾一律丢最后行
+    导致父节点掉到底部、箭头朝上）。
     **信息栏**：右侧常驻 320px 侧边栏（#sidepanel），单击节点复用
     /api/expand 渲染分组信息（基本/文档注释/提交/关系按类型）。**坑**：
     G6 v5 给容器设内联 position:relative 会覆盖样式表的 absolute——
