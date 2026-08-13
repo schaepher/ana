@@ -526,3 +526,34 @@ func TestTraceForwardUsagePoint(t *testing.T) {
 		t.Errorf("write node should be usage point at depth 2: %+v", last)
 	}
 }
+
+func TestGetSymbolByNameExcludesFieldTrace(t *testing.T) {
+	r := newTestRepo(t)
+	funcID := "symbol:go:example.com/m:f"
+	nodes := []*domain.CodeEntity{
+		node("symbol:go:example.com/m:run", "function", "runLoop", "run.go"),
+		// 字段追溯内部节点：不参与符号搜索
+		faNode(funcID+"#cfg.write@5", funcID, "example.com/m.T.cfg", "cfg", 5),
+		svNode(funcID+"#t0", funcID),
+	}
+	save(t, r, nodes, nil)
+
+	// 精确匹配：搜 "cfg" 不应命中 field_access（instance_path=cfg）
+	got, err := r.GetSymbolByName("cfg")
+	if err != nil {
+		t.Fatalf("GetSymbolByName: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("search cfg = %+v, want none (field_access excluded)", got)
+	}
+	// 模糊匹配：搜 "run" 仍命中函数，且不含 ssa_value（t0 不匹配 "run"，验证不过滤正常符号）
+	got, err = r.GetSymbolByName("run")
+	if err != nil || len(got) != 1 || got[0].Name != "runLoop" {
+		t.Errorf("search run = %+v, err %v", got, err)
+	}
+	// 按 ID 模糊搜索 field_access 的 ID 也不应返回
+	got, err = r.GetSymbolByName(funcID + "#cfg")
+	if err != nil || len(got) != 0 {
+		t.Errorf("search by field_access id = %+v, err %v", got, err)
+	}
+}

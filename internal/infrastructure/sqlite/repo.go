@@ -218,9 +218,12 @@ func (r *Repo) GetSymbolByName(name string) ([]*domain.CodeEntity, error) {
 	logger := zap.L()
 	logger.Debug("enter (Repo).GetSymbolByName")
 	defer logger.Debug("exit (Repo).GetSymbolByName")
+	// 排除字段追溯的内部节点（field_access / ssa_value / external_summary）：
+	// 它们是字段访问点与 SSA 临时值，不是可搜索的代码符号（field_trace.md §4）
+	const exclude = "kind NOT IN ('field_access','ssa_value','external_summary')"
 	// 精确匹配
 	rows, err := r.Query(
-		"SELECT id, kind, name, file_path, line_start, line_end, properties FROM nodes WHERE name = ? ORDER BY name LIMIT 50",
+		"SELECT id, kind, name, file_path, line_start, line_end, properties FROM nodes WHERE name = ? AND "+exclude+" ORDER BY name LIMIT 50",
 		name)
 	if err != nil {
 		return nil, err
@@ -231,7 +234,7 @@ func (r *Repo) GetSymbolByName(name string) ([]*domain.CodeEntity, error) {
 	}
 	// 模糊匹配（名称或 canonical ID 包含）
 	rows, err = r.Query(
-		"SELECT id, kind, name, file_path, line_start, line_end, properties FROM nodes WHERE name LIKE ? OR id LIKE ? ORDER BY name LIMIT 50",
+		"SELECT id, kind, name, file_path, line_start, line_end, properties FROM nodes WHERE (name LIKE ? OR id LIKE ?) AND "+exclude+" ORDER BY name LIMIT 50",
 		"%"+name+"%", "%"+name+"%")
 	if err != nil {
 		return nil, err
