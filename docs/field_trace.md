@@ -22,6 +22,7 @@
 10. [实现路线图](#10-实现路线图)
 11. [测试策略](#11-测试策略)
 12. [附录：决策记录](#12-附录决策记录)
+14. [实现补充记录（v2.3）](#14-实现补充记录v23)
 
 ---
 
@@ -115,6 +116,8 @@ codeintel 已提供符号导航（SCIP）、调用图与影响分析（AST/go/pa
 | `field_access` | 结构体字段访问（实例槽） | `full_path`（类型限定路径，如 `github.com/x/payment.Request.Amount`）、`instance_path`（如 `req.Amount`）、`access_kind`（`read`/`write`）、`type_string`、`code_snippet`、`func_id`（所属函数 canonical id）、`is_external` |
 | `ssa_value` | 所有 SSA 值（参数、接收者、局部、全局、字面量、Phi、Alloc、Call 返回值等） | `origin_kind`（`param`/`local`/`receiver`/`global`/`literal`/`phi`/`alloc`/`call_result` 等）、`ssa_op`、`type_string`、`func_id` |
 | `external_summary` | 外部库摘要函数 | `summary_json`（声明读/写字段模式） |
+| `parameter` | 函数/方法签名参数（含接收者） | `type_string`、`index`（接收者为 -1）、`receiver`、`func_id` |
+| `result` | 函数/方法返回值（多返回按索引） | `type_string`、`index`、`func_id` |
 
 **不新增、复用现有**：`FILE` / `PACKAGE` / `FUNCTION` / `METHOD` / `STRUCT`（原设计的 `TYPE` 由 struct 承担，字段列表已由 AST 适配器写入 `properties.fields`）。
 
@@ -125,7 +128,9 @@ codeintel 已提供符号导航（SCIP）、调用图与影响分析（AST/go/pa
 **Canonical ID 规则（新增决策 Q68）**：
 - 函数作用域内的实例节点（`field_access` / `ssa_value`）：`symbol:go:<import_path>:<func_name>#<slot>`
   - `field_access` 的 slot = 实例路径（如 `req.Amount`）
-  - `ssa_value` 的 slot = SSA 名（如 `t0`）
+  - `ssa_value` 的 slot = SSA 名（如 `t0`）；展示名用 `instancePath` 还原源码变量链（Q73 补充）
+  - `parameter` 的 slot = `param.<name>`（接收者 `param.recv.<name>` 防重名）
+  - `result` 的 slot = `result`（多返回 `result.<idx>`）
   - `func_name` 与函数节点一致（方法统一 `(T).method`，值/指针接收者不区分）
   - 例：`symbol:go:github.com/x/payment:(Service).Process#req.Amount`
 - `external_summary`：`symbol:go:<import_path>:<func_name>`（外部函数不建 FUNCTION 节点，同格式不同 kind，无冲突）。
@@ -146,6 +151,8 @@ codeintel 已提供符号导航（SCIP）、调用图与影响分析（AST/go/pa
 | `indirect_write` | 调用者函数 → 被调函数/虚拟字段节点 | 调用者通过被调函数间接修改字段；项目内函数指向被调函数，外部摘要指向虚拟字段节点 | 1.0 |
 | `phi_operand` | Phi 节点 → 前驱值 | SSA Phi 的每个分支输入 | 1.0 |
 | `summary_io` | 外部摘要函数 → 字段路径 | 声明该函数读/写某字段（摘要传播用） | 0.8 |
+| `has_param` | 函数 → 签名参数节点 | 参数/返回在图内展开（接收者含在内） | 1.0 |
+| `has_result` | 函数 → 返回值节点 | 同上 | 1.0 |
 
 **复用现有、不新增**：
 - `calls`：SSA 解析出的调用关系并入现有 calls 边（调用类型 `static`/`interface`/`function_value`/`closure`/`goroutine`/`defer` 标注于 metadata；动态调用可为多条可能目标边）。
@@ -353,7 +360,7 @@ codeintel/
 │   │       └── testdata/            # 测试用小型 Go 模块（对齐 ast 适配器测试方式）
 │   ├── cli/                    # 现状；query 增加 fields/trace-backward/trace-forward
 │   │   └── export.go           # 新增 S4 导出命令
-│   └── server/                 # 现状（v2.2 不扩展 HTTP API，仅 CLI）
+│   └── server/                 # /api/expand 图探索 + /api/flows 字段数据流文本树
 ├── integration/                # 现状；扩展字段追溯端到端
 ├── docs/TD.md                  # v2.0 设计文档 + §12 补充记录（v2.2 追加本能力）
 ```
@@ -399,6 +406,7 @@ codeintel/
 - **集成测试**：integration 套件扩展——init 构建后执行 `query fields` / `trace-backward` / `trace-forward` / `export` 端到端断言（对齐现有 TestCLIFullFlow 模式）。
 - **SQL 查询测试**：单独测试递归 CTE 在 go-sqlite3 上的正确性（深度、去重、环、深度上限）。
 - **性能基准**：入口可达子图模式下的构建时间与 DB 大小记录于 TD.md §12 补充记录。
+- **前端 e2e（playwright）**：`make e2e E2E_REPO=<仓库>`（默认 ../radar）——参数/返回展开、节点配色、字段数据流文本树、定义顺序、所属函数显示、桥边跳转等 19 项断言（e2e/field-trace-e2e.mjs）。
 
 ---
 
@@ -442,4 +450,45 @@ SSA 语义与映射类决策全部保留：Q1（SSA_VALUE 统一建模）、Q2�
 
 ---
 
-**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态。
+## 14. 实现补充记录（v2.3，2026-08-14）
+
+实现阶段（Phase 1–4 + 前端增强）的需求增补。凡与正文冲突处，以本节为准。
+
+### 14.1 签名结构节点（Q74）
+
+前端需求：函数/方法节点在图内展开**入参与返回节点**。SSA 适配器按签名**静态发射**（不依赖 SSA 值裁剪）：
+
+- `parameter`：每个签名参数一个节点（含接收者，`#param.recv.<name>`）；`types.Signature.Params()` **不含接收者**（接收者在 `Recv()`），接收者须单独发射。
+- `result`：单返回 `#result`，多返回 `#result.<idx>`，节点名即类型。
+- 边：`has_param` / `has_result`（函数 → 节点，conf 1.0），进 expand 白名单。
+- 定义顺序：Expand 查询按 `properties.index` 排序（参数组 → 返回组 → 其他边），接收者（index -1）最前。
+
+### 14.2 图内数据流展开（Q75）
+
+- **字段数据流文本树**：`/api/flows?id=<函数>`（repo.GetFunctionFlows）——起点 = 函数内全部 `field_access`，双向递归 CTE（data_flows_to/phi_operand，func_id 限定函数内），Dir=0 产生链 / Dir=1 使用链；信息栏"字段数据流"按钮渲染缩进树。
+- **参数节点展开数据流**：expand 对 `parameter` 节点**代理**到对应 `ssa_value`（`#param.[recv.]X → #X`），附加桥边 parameter→ssa_value（data_flows_to，不落库仅响应）；expand 白名单加入 `data_flows_to/argument/returns/phi_operand/alias`——参数 → 调用方实参（argument 上游）→ 函数内字段访问（data_flows_to 下游）逐级可展开。
+- **链上参数回到所属函数**：expand 对参数类 `ssa_value`（origin_kind=param/receiver）附加桥边 函数→参数值（has_param，不落库）——追溯链上出现上游函数参数时，双击可回到所属函数继续探索。
+- **节点展示**：字段访问节点标签显示所属函数（funcName）+ `[读]/[写]:行号`；信息栏显示所属函数与字段路径。
+
+### 14.3 展示名还原（Q76）
+
+`ssa_value` 节点 name 用 `instancePath` 还原源码变量链（局部变量 x、解引用、字段链 x.a）；仅纯临时值（Phi/Call/BinOp 结果）保留 SSA 名 tN。**ID 保持稳定**（slot 仍为 SSA 名，展示名存 name 字段）。CLI trace 输出与前端文本树均用展示名。
+
+### 14.4 符号搜索隔离（Q77）
+
+`GetSymbolByName`（CLI `query symbol` 与前端 `/api/search`）排除 `field_access` / `ssa_value` / `external_summary`——字段访问点与 SSA 临时值不是可搜索的代码符号。
+
+### 14.5 前端配色与布局
+
+- `field_access` 酸橙 `#7cb305`、`ssa_value` 浅灰 `#bfbfbf`、`parameter` 金 `#d48806`、`result` 粉 `#f759ab`；argument/returns/phi_operand/alias 线型与信息栏分组。
+- 数据流边归三行布局 mid 类（layout.js default 分支，无需改行分类）。
+
+### 14.6 测试与验证（Q78）
+
+- 单元：ssa 适配器（映射/跨过程/签名/摘要）、sqlite（递归 CTE、expand 顺序、参数代理桥边）。
+- 集成（make it）：fixture 含字段访问，覆盖 `query fields`/`trace-backward`/`trace-forward`/`export` 与 `/api/flows`、has_param/has_result 展开。
+- 前端 e2e（make e2e，playwright，19 项断言）：见 §11。
+
+---
+
+**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§14 为 2026-08-14 实现阶段需求增补记录。
