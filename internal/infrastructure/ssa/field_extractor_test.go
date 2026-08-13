@@ -1,0 +1,293 @@
+package ssa
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/schaepher/codeintel/internal/domain"
+)
+
+const moduleGoMod = `
+module example.com/mtest
+
+go 1.26
+`
+
+// findFieldAccess 按 (函数, 实例路径, access_kind) 查找字段访问节点。
+func findFieldAccess(t *testing.T, nodes []*domain.CodeEntity, funcID, instance, access string) *domain.CodeEntity {
+	t.Helper()
+	for _, n := range nodes {
+		if n.Kind != domain.KindFieldAccess {
+			continue
+		}
+		if n.Property("func_id") != funcID {
+			continue
+		}
+		if n.Property("instance_path") != instance || n.Property("access_kind") != access {
+			continue
+		}
+		return n
+	}
+	t.Fatalf("field_access not found: func=%s instance=%s access=%s", funcID, instance, access)
+	return nil
+}
+
+// findSSAValue 按 (函数, slot 前缀) 查找 ssa_value 节点（slot 用前缀匹配，SSA 临时名不稳定）。
+func findSSAValue(t *testing.T, nodes []*domain.CodeEntity, funcID, slotPrefix string) *domain.CodeEntity {
+	t.Helper()
+	for _, n := range nodes {
+		if n.Kind != domain.KindSSAValue {
+			continue
+		}
+		if n.Property("func_id") != funcID {
+			continue
+		}
+		if strings.HasPrefix(n.Name, slotPrefix) {
+			return n
+		}
+	}
+	t.Fatalf("ssa_value not found: func=%s slot~%s", funcID, slotPrefix)
+	return nil
+}
+
+// factsFrom 取所有 source 为该节点的边。
+func factsFrom(facts []*domain.Fact, id string) []*domain.Fact {
+	var out []*domain.Fact
+	for _, f := range facts {
+		if string(f.SourceID) == id {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+func TestFieldReadWrite(t *testing.T) {
+	nodes, facts := indexFixture(t, map[string]string{
+		"go.mod":  moduleGoMod,
+		"main.go": `package m
+
+type T struct {
+	A int
+	B string
+}
+
+func f(x *T, v int) int {
+	x.A = v
+	return x.A
+}
+`,
+	})
+	funcID := "symbol:go:example.com/mtest:f"
+
+	// 写节点：instance_path / full_path / access_kind / func_id / 代码片段
+	w := findFieldAccess(t, nodes, funcID, "x.A", "write")
+	if w.Property("full_path") != "example.com/mtest.T.A" {
+		t.Errorf("write full_path = %q", w.Property("full_path"))
+	}
+	if w.FilePath != "main.go" {
+		t.Errorf("write file = %q", w.FilePath)
+	}
+	if !strings.Contains(w.Property("code_snippet"), "x.A = v") {
+		t.Errorf("write snippet = %q", w.Property("code_snippet"))
+	}
+
+	// 读节点
+	findFieldAccess(t, nodes, funcID, "x.A", "read")
+
+	// data_flows_to 方向（go/ssa v0.26 表示：读也经 FieldAddr+UnOp(MUL)）：
+	//   FieldAddr 写：基地址 x → 写节点；Store: 写入值 v → 写节点
+	//   FieldAddr 读：基地址 x → 读节点；读节点 → 解引用结果 ssa_value
+	r := findFieldAccess(t, nodes, funcID, "x.A", "read")
+	base := findSSAValue(t, nodes, funcID, "x")
+	val := findSSAValue(t, nodes, funcID, "v")
+
+	baseEdges := factsFrom(facts, string(base.ID))
+	if len(baseEdges) != 2 {
+		t.Errorf("base edges = %+v, want 2 (write+read)", baseEdges)
+	}
+	targets := map[string]bool{}
+	for _, f := range baseEdges {
+		if f.Kind != domain.FactDataFlowsTo {
+			t.Errorf("base edge kind = %s", f.Kind)
+		}
+		targets[string(f.TargetID)] = true
+	}
+	if !targets[string(w.ID)] || !targets[string(r.ID)] {
+		t.Errorf("base must reach write and read nodes, got %v", targets)
+	}
+	if f := factsFrom(facts, string(val.ID)); len(f) != 1 || string(f[0].TargetID) != string(w.ID) {
+		t.Errorf("val->write edges = %+v", f)
+	}
+	out := factsFrom(facts, string(r.ID))
+	if len(out) != 1 || out[0].Kind != domain.FactDataFlowsTo {
+		t.Fatalf("read->result edges = %+v", out)
+	}
+	target := nodeByID(t, nodes, string(out[0].TargetID))
+	if target.Kind != domain.KindSSAValue {
+		t.Errorf("read edge target kind = %s, want ssa_value", target.Kind)
+	}
+	if target.Property("func_id") != funcID {
+		t.Errorf("result func_id = %q", target.Property("func_id"))
+	}
+}
+
+func TestFieldCompoundReadWrite(t *testing.T) {
+	// x.A = x.A + 1：同一位置生成 read/write 两个独立节点（ID 以 access 消歧）
+	nodes, _ := indexFixture(t, map[string]string{
+		"go.mod":  moduleGoMod,
+		"main.go": `package m
+
+type T struct {
+	A int
+}
+
+func g(x *T) {
+	x.A = x.A + 1
+}
+`,
+	})
+	funcID := "symbol:go:example.com/mtest:g"
+	read := findFieldAccess(t, nodes, funcID, "x.A", "read")
+	write := findFieldAccess(t, nodes, funcID, "x.A", "write")
+	if read.ID == write.ID {
+		t.Errorf("read/write nodes must be distinct, both = %s", read.ID)
+	}
+	if read.LineStart != write.LineStart {
+		t.Errorf("read line %d != write line %d", read.LineStart, write.LineStart)
+	}
+}
+
+func TestFieldNested(t *testing.T) {
+	// 嵌套字段：o.In.V —— 每层访问独立节点，full_path 用声明类型
+	nodes, _ := indexFixture(t, map[string]string{
+		"go.mod":  moduleGoMod,
+		"main.go": `package m
+
+type Inner struct {
+	V int
+}
+
+type Outer struct {
+	In Inner
+}
+
+func n(o *Outer) {
+	o.In.V = 7
+}
+`,
+	})
+	funcID := "symbol:go:example.com/mtest:n"
+	first := findFieldAccess(t, nodes, funcID, "o.In", "write")
+	if first.Property("full_path") != "example.com/mtest.Outer.In" {
+		t.Errorf("first full_path = %q", first.Property("full_path"))
+	}
+	second := findFieldAccess(t, nodes, funcID, "o.In.V", "write")
+	if second.Property("full_path") != "example.com/mtest.Inner.V" {
+		t.Errorf("second full_path = %q", second.Property("full_path"))
+	}
+}
+
+func TestFieldEmbedded(t *testing.T) {
+	// 嵌入字段：SSA 降级为两层访问（o.Emb 与 o.Emb.V）；
+	// full_path 用声明类型（Emb.V），instance_path 为 SSA 链（Q25 源码形式近似）
+	nodes, _ := indexFixture(t, map[string]string{
+		"go.mod":  moduleGoMod,
+		"main.go": `package m
+
+type Emb struct {
+	V int
+}
+
+type O2 struct {
+	Emb
+}
+
+func e(o *O2) {
+	o.V = 1
+}
+`,
+	})
+	funcID := "symbol:go:example.com/mtest:e"
+	inner := findFieldAccess(t, nodes, funcID, "o.Emb.V", "write")
+	if inner.Property("full_path") != "example.com/mtest.Emb.V" {
+		t.Errorf("embedded full_path = %q", inner.Property("full_path"))
+	}
+	findFieldAccess(t, nodes, funcID, "o.Emb", "write")
+}
+
+func TestFieldGlobal(t *testing.T) {
+	// 全局变量：基地址 ssa_value origin_kind=global
+	nodes, _ := indexFixture(t, map[string]string{
+		"go.mod":  moduleGoMod,
+		"main.go": `package m
+
+type T struct {
+	A int
+}
+
+var G T
+
+func h() {
+	G.A = 5
+}
+`,
+	})
+	funcID := "symbol:go:example.com/mtest:h"
+	w := findFieldAccess(t, nodes, funcID, "G.A", "write")
+	if w.Property("full_path") != "example.com/mtest.T.A" {
+		t.Errorf("global full_path = %q", w.Property("full_path"))
+	}
+	g := findSSAValue(t, nodes, funcID, "G")
+	if g.Property("origin_kind") != "global" {
+		t.Errorf("global origin_kind = %q", g.Property("origin_kind"))
+	}
+}
+
+func TestFieldShadowingDisambiguated(t *testing.T) {
+	// shadowing：两个作用域的同名 x 各自访问字段 → 两个独立写节点
+	// （同一实例路径 x.A，行号消歧），instance_path 均还原为 x.A
+	nodes, _ := indexFixture(t, map[string]string{
+		"go.mod":  moduleGoMod,
+		"main.go": `package m
+
+type T struct {
+	A int
+}
+
+func s() {
+	x := T{}
+	{
+		x := T{}
+		x.A = 1
+	}
+	x.A = 2
+}
+`,
+	})
+	funcID := "symbol:go:example.com/mtest:s"
+	var ids []string
+	for _, n := range nodes {
+		if n.Kind == domain.KindFieldAccess && n.Property("func_id") == funcID &&
+			n.Property("instance_path") == "x.A" && n.Property("access_kind") == "write" {
+			ids = append(ids, string(n.ID))
+		}
+	}
+	if len(ids) != 2 {
+		t.Fatalf("shadowed x.A writes = %d, want 2: %v", len(ids), ids)
+	}
+	if ids[0] == ids[1] {
+		t.Errorf("shadowed accesses must be distinct, both = %s", ids[0])
+	}
+}
+
+// nodeByID 按 ID 查找节点。
+func nodeByID(t *testing.T, nodes []*domain.CodeEntity, id string) *domain.CodeEntity {
+	t.Helper()
+	for _, n := range nodes {
+		if string(n.ID) == id {
+			return n
+		}
+	}
+	t.Fatalf("node not found: %s", id)
+	return nil
+}

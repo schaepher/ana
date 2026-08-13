@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"go/ast"
+	"go/token"
 	"go/types"
 	"path/filepath"
 	"strings"
@@ -50,68 +51,105 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, emit domai
 	}
 	packages.PrintErrors(pkgs) // 诊断信息打到 stderr，不中断
 
-	prog, _ := ssautil.Packages(pkgs, ssa.BuilderMode(0))
+	prog, ssaPkgs := ssautil.Packages(pkgs, ssa.BuilderMode(0))
 	if prog == nil {
 		return fmt.Errorf("ssa build failed")
 	}
-
-	for _, p := range pkgs {
+	// 仅构建项目内包的函数体（依赖函数保持 stub，按需惰性创建）；
+	// 全程序 prog.Build() 会把依赖体也构建出来，成本高（field_trace.md §9）
+	for i, p := range pkgs {
 		if !isInModule(p.PkgPath, repo.Module) {
-			continue // 仅处理项目内包（外部依赖走摘要，Phase 5）
+			continue
 		}
-		if err := emitPackageFunctions(repo, p, prog, emit); err != nil {
+		if sp := ssaPkgs[i]; sp != nil {
+			sp.Build()
+		}
+	}
+	// 源码标识符索引（token.Pos → 标识符名）：go/ssa v0.26 的 Alloc 名为 tN，
+	// 实例路径（x.A）需从 AST 恢复源码变量名
+	idents := buildIdentIndex(pkgs, repo.Module)
+
+	for fn := range ssautil.AllFunctions(prog) {
+		if !isModuleFunction(fn, repo.Module) {
+			continue // 外部依赖走摘要（Phase 5）
+		}
+		if err := emitFunction(repo, prog, fn, idents, emit); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// emitPackageFunctions 发射项目内顶层函数/方法节点。
-// ssautil.AllFunctions 遍历全程序（方法不在 Package.Members 中，须全量过滤）：
-// 仅保留有 FuncDecl 源码的函数——闭包（FuncLit）与合成 wrapper 跳过；
-// 闭包内字段访问在 Phase 2 归入外层函数（field_trace.md Q14 适配）。
-func emitPackageFunctions(repo *domain.Repository, pkg *packages.Package,
-	prog *ssa.Program, emit domain.EmitFunc) error {
+// buildIdentIndex 收集项目内文件的所有标识符（位置 → 名字），供 Alloc 反查源码变量名。
+func buildIdentIndex(pkgs []*packages.Package, module string) map[token.Pos]string {
 	logger := zap.L()
-	logger.Debug("enter emitPackageFunctions")
-	defer logger.Debug("exit emitPackageFunctions")
-	for fn := range ssautil.AllFunctions(prog) {
-		if fn.Pkg == nil || fn.Pkg.Pkg == nil || !isInModule(fn.Pkg.Pkg.Path(), repo.Module) {
+	logger.Debug("enter buildIdentIndex")
+	defer logger.Debug("exit buildIdentIndex")
+	idents := map[token.Pos]string{}
+	for _, p := range pkgs {
+		if !isInModule(p.PkgPath, module) {
 			continue
 		}
-		if _, ok := fn.Syntax().(*ast.FuncDecl); !ok {
-			continue // 闭包 / 合成 wrapper：不建节点
-		}
-		obj, ok := fn.Object().(*types.Func)
-		if !ok || obj == nil {
-			continue // 合成函数无 types 对象（理论上已被 FuncDecl 过滤排除）
-		}
-		pos := prog.Fset.PositionFor(fn.Pos(), false)
-		filePath := relPath(repo.Path, pos.Filename)
-		if filePath == "" {
-			continue // 仓库外文件
-		}
-		id, kind, name := funcIdentity(obj)
-		if id == "" {
-			continue // 匿名结构体上的方法，跳过（与 AST 适配器一致）
-		}
-		n := &domain.CodeEntity{
-			ID:        id,
-			Kind:      kind,
-			Name:      name,
-			FilePath:  filePath,
-			LineStart: pos.Line,
-			LineEnd:   pos.Line,
-			Properties: map[string]any{
-				// ObjectString 对方法包含接收者：func (s *Service) CreatePayment(req string) error
-				"signature": types.ObjectString(obj, types.RelativeTo(pkg.Types)),
-			},
-		}
-		if err := emit(domain.Item{Node: n}); err != nil {
-			return err
+		for _, f := range p.Syntax {
+			ast.Inspect(f, func(n ast.Node) bool {
+				if id, ok := n.(*ast.Ident); ok {
+					idents[id.Pos()] = id.Name
+				}
+				return true
+			})
 		}
 	}
-	return nil
+	return idents
+}
+
+// isModuleFunction 判断 SSA 函数是否属于项目内包。
+func isModuleFunction(fn *ssa.Function, module string) bool {
+	return fn.Pkg != nil && fn.Pkg.Pkg != nil && isInModule(fn.Pkg.Pkg.Path(), module)
+}
+
+// emitFunction 发射单个函数的全部产出：
+//  1. 函数/方法节点（Phase 1：保证边端点存在，ID 与 AST 适配器一致）
+//  2. 字段访问节点与数据流边（Phase 2：field_extractor.go）
+//
+// 仅处理有 FuncDecl 源码的顶层函数/方法——闭包（FuncLit）与合成 wrapper 跳过；
+// 闭包内字段访问在 Phase 2 归入外层函数（field_trace.md Q14 适配）。
+func emitFunction(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
+	idents map[token.Pos]string, emit domain.EmitFunc) error {
+	logger := zap.L()
+	logger.Debug("enter emitFunction")
+	defer logger.Debug("exit emitFunction")
+	if _, ok := fn.Syntax().(*ast.FuncDecl); !ok {
+		return nil // 闭包 / 合成 wrapper
+	}
+	obj, ok := fn.Object().(*types.Func)
+	if !ok || obj == nil {
+		return nil
+	}
+	pos := prog.Fset.PositionFor(fn.Pos(), false)
+	filePath := relPath(repo.Path, pos.Filename)
+	if filePath == "" {
+		return nil // 仓库外文件
+	}
+	id, kind, name := funcIdentity(obj)
+	if id == "" {
+		return nil // 匿名结构体上的方法（与 AST 适配器一致）
+	}
+	n := &domain.CodeEntity{
+		ID:        id,
+		Kind:      kind,
+		Name:      name,
+		FilePath:  filePath,
+		LineStart: pos.Line,
+		LineEnd:   pos.Line,
+		Properties: map[string]any{
+			// ObjectString 对方法包含接收者：func (s *Service) CreatePayment(req string) error
+			"signature": types.ObjectString(obj, types.RelativeTo(fn.Pkg.Pkg)),
+		},
+	}
+	if err := emit(domain.Item{Node: n}); err != nil {
+		return err
+	}
+	return emitFunctionFields(repo, prog, fn, id, idents, emit)
 }
 
 // funcIdentity 从 types.Func 生成 canonical ID / kind / name，与 AST 适配器 fnID 一致：

@@ -210,6 +210,8 @@ CREATE INDEX idx_nodes_func_id ON nodes(json_extract(properties, '$.func_id'));
 | `Store`（写入） | 不新建节点 | 若目标为已有 `field_access`（FieldAddr 生成）确保 `access_kind='write'`；目标非字段访问则忽略 | `data_flows_to` 从写入值 `ssa_value` 连到目标字段节点 |
 | 复合读写（如 `x.a = x.a + 1`） | `Field` 与 `FieldAddr` 各生成一个节点 | `read` 和 `write` | 分别对应上述边 |
 
+**实现注（2026-08-13，x/tools v0.26）**：当前 go/ssa 表示中字段读也经 `FieldAddr` 取址 + `UnOp(MUL)` 解引用（`Field` 指令仅出现在非可寻址值，如调用结果）。读写按 `FieldAddr` 的**使用方式**判定（被 `Store` 使用→write；被 `UnOp(MUL)` 解引用→read；两者同时→复合读写两个节点），与表中三指令映射等价。
+
 - `full_path` 生成：基于 SSA 值/表达式的**静态类型**解析类型声明包路径和类型名，拼接字段链（如 `pkg.Request.Amount`）。嵌套字段递归解析中间结构体类型。静态类型解析失败时回退源码字面量路径并记录警告。
 - `instance_path` 生成：基于源码变量名和字段链（如 `req.Amount`，或 `a.b.c`）。全局变量的 `full_path` 与 `instance_path` 均为 `pkg.VarName`。
 - 嵌入字段：`full_path` 始终使用**声明字段的结构体类型路径**；`instance_path` 保留源码访问形式。
@@ -280,9 +282,10 @@ ORDER BY depth DESC;
 
 ### 7.1 使用的库（均为现状已有或 x/tools 既有）
 
-- `golang.org/x/tools v0.26.0`（已在 go.mod）：`go/packages`、`go/ssa`、`go/ssautil`、`go/pointer`、`go/callgraph`。
+- `golang.org/x/tools v0.26.0`（已在 go.mod）：`go/packages`、`go/ssa`、`go/ssa/ssautil`、`go/callgraph`。
 - `github.com/mattn/go-sqlite3`（已有）。
 - **无新增第三方依赖**（不引入 modernc.org/sqlite）。
+- **注意**：`go/pointer` 已于 x/tools v0.26 移除。Phase 3 的别名分析（Q5 的精确/快速模式）改为自研轻量方案：`callgraph.RTA`（仍在）+ 过程内 must-alias 近似，不降级 x/tools。
 
 ### 7.2 项目内外划分
 
