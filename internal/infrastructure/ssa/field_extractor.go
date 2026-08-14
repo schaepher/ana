@@ -45,6 +45,8 @@ func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Func
 		prog:     prog,
 		fn:       fn,
 		funcID:   funcID,
+		// 当前函数文件（虚拟节点 FilePath 用：SQL/GORM/外部摘要）
+		currentFile: relPath(repo.Path, prog.Fset.PositionFor(fn.Pos(), false).Filename),
 		idents:        idents,
 		assignTargets: assignTargets,
 		emit:          emit,

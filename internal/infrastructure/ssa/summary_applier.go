@@ -10,7 +10,6 @@ package ssa
 import (
 	"fmt"
 	"go/constant"
-	"go/token"
 	"go/types"
 	"os"
 	"path/filepath"
@@ -724,17 +723,6 @@ func fieldValueOf(obj ssa.Value, idx int) ssa.Value {
 	return nil
 }
 
-func firstDeref(v ssa.Value) (ssa.Value, bool) {
-	if v.Referrers() == nil {
-		return v, false
-	}
-	for _, ref := range *v.Referrers() {
-		if un, ok := ref.(*ssa.UnOp); ok && un.Op == token.MUL && un.X == v {
-			return un, true
-		}
-	}
-	return v, false
-}
 
 // derefType 解指针。
 func derefType(t types.Type) types.Type {

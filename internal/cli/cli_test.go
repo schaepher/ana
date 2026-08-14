@@ -411,3 +411,15 @@ func TestQuerySummary(t *testing.T) {
 		t.Errorf("summary mermaid 应输出 flowchart:\n%s", out)
 	}
 }
+
+// TestVersionNoOTLNoise：④ 回归——version 命令 stdout 不含 OTel JSON。
+func TestVersionNoOTLNoise(t *testing.T) {
+	out := captureStdout(func() {
+		if code := Main(context.Background(), []string{"version"}); code != 0 {
+			t.Errorf("version exit = %d", code)
+		}
+	})
+	if strings.Contains(out, `"Name": "codeintel.main"`) || strings.Contains(out, "SpanContext") {
+		t.Errorf("version stdout 不应含 OTel span JSON:\n%s", out[:min(len(out), 200)])
+	}
+}

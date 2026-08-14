@@ -834,3 +834,46 @@ func TestGetValueTrace(t *testing.T) {
 		}
 	}
 }
+
+// TestTraceForwardParamStart：trace-forward 参数起点（① 回归）——
+// 调用方函数内无字段直接访问时，从参数经 argument 进入 callee 写入。
+func TestTraceForwardParamStart(t *testing.T) {
+	r := newTestRepo(t)
+	runID := "symbol:go:example.com/m:run"
+	fillID := "symbol:go:example.com/m:fillParam"
+	nodes := []*domain.CodeEntity{
+		{ID: domain.CanonicalID(runID), Kind: domain.KindFunction, Name: "run"},
+		{ID: domain.CanonicalID(fillID), Kind: domain.KindFunction, Name: "fillParam"},
+		// run 的参数 c（origin_kind=param）与 fillParam 的形参 c
+		{ID: domain.CanonicalID(runID + "#c"), Kind: domain.KindSSAValue, Name: "c",
+			Properties: map[string]any{"func_id": runID, "origin_kind": "param"}},
+		{ID: domain.CanonicalID(fillID + "#c"), Kind: domain.KindSSAValue, Name: "c",
+			Properties: map[string]any{"func_id": fillID, "origin_kind": "param"}},
+		// callee 的字段写入节点
+		{ID: domain.CanonicalID(fillID + "#c.Key.write@8"), Kind: domain.KindFieldAccess, Name: "c.Key",
+			Properties: map[string]any{"func_id": fillID, "full_path": "example.com/m.Cfg.Key",
+				"access_kind": "write"}},
+	}
+	edges := []*domain.Fact{
+		{SourceID: domain.CanonicalID(runID + "#c"), TargetID: domain.CanonicalID(fillID + "#c"),
+			Kind: domain.FactArgument, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: domain.CanonicalID(fillID + "#c"), TargetID: domain.CanonicalID(fillID + "#c.Key.write@8"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+	}
+	if _, err := r.SaveBatchStats(nodes, edges, nil); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	rows, err := r.TraceForward("example.com/m.Cfg.Key", domain.CanonicalID(runID), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hit := false
+	for _, row := range rows {
+		if strings.Contains(row.Name, "c.Key") {
+			hit = true
+		}
+	}
+	if !hit {
+		t.Errorf("TraceForward 应从 run 参数经 argument 进入 callee 的 c.Key 写入: %+v", rows)
+	}
+}

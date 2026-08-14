@@ -349,8 +349,11 @@ func (a *Actions) SummaryChain(anchor domain.CanonicalID) ([]SummaryStep, error)
 			kind = "write"
 		case r.Kind == domain.KindFieldAccess && r.Access == "write":
 			kind = "write"
+		case r.Kind == domain.KindFieldAccess && r.Access == "read":
+			kind = "consume" // 下游消费：字段读取点（③ 多分支场景——
+			// 同字段多读节点时链末端非唯一，读点即消费）
 		case i == len(chain)-1:
-			kind = "consume" // 末端（消费/使用点）
+			kind = "consume" // 末端兜底
 		}
 		steps = append(steps, SummaryStep{
 			Kind: kind, Name: r.Name, File: fp, Line: r.Line, Func: shortFuncNameX(r.FuncID),

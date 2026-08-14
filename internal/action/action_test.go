@@ -163,3 +163,49 @@ func TestExportIndex(t *testing.T) {
 		t.Errorf("producer = %+v", ef.Producers[0])
 	}
 }
+
+// TestSummaryChainWriteAnchorDownstream：③ 回归——写锚点的下游经
+// 同 full_path 读节点跳板接入使用链（consume）。
+func TestSummaryChainWriteAnchorDownstream(t *testing.T) {
+	a, dir := seedRepo(t)
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	r := sqlite.NewRepo(db)
+	funcID := "symbol:go:example.com/m:main"
+	writeNode := &domain.CodeEntity{ID: domain.CanonicalID(funcID + "#t.A.write@5"),
+		Kind: domain.KindFieldAccess, Name: "t.A", FilePath: "main.go", LineStart: 5,
+		Properties: map[string]any{"full_path": "example.com/m.T.A", "instance_path": "t.A",
+			"access_kind": "write", "func_id": funcID}}
+	readNode := &domain.CodeEntity{ID: domain.CanonicalID(funcID + "#t.A.read@7"),
+		Kind: domain.KindFieldAccess, Name: "t.A", FilePath: "main.go", LineStart: 7,
+		Properties: map[string]any{"full_path": "example.com/m.T.A", "instance_path": "t.A",
+			"access_kind": "read", "func_id": funcID}}
+	result := &domain.CodeEntity{ID: domain.CanonicalID(funcID + "#t1"), Kind: domain.KindSSAValue,
+		Name: "t1", Properties: map[string]any{"func_id": funcID}}
+	if _, err := r.SaveBatchStats([]*domain.CodeEntity{writeNode, readNode, result}, []*domain.Fact{
+		{SourceID: readNode.ID, TargetID: result.ID, Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+	}, nil); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	// 从写锚点出发：产生链（值 → 写）+ 下游（读 → 结果）
+	steps, err := a.SummaryChain(writeNode.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hasWrite, hasConsume := false, false
+	for _, st := range steps {
+		if st.Kind == "write" {
+			hasWrite = true
+		}
+		if st.Kind == "consume" {
+			hasConsume = true
+		}
+	}
+	if !hasWrite || !hasConsume {
+		t.Errorf("写锚点 summary 应含 write 与 consume（下游读节点）: %+v", steps)
+	}
+}
+
