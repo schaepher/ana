@@ -112,3 +112,69 @@ func f(db *DB) {
 		t.Errorf("空字面量实参未生成 session.id 虚拟节点")
 	}
 }
+
+// TestORMChainUpdateColumnName：⑦ 链式 ORM——Model(&X{主键}).Where(...)
+// .Update("col", v) 字符串列名形态：表名溯源链式 Model 范围对象，
+// 列名取字符串实参（此前仅结构体实参可映射，该形态零节点）。
+// Model 本身非写操作不配 orm_write——范围对象经 receiver 定义链解析。
+func TestORMChainUpdateColumnName(t *testing.T) {
+	nodes, facts, _ := indexFixtureFull(t, map[string]string{
+		"go.mod": moduleGoMod,
+		"field-summary.yaml": `summaries:
+  - func: example.com/mtest.(DB).Update
+    orm_write: true
+    param_index: 1
+`,
+		"main.go": `package m
+
+type DB struct{}
+
+type Session struct {
+	ID     string
+	Status string
+}
+
+func (d *DB) Model(v any) *DB { return d }
+
+func (d *DB) Where(q string, v any) *DB { return d }
+
+func (d *DB) Update(col string, v any) {}
+
+func f(db *DB) {
+	db.Model(&Session{ID: "s1"}).Where("status = ?", "x").Update("status", "done")
+}
+`,
+	})
+	funcID := "symbol:go:example.com/mtest:f"
+	// 表名溯源 Model(&Session{}) → session，列名取字符串实参 → status
+	var vCol *domain.CodeEntity
+	for _, n := range nodes {
+		if n.Kind == domain.KindFieldAccess && n.Property("func_id") == funcID &&
+			n.Property("type_string") == "gorm" && n.Name == "session.status" {
+			vCol = n
+		}
+	}
+	if vCol == nil {
+		t.Fatalf("链式 Update 未生成 session.status 虚拟节点: %+v", nodes)
+	}
+	if vCol.Property("access_kind") != "write" {
+		t.Errorf("access = %q, want write", vCol.Property("access_kind"))
+	}
+	// 值实参 "done" → 列节点 summary_io 边
+	found := false
+	for _, f := range facts {
+		if f.Kind == domain.FactSummaryIO && string(f.TargetID) == string(vCol.ID) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("链式 Update 缺 summary_io 边（值 → session.status）")
+	}
+	// Model 非写操作：除 Update 的 session.status 外不应有其他表.列节点
+	for _, n := range nodes {
+		if n.Kind == domain.KindFieldAccess && n.Property("func_id") == funcID &&
+			n.Property("type_string") == "gorm" && n.Name != "session.status" {
+			t.Errorf("Model 范围对象不应产生表.列节点: %s", n.Name)
+		}
+	}
+}

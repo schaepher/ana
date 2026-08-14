@@ -519,6 +519,7 @@ func (ext *fieldExtractor) applySQLSummary(cc *ssa.CallCommon, calleeID domain.C
 				"access_kind":   access,
 				"code_snippet":  sqlStr,
 				"type_string":   "sql",
+				"is_external":   "true",
 				"func_id":       string(ext.funcID),
 			},
 		}}); err != nil {
@@ -551,6 +552,7 @@ func (ext *fieldExtractor) applyTxBoundary(cc *ssa.CallCommon, calleeID domain.C
 			"instance_path": name,
 			"access_kind":   "write",
 			"type_string":   "tx",
+			"is_external":   "true",
 			"func_id":       string(ext.funcID),
 		},
 	}})
@@ -627,12 +629,14 @@ func parseSQLStmt(sql string) (table string, cols []string) {
 	return table, cols
 }
 
-// applyORMWrite 处理 ORM 写调用（②：GORM Create/Save/Updates/Delete/Update）：
-// 实参对象类型 → 表名（snake_case）+ 字段 → 列名 → 虚拟节点 表.列 +
-// summary_io 边（字段值 → 虚拟节点）。
-// 字段值不可定位时（变量/调用结果/空字面量实参——调用点无字段级 Store，
-// 如 Create(row)、Delete(&SQLiteKnowledgeGraph{})）不跳过该列：仍按类型
-// 展开生成 表.列 虚拟节点，连对象值兜底（② 修复：此前整列缺失）。
+// applyORMWrite 处理 ORM 写调用（②⑦：GORM Create/Save/Updates/Delete/
+// Update 等）：
+//   - 对象实参（结构体字面量/变量）：类型 → 表名（snake_case）+ 字段 →
+//     列名 → 虚拟节点 表.列 + summary_io 边（字段值 → 虚拟节点）。
+//     字段值不可定位（变量/调用结果/空字面量——调用点无字段级 Store）
+//     时不跳过该列：仍按类型展开生成 表.列 节点，连对象值兜底
+//   - 字符串列名实参（Update("col", v) 单列更新）：表名溯源链式调用
+//     receiver 的 Model(&X{}) 范围对象（⑦），列名取字符串实参
 func (ext *fieldExtractor) applyORMWrite(cc *ssa.CallCommon, calleeID domain.CanonicalID) error {
 	logger := zap.L()
 	logger.Debug("enter (fieldExtractor).applyORMWrite")
@@ -648,6 +652,17 @@ func (ext *fieldExtractor) applyORMWrite(cc *ssa.CallCommon, calleeID domain.Can
 	t := derefType(realArg.Type())
 	named, ok := t.(*types.Named)
 	if !ok {
+		// ⑦ 字符串列名形态：Update("col", v) → 表名溯源链式范围对象
+		if c, isConst := realArg.(*ssa.Const); isConst && c.Value != nil &&
+			constant.StringVal(c.Value) != "" && len(cc.Args) >= 3 {
+			scope := chainScopeObject(cc.Args[0])
+			if scope == nil {
+				return nil
+			}
+			table := snakeCase(scope.Obj().Name())
+			col := constant.StringVal(c.Value)
+			return ext.emitORMColumn(cc, calleeID, table, col, cc.Args[2], "write")
+		}
 		return nil
 	}
 	st, ok := named.Underlying().(*types.Struct)
@@ -667,7 +682,6 @@ func (ext *fieldExtractor) applyORMWrite(cc *ssa.CallCommon, calleeID domain.Can
 			continue
 		}
 		col := snakeCase(field.Name())
-		name := table + "." + col
 		// 字段值 → 虚拟节点（summary_io）；字段值不可定位时连对象值
 		fieldVal := fieldValueOf(realArg, i)
 		srcID := ""
@@ -678,19 +692,20 @@ func (ext *fieldExtractor) applyORMWrite(cc *ssa.CallCommon, calleeID domain.Can
 		} else if objID != "" {
 			srcID = string(objID)
 		}
-		id := domain.CanonicalID(string(ext.funcID) + "#ext.gorm." + name + ".write@" + fmt.Sprintf("%d", line))
+		id := domain.CanonicalID(string(ext.funcID) + "#ext.gorm." + table + "." + col + ".write@" + fmt.Sprintf("%d", line))
 		if err := ext.emit(domain.Item{Node: &domain.CodeEntity{
 			ID:        id,
 			Kind:      domain.KindFieldAccess,
-			Name:      name,
+			Name:      table + "." + col,
 			FilePath:  ext.currentFile,
 			LineStart: line,
 			Properties: map[string]any{
-				"full_path":     name,
-				"instance_path": name,
+				"full_path":     table + "." + col,
+				"instance_path": table + "." + col,
 				"access_kind":   "write",
 				"code_snippet":  cc.String(),
 				"type_string":   "gorm",
+				"is_external":   "true",
 				"func_id":       string(ext.funcID),
 			},
 		}}); err != nil {
@@ -701,6 +716,64 @@ func (ext *fieldExtractor) applyORMWrite(cc *ssa.CallCommon, calleeID domain.Can
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+// emitORMColumn 生成单个 表.列 虚拟节点 + summary_io 边（值实参 → 节点）。
+func (ext *fieldExtractor) emitORMColumn(cc *ssa.CallCommon, calleeID domain.CanonicalID,
+	table, col string, val ssa.Value, access string) error {
+	realVal := val
+	if mi, ok := val.(*ssa.MakeInterface); ok {
+		realVal = mi.X
+	}
+	name := table + "." + col
+	line := ext.prog.Fset.PositionFor(cc.Pos(), false).Line
+	id := domain.CanonicalID(string(ext.funcID) + "#ext.gorm." + name + ".write@" + fmt.Sprintf("%d", line))
+	if err := ext.emit(domain.Item{Node: &domain.CodeEntity{
+		ID:        id,
+		Kind:      domain.KindFieldAccess,
+		Name:      name,
+		FilePath:  ext.currentFile,
+		LineStart: line,
+		Properties: map[string]any{
+			"full_path":     name,
+			"instance_path": name,
+			"access_kind":   access,
+			"code_snippet":  cc.String(),
+			"type_string":   "gorm",
+			"is_external":   "true",
+			"func_id":       string(ext.funcID),
+		},
+	}}); err != nil {
+		return err
+	}
+	valID, err := ext.emitValue(realVal)
+	if err != nil || valID == "" {
+		return err
+	}
+	return ext.emitEdgeKind(valID, id, domain.FactSummaryIO)
+}
+
+// chainScopeObject 溯源链式调用的范围对象（⑦）：Update/Updates 的 receiver
+// 沿定义链回溯中间调用（Where/Model 等），找到实参为结构体对象的调用
+// （如 Model(&Session{ID:...})）返回其类型。链上游无结构体实参返回 nil。
+func chainScopeObject(recv ssa.Value) *types.Named {
+	c, ok := recv.(*ssa.Call)
+	if !ok {
+		return nil
+	}
+	for i := 1; i < len(c.Call.Args); i++ {
+		arg := c.Call.Args[i]
+		if mi, isMI := arg.(*ssa.MakeInterface); isMI {
+			arg = mi.X
+		}
+		if named := namedStructOf(derefType(arg.Type())); named != nil {
+			return named
+		}
+	}
+	if len(c.Call.Args) > 0 {
+		return chainScopeObject(c.Call.Args[0])
 	}
 	return nil
 }

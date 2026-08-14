@@ -945,3 +945,149 @@ func TestTraceForwardIntermediateReads(t *testing.T) {
 		t.Errorf("TraceForward 应含中间读跳板节点: %+v", rows)
 	}
 }
+
+// TestValueTraceFieldAnchorNoCrossField：⑥ 字段精度——从字段锚点追踪时，
+// 共享值节点引入的其他字段访问不得入链（T.B 读不混入 T.A 的链）。
+func TestValueTraceFieldAnchorNoCrossField(t *testing.T) {
+	r := newTestRepo(t)
+	funcID := "symbol:go:example.com/m:run"
+	nodes := []*domain.CodeEntity{
+		{ID: domain.CanonicalID(funcID + "#faA.read@1"), Kind: domain.KindFieldAccess, Name: "faA",
+			Properties: map[string]any{"func_id": funcID, "full_path": "example.com/m.T.A", "access_kind": "read"}},
+		{ID: domain.CanonicalID(funcID + "#faA.write@2"), Kind: domain.KindFieldAccess, Name: "faA",
+			Properties: map[string]any{"func_id": funcID, "full_path": "example.com/m.T.A", "access_kind": "write"}},
+		{ID: domain.CanonicalID(funcID + "#faB.read@3"), Kind: domain.KindFieldAccess, Name: "faB",
+			Properties: map[string]any{"func_id": funcID, "full_path": "example.com/m.T.B", "access_kind": "read"}},
+		{ID: domain.CanonicalID(funcID + "#v0"), Kind: domain.KindSSAValue, Name: "v0",
+			Properties: map[string]any{"func_id": funcID}},
+	}
+	edges := []*domain.Fact{
+		{SourceID: domain.CanonicalID(funcID + "#faA.read@1"), TargetID: domain.CanonicalID(funcID + "#v0"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: domain.CanonicalID(funcID + "#v0"), TargetID: domain.CanonicalID(funcID + "#faA.write@2"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+		// 共享值 v0 的另一字段读（无关字段）
+		{SourceID: domain.CanonicalID(funcID + "#faB.read@3"), TargetID: domain.CanonicalID(funcID + "#v0"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+	}
+	save(t, r, nodes, edges)
+
+	// 锚点 = 字段写（T.A）：反向链含同字段读（faA.read）与值来源读跳板
+	// （faB.read → v0 → faA.write：v0 的 phi 合并来源，值流相关）
+	rows, err := r.GetValueTrace(domain.CanonicalID(funcID+"#faA.write@2"), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hasSrc, hasSelf := false, false
+	for _, row := range rows {
+		if row.Name == "faB" {
+			hasSrc = true
+		}
+		if row.Name == "faA" && row.Kind == domain.KindFieldAccess {
+			hasSelf = true
+		}
+	}
+	if !hasSelf {
+		t.Errorf("字段锚点追踪应含同字段读 faA: %+v", rows)
+	}
+	if !hasSrc {
+		t.Errorf("字段锚点反向应含值来源读跳板 faB（v0 的 phi 来源）: %+v", rows)
+	}
+	// 对象锚点（v0，无字段）：正向仅放行写、反向仅放行读——反向链应
+	// 含 A 读与 B 读（值来源），正向仅写
+	rows, err = r.GetValueTrace(domain.CanonicalID(funcID+"#v0"), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range rows {
+		if row.Dir == 0 && row.Kind == domain.KindFieldAccess && row.Access != "read" {
+			t.Errorf("对象锚点反向不应含写 %s", row.Name)
+		}
+		if row.Dir == 1 && row.Kind == domain.KindFieldAccess && row.Access != "write" {
+			t.Errorf("对象锚点正向不应含读 %s", row.Name)
+		}
+	}
+}
+
+// TestFlowsFieldScoped：⑥ 字段精度——flows 递归的字段访问步限定起始
+// 字段（A 链不混入 B 访问）。
+func TestFlowsFieldScoped(t *testing.T) {
+	r := newTestRepo(t)
+	funcID := "symbol:go:example.com/m:run"
+	nodes := []*domain.CodeEntity{
+		{ID: domain.CanonicalID(funcID + "#faA.read@1"), Kind: domain.KindFieldAccess, Name: "faA",
+			Properties: map[string]any{"func_id": funcID, "full_path": "example.com/m.T.A", "access_kind": "read"}},
+		{ID: domain.CanonicalID(funcID + "#faA.write@2"), Kind: domain.KindFieldAccess, Name: "faA",
+			Properties: map[string]any{"func_id": funcID, "full_path": "example.com/m.T.A", "access_kind": "write"}},
+		{ID: domain.CanonicalID(funcID + "#faB.read@3"), Kind: domain.KindFieldAccess, Name: "faB",
+			Properties: map[string]any{"func_id": funcID, "full_path": "example.com/m.T.B", "access_kind": "read"}},
+		{ID: domain.CanonicalID(funcID + "#v0"), Kind: domain.KindSSAValue, Name: "v0",
+			Properties: map[string]any{"func_id": funcID}},
+	}
+	edges := []*domain.Fact{
+		{SourceID: domain.CanonicalID(funcID + "#faA.read@1"), TargetID: domain.CanonicalID(funcID + "#v0"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: domain.CanonicalID(funcID + "#v0"), TargetID: domain.CanonicalID(funcID + "#faA.write@2"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: domain.CanonicalID(funcID + "#faB.read@3"), TargetID: domain.CanonicalID(funcID + "#v0"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+	}
+	save(t, r, nodes, edges)
+
+	rows, err := r.GetFunctionFlows(domain.CanonicalID(funcID), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A 链（含 faA.write）中的字段访问必须全是 T.A
+	for _, row := range rows {
+		if row.Kind == domain.KindFieldAccess && strings.Contains(row.Name, "faA") &&
+			row.FullPath != "example.com/m.T.A" {
+			t.Errorf("flows A 链混入其他字段 %s (%s)", row.Name, row.FullPath)
+		}
+	}
+}
+
+// TestValueTraceMulti：⑧ 跳板合并——多锚点一次查询返回各锚点下游。
+func TestValueTraceMulti(t *testing.T) {
+	r := newTestRepo(t)
+	funcID := "symbol:go:example.com/m:run"
+	nodes := []*domain.CodeEntity{
+		{ID: domain.CanonicalID(funcID + "#r1"), Kind: domain.KindFieldAccess, Name: "r1",
+			Properties: map[string]any{"func_id": funcID, "full_path": "example.com/m.T.A", "access_kind": "read"}},
+		{ID: domain.CanonicalID(funcID + "#r2"), Kind: domain.KindFieldAccess, Name: "r2",
+			Properties: map[string]any{"func_id": funcID, "full_path": "example.com/m.T.A", "access_kind": "read"}},
+		{ID: domain.CanonicalID(funcID + "#v1"), Kind: domain.KindSSAValue, Name: "v1",
+			Properties: map[string]any{"func_id": funcID}},
+		{ID: domain.CanonicalID(funcID + "#v2"), Kind: domain.KindSSAValue, Name: "v2",
+			Properties: map[string]any{"func_id": funcID}},
+		{ID: domain.CanonicalID(funcID + "#result"), Kind: domain.KindSSAValue, Name: "result",
+			Properties: map[string]any{"func_id": funcID}},
+	}
+	edges := []*domain.Fact{
+		{SourceID: domain.CanonicalID(funcID + "#r1"), TargetID: domain.CanonicalID(funcID + "#v1"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: domain.CanonicalID(funcID + "#r2"), TargetID: domain.CanonicalID(funcID + "#v2"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: domain.CanonicalID(funcID + "#v1"), TargetID: domain.CanonicalID(funcID + "#result"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: domain.CanonicalID(funcID + "#v2"), TargetID: domain.CanonicalID(funcID + "#result"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+	}
+	save(t, r, nodes, edges)
+
+	rows, err := r.GetValueTraceMulti([]domain.CanonicalID{
+		domain.CanonicalID(funcID + "#r1"), domain.CanonicalID(funcID + "#r2"),
+	}, "example.com/m.T.A", 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, row := range rows {
+		seen[string(row.ID)] = true
+	}
+	for _, want := range []string{funcID + "#v1", funcID + "#v2", funcID + "#result"} {
+		if !seen[want] {
+			t.Errorf("合并追踪缺节点 %s", want)
+		}
+	}
+}

@@ -150,7 +150,7 @@ func TestSummaryChainStepKinds(t *testing.T) {
 	}, nil); err != nil {
 		t.Fatal(err)
 	}
-	steps, err := a.SummaryChain(anchor.ID)
+	steps, err := a.SummaryChain(sqlNode.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

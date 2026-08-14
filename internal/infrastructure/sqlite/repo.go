@@ -943,28 +943,33 @@ func (r *Repo) GetFunctionFlows(funcID domain.CanonicalID, maxDepth int) ([]*dom
 	if maxDepth <= 0 {
 		maxDepth = 8
 	}
-	rows, err := r.Query(`WITH RECURSIVE flows(id, depth, name, edge_kinds, line, dir, kind, access, func_id, full_path) AS (
+	rows, err := r.Query(`WITH RECURSIVE flows(id, depth, name, edge_kinds, line, dir, kind, access, func_id, full_path, ctx) AS (
     SELECT n.id, 0, n.name, '', n.line_start, 0, n.kind,
            json_extract(n.properties, '$.access_kind'),
            json_extract(n.properties, '$.func_id'),
+           json_extract(n.properties, '$.full_path'),
            json_extract(n.properties, '$.full_path')
     FROM nodes n
     WHERE n.kind = 'field_access'
       AND json_extract(n.properties, '$.func_id') = ?
     UNION
-    -- 反向：流向当前节点（产生链）
+    -- 反向：流向当前节点（产生链）；字段访问步限定起始字段（⑥：
+    -- 共享中间值节点不把其他字段的访问带入本字段链）
     SELECT e.source_id, d.depth + 1, n_prev.name,
            CASE WHEN d.edge_kinds = '' THEN e.kind
                 ELSE d.edge_kinds || ',' || e.kind END, n_prev.line_start, 0,
            n_prev.kind, json_extract(n_prev.properties, '$.access_kind'),
            json_extract(n_prev.properties, '$.func_id'),
-           json_extract(n_prev.properties, '$.full_path')
+           json_extract(n_prev.properties, '$.full_path'),
+           d.ctx
     FROM edges e
     JOIN flows d ON e.target_id = d.id
     JOIN nodes n_prev ON e.source_id = n_prev.id
     WHERE e.kind IN ('data_flows_to','phi_operand')
       AND (d.dir = 0 OR d.depth = 0) AND d.depth < ?
       AND json_extract(n_prev.properties, '$.func_id') = ?
+      AND (n_prev.kind != 'field_access'
+           OR json_extract(n_prev.properties, '$.full_path') = d.ctx)
     UNION
     -- 正向：从当前节点流出（使用链）
     SELECT e.target_id, d.depth + 1, n_next.name,
@@ -972,13 +977,16 @@ func (r *Repo) GetFunctionFlows(funcID domain.CanonicalID, maxDepth int) ([]*dom
                 ELSE d.edge_kinds || ',' || e.kind END, n_next.line_start, 1,
            n_next.kind, json_extract(n_next.properties, '$.access_kind'),
            json_extract(n_next.properties, '$.func_id'),
-           json_extract(n_next.properties, '$.full_path')
+           json_extract(n_next.properties, '$.full_path'),
+           d.ctx
     FROM edges e
     JOIN flows d ON e.source_id = d.id
     JOIN nodes n_next ON e.target_id = n_next.id
     WHERE e.kind IN ('data_flows_to','phi_operand')
       AND (d.dir = 1 OR d.depth = 0) AND d.depth < ?
       AND json_extract(n_next.properties, '$.func_id') = ?
+      AND (n_next.kind != 'field_access'
+           OR json_extract(n_next.properties, '$.full_path') = d.ctx)
 )
 SELECT id, depth, name, edge_kinds, line, dir, kind, access, func_id, full_path FROM flows ORDER BY dir, depth, id`,
 		string(funcID), maxDepth, string(funcID), maxDepth, string(funcID))
@@ -1042,6 +1050,32 @@ func paramValueID(id string) string {
 // 以任意数据节点（field_access / ssa_value / parameter）为锚点，双向遍历
 // data_flows_to / argument / returns / phi_operand；
 // Dir=0 为产生链（反向），Dir=1 为使用链（正向）；行带 func_id 供函数上下文分组。
+// valueTraceFilter 字段访问步过滤（⑥ 字段精度）：
+//   - 锚点字段（full_path 匹配）任意放行
+//   - 实例路径前缀关系（嵌套容器/子字段：m.cfg ↔ m.cfg.APIKey——
+//     full_path 是声明类型路径无前缀关系，须用 instance_path）放行
+//   - 外部摘要虚拟节点（is_external：SQL 表.列 / GORM 表.列 / 事务边界）
+//     放行——持久化映射点非"无关字段"
+//   - 值出发的步按方向放行：正向仅写（值消费点/拷贝目标：
+//     kg.ID → t42.ID.write）、反向仅读（值产生源/拷贝来源：
+//     m.cfg.APIKey ← m.cfg、kg.ID.read ← kg）——字段访问 → 字段访问
+//     仅限精确/前缀/external（嵌套扩散控制）
+// tbl 为递归目标节点别名（反向 n_prev / 正向 n_next）。
+func valueTraceFilter(anchorCtx, anchorInst string, reverse bool, tbl string) string {
+	dirAccess := "'read'"
+	if !reverse {
+		dirAccess = "'write'"
+	}
+	fp := `json_extract(` + tbl + `.properties, '$.full_path')`
+	inst := `COALESCE(json_extract(` + tbl + `.properties, '$.instance_path'), json_extract(` + tbl + `.properties, '$.full_path'))`
+	return fp + ` = ` + q(anchorCtx) + `
+OR (` + q(anchorCtx) + ` != '' AND (instr(` + q(anchorInst) + `, ` + inst + `) = 1 OR instr(` + inst + `, ` + q(anchorInst) + `) = 1))
+OR json_extract(` + tbl + `.properties, '$.is_external') = 'true'
+OR (d.kind != 'field_access' AND json_extract(` + tbl + `.properties, '$.access_kind') = ` + dirAccess + `)`
+}
+
+func q(s string) string { return "'" + s + "'" }
+
 func (r *Repo) GetValueTrace(nodeID domain.CanonicalID, maxDepth int) ([]*domain.TraceRow, error) {
 	logger := zap.L()
 	logger.Debug("enter (Repo).GetValueTrace")
@@ -1049,10 +1083,24 @@ func (r *Repo) GetValueTrace(nodeID domain.CanonicalID, maxDepth int) ([]*domain
 	if maxDepth <= 0 {
 		maxDepth = 8
 	}
-	rows, err := r.Query(`WITH RECURSIVE vt(id, depth, name, edge_kinds, line, dir, kind, access, func_id, full_path) AS (
+	// 锚点字段上下文：field_access 锚点 → full_path（精确）+ instance_path
+	// （前缀）；值锚点 → ''（对象级）
+	var anchorCtx, anchorInst sql.NullString
+	if err := r.QueryRow(`SELECT json_extract(properties, '$.full_path'),
+		COALESCE(json_extract(properties, '$.instance_path'), json_extract(properties, '$.full_path'))
+		FROM nodes WHERE id = ? AND kind = 'field_access'`, string(nodeID)).Scan(&anchorCtx, &anchorInst); err != nil {
+		anchorCtx, anchorInst = sql.NullString{}, sql.NullString{}
+	}
+	ctx, inst := "", ""
+	if anchorCtx.Valid {
+		ctx, inst = anchorCtx.String, anchorInst.String
+	}
+	backFilter := valueTraceFilter(ctx, inst, true, "n_prev")
+	fwdFilter := valueTraceFilter(ctx, inst, false, "n_next")
+	rows, err := r.Query(`WITH RECURSIVE vt(id, depth, name, edge_kinds, line, dir, kind, access, func_id, full_path, ctx, inst) AS (
     SELECT n.id, 0, n.name, '', n.line_start, 0, n.kind,
            json_extract(n.properties, '$.access_kind'), json_extract(n.properties, '$.func_id'),
-           json_extract(n.properties, '$.full_path')
+           json_extract(n.properties, '$.full_path'), `+q(ctx)+`, `+q(inst)+`
     FROM nodes n WHERE n.id = ?
     UNION
     -- 反向：流向当前节点（产生链）
@@ -1061,12 +1109,17 @@ func (r *Repo) GetValueTrace(nodeID domain.CanonicalID, maxDepth int) ([]*domain
                 ELSE d.edge_kinds || ',' || e.kind END, n_prev.line_start, 0,
            n_prev.kind, json_extract(n_prev.properties, '$.access_kind'),
            json_extract(n_prev.properties, '$.func_id'),
-           json_extract(n_prev.properties, '$.full_path')
+           json_extract(n_prev.properties, '$.full_path'),
+           CASE WHEN n_prev.kind = 'field_access'
+                THEN json_extract(n_prev.properties, '$.full_path') ELSE d.ctx END,
+           CASE WHEN n_prev.kind = 'field_access'
+                THEN COALESCE(json_extract(n_prev.properties, '$.instance_path'), json_extract(n_prev.properties, '$.full_path')) ELSE d.inst END
     FROM edges e
     JOIN vt d ON e.target_id = d.id
     JOIN nodes n_prev ON e.source_id = n_prev.id
     WHERE e.kind IN ('data_flows_to','argument','returns','phi_operand','summary_io')
       AND (d.dir = 0 OR d.depth = 0) AND d.depth < ?
+      AND (n_prev.kind != 'field_access' OR (`+backFilter+`))
     UNION
     -- 正向：从当前节点流出（使用链）
     SELECT e.target_id, d.depth + 1, n_next.name,
@@ -1074,12 +1127,17 @@ func (r *Repo) GetValueTrace(nodeID domain.CanonicalID, maxDepth int) ([]*domain
                 ELSE d.edge_kinds || ',' || e.kind END, n_next.line_start, 1,
            n_next.kind, json_extract(n_next.properties, '$.access_kind'),
            json_extract(n_next.properties, '$.func_id'),
-           json_extract(n_next.properties, '$.full_path')
+           json_extract(n_next.properties, '$.full_path'),
+           CASE WHEN n_next.kind = 'field_access'
+                THEN json_extract(n_next.properties, '$.full_path') ELSE d.ctx END,
+           CASE WHEN n_next.kind = 'field_access'
+                THEN COALESCE(json_extract(n_next.properties, '$.instance_path'), json_extract(n_next.properties, '$.full_path')) ELSE d.inst END
     FROM edges e
     JOIN vt d ON e.source_id = d.id
     JOIN nodes n_next ON e.target_id = n_next.id
     WHERE e.kind IN ('data_flows_to','argument','returns','phi_operand','summary_io')
       AND (d.dir = 1 OR d.depth = 0) AND d.depth < ?
+      AND (n_next.kind != 'field_access' OR (`+fwdFilter+`))
 )
 SELECT id, depth, name, edge_kinds, line, dir, kind, access, func_id, full_path FROM vt ORDER BY dir, depth, id`,
 		string(nodeID), maxDepth, maxDepth)
@@ -1120,6 +1178,94 @@ SELECT id, depth, name, edge_kinds, line, dir, kind, access, func_id, full_path 
 		out = append(out, &row)
 	}
 	return out, rows.Err()
+}
+
+// GetValueTraceMulti 多锚点合并正向追踪（⑧ 跳板合并）：一次查询返回
+// 全部锚点的下游使用链（dir=1），字段访问步按锚点字段 ctx 限定。
+// trampoline 用它替代 N 次 GetValueTrace——读点多时累计查询成本
+// 大幅下降（单次 CTE + UNION 去重）。
+func (r *Repo) GetValueTraceMulti(anchors []domain.CanonicalID, ctxField string, maxDepth int) ([]*domain.TraceRow, error) {
+	logger := zap.L()
+	logger.Debug("enter (Repo).GetValueTraceMulti")
+	defer logger.Debug("exit (Repo).GetValueTraceMulti")
+	if len(anchors) == 0 {
+		return nil, nil
+	}
+	if maxDepth <= 0 {
+		maxDepth = 4
+	}
+	ids := make([]string, 0, len(anchors))
+	for _, a := range anchors {
+		ids = append(ids, string(a))
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	fwdFilter := valueTraceFilter(ctxField, ctxField, false, "n_next")
+	rows, err := r.Query(`WITH RECURSIVE vt(id, depth, name, edge_kinds, line, dir, kind, access, func_id, full_path, ctx) AS (
+    SELECT n.id, 0, n.name, '', n.line_start, 0, n.kind,
+           json_extract(n.properties, '$.access_kind'), json_extract(n.properties, '$.func_id'),
+           json_extract(n.properties, '$.full_path'), `+q(ctxField)+`
+    FROM nodes n WHERE n.id IN (`+placeholders+`)
+    UNION
+    SELECT e.target_id, d.depth + 1, n_next.name,
+           CASE WHEN d.edge_kinds = '' THEN e.kind
+                ELSE d.edge_kinds || ',' || e.kind END, n_next.line_start, 1,
+           n_next.kind, json_extract(n_next.properties, '$.access_kind'),
+           json_extract(n_next.properties, '$.func_id'),
+           json_extract(n_next.properties, '$.full_path'),
+           CASE WHEN n_next.kind = 'field_access'
+                THEN json_extract(n_next.properties, '$.full_path') ELSE d.ctx END
+    FROM edges e
+    JOIN vt d ON e.source_id = d.id
+    JOIN nodes n_next ON e.target_id = n_next.id
+    WHERE e.kind IN ('data_flows_to','argument','returns','phi_operand','summary_io')
+      AND d.depth < ?
+      AND (n_next.kind != 'field_access' OR (`+fwdFilter+`))
+)
+SELECT id, depth, name, edge_kinds, line, dir, kind, access, func_id, full_path FROM vt ORDER BY depth, id`,
+		append(anySlice(ids), maxDepth)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*domain.TraceRow
+	for rows.Next() {
+		var (
+			row      domain.TraceRow
+			id       string
+			line     sql.NullInt64
+			kind     string
+			access   sql.NullString
+			funcID   sql.NullString
+			fullPath sql.NullString
+		)
+		if err := rows.Scan(&id, &row.Depth, &row.Name, &row.EdgeKinds, &line, &row.Dir, &kind, &access, &funcID, &fullPath); err != nil {
+			return nil, err
+		}
+		row.ID = domain.CanonicalID(id)
+		row.Kind = domain.EntityKind(kind)
+		if access.Valid {
+			row.Access = access.String
+		}
+		if funcID.Valid {
+			row.FuncID = funcID.String
+		}
+		if fullPath.Valid {
+			row.FullPath = fullPath.String
+		}
+		if line.Valid {
+			row.Line = int(line.Int64)
+		}
+		out = append(out, &row)
+	}
+	return out, rows.Err()
+}
+
+func anySlice(ids []string) []any {
+	out := make([]any, len(ids))
+	for i, s := range ids {
+		out[i] = s
+	}
+	return out
 }
 
 // GetIndirectWriteEdges 返回函数的 INDIRECT_WRITE 边（Q90 调用点回连：

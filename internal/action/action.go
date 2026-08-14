@@ -26,6 +26,7 @@ type Reader interface {
 	TraceBackward(field string, funcID domain.CanonicalID, maxDepth int) ([]*domain.TraceRow, error)
 	TraceForward(field string, funcID domain.CanonicalID, maxDepth int) ([]*domain.TraceRow, error)
 	GetValueTrace(nodeID domain.CanonicalID, maxDepth int) ([]*domain.TraceRow, error)
+	GetValueTraceMulti(anchors []domain.CanonicalID, ctxField string, maxDepth int) ([]*domain.TraceRow, error)
 	GetFunctionFlows(funcID domain.CanonicalID, maxDepth int) ([]*domain.TraceRow, error)
 	GetRoots() ([]*domain.CodeEntity, error)
 	Expand(id domain.CanonicalID) (facts []*domain.Fact, nodes []*domain.CodeEntity, err error)
@@ -108,8 +109,10 @@ const (
 	trampolineDepth    = 4
 )
 
-// downstreamTrampoline 写锚点下游跳板（③⑤）：写节点无出边——经同
+// downstreamTrampoline 写锚点下游跳板（③⑤⑧）：写节点无出边——经同
 // full_path 读节点接入使用链（读节点行 + dir=1 子链行）；非写锚点返回 nil。
+// 读锚点的下游用单次合并 CTE 查询（GetValueTraceMulti），替代逐读节点
+// 递归——读点多时累计成本大幅下降（⑧ 超时防护）。
 func (a *Actions) downstreamTrampoline(anchor domain.CanonicalID) ([]*domain.TraceRow, error) {
 	n, err := a.repo.GetSymbol(anchor)
 	if err != nil || n.Kind != domain.KindFieldAccess || n.Property("access_kind") != "write" {
@@ -123,25 +126,27 @@ func (a *Actions) downstreamTrampoline(anchor domain.CanonicalID) ([]*domain.Tra
 	if err != nil {
 		return nil, nil
 	}
+	anchors := make([]domain.CanonicalID, 0, len(reads))
 	var out []*domain.TraceRow
-	for i, rn := range reads {
-		if i >= trampolineMaxReads {
-			break
-		}
+	for _, rn := range reads {
 		if rn.ID == anchor {
 			continue // 同节点跳过
 		}
+		anchors = append(anchors, rn.ID)
 		// 读节点本身（⑤：生命周期图展示读取点）
 		out = append(out, &domain.TraceRow{
 			ID: rn.ID, Name: rn.Name, Kind: rn.Kind, Access: "read",
 			Line: rn.LineStart, Dir: 1,
 			FuncID: rn.Property("func_id"),
 		})
-		sub, err := a.repo.GetValueTrace(rn.ID, trampolineDepth)
-		if err != nil {
-			continue
+		if len(anchors) >= trampolineMaxReads {
+			break
 		}
-		out = append(out, pickSub(1, sub)...)
+	}
+	// 读锚点下游合并为单次查询（⑧）
+	sub, err := a.repo.GetValueTraceMulti(anchors, fullPath, trampolineDepth)
+	if err == nil {
+		out = append(out, sub...)
 	}
 	return out, nil
 }
