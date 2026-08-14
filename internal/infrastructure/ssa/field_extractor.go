@@ -26,6 +26,7 @@ import (
 
 	"github.com/schaepher/codeintel/internal/domain"
 	"golang.org/x/tools/go/ssa"
+	"golang.org/x/tools/go/ssa/ssautil"
 	"go.uber.org/zap"
 )
 
@@ -206,6 +207,17 @@ func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Func
 					}
 				}
 			case *ssa.Store:
+				if g, ok := v.Addr.(*ssa.Global); ok {
+					// 全局变量写入（含 init 初始化，Q98 溯源）：
+					// 写入值 → Global 节点（value-trace 反向可达初始化表达式）
+					gID, err := ext.emitValue(g)
+					if err == nil && gID != "" {
+						if err := ext.emitFlowValue(v.Val, gID); err != nil {
+							return err
+						}
+					}
+					continue
+				}
 				if fa, ok := v.Addr.(*ssa.FieldAddr); ok {
 					target, ok := ext.fields[fa]
 					if !ok {
@@ -572,6 +584,23 @@ func (ext *fieldExtractor) emitValue(v ssa.Value) (domain.CanonicalID, error) {
 	defer logger.Debug("exit (fieldExtractor).emitValue")
 	if id, ok := ext.values[v]; ok {
 		return id, nil
+	}
+	// 全局变量：跨函数共享节点（Q98 溯源锚点——init 初始化与各引用函数
+	// 指向同一节点，value-trace 才能从使用处反向到初始化表达式）
+	if g, ok := v.(*ssa.Global); ok && g.Pkg != nil && g.Pkg.Pkg != nil {
+		id := domain.CanonicalID("symbol:go:" + g.Pkg.Pkg.Path() + ":var." + g.Name())
+		ext.values[v] = id
+		n := &domain.CodeEntity{
+			ID:   id,
+			Kind: domain.KindSSAValue,
+			Name: g.Name(),
+			Properties: map[string]any{
+				"origin_kind": "global",
+				"ssa_op":      "global",
+				"type_string": g.Type().String(),
+			},
+		}
+		return id, ext.emit(domain.Item{Node: n})
 	}
 	// 嵌套字段/元素链中间层：FieldAddr/IndexAddr 第一遍已建字段访问节点——
 	// 基值边直接连字段访问节点（#m.cfg → #m.cfg.APIKey），避免 ssa_value
@@ -974,3 +1003,59 @@ func (ext *fieldExtractor) lookupAssignTarget(pos token.Pos) string {
 	}
 	return ext.assignTargets[i].name
 }
+
+// emitGlobalInit 全局变量初始化溯源（Q98）：遍历模块内全部函数（含隐式
+// init——init 无 FuncDecl，emitFunction 不处理）的 Store→Global 指令，
+// 发 data_flows_to 边（写入值 → Global 节点）；常量初始化（var G = Const，
+// go/ssa 挂在 Global.Init 不进 init）同样发边。Global 节点跨函数共享
+// （symbol:go:<pkg>:var.<name>），value-trace 从使用处反向可达初始化表达式。
+func emitGlobalInit(repo *domain.Repository, prog *ssa.Program, emit domain.EmitFunc) error {
+	logger := zap.L()
+	logger.Debug("enter emitGlobalInit")
+	defer logger.Debug("exit emitGlobalInit")
+	ext := &fieldExtractor{
+		repo:     repo,
+		prog:     prog,
+		emit:     emit,
+		values:   map[ssa.Value]domain.CanonicalID{},
+		funcIDs:  map[*ssa.Function]domain.CanonicalID{},
+		slotsFor: map[domain.CanonicalID]map[string]bool{},
+	}
+	// 运行时写入（Store→Global）：任意模块函数（含 init 的初始化 Store）
+	for fn := range ssautil.AllFunctions(prog) {
+		if !isModuleFunction(fn, repo.Module) {
+			continue
+		}
+		// 程序级值（Const 等）归属：函数所在包的 init 命名空间
+		ext.funcID = domain.CanonicalID("symbol:go:" + fn.Pkg.Pkg.Path() + ":init")
+		for _, b := range fn.Blocks {
+			for _, instr := range b.Instrs {
+				st, ok := instr.(*ssa.Store)
+				if !ok {
+					continue
+				}
+				var g *ssa.Global
+				if gg, ok := st.Addr.(*ssa.Global); ok {
+					g = gg
+				} else if fa, ok := st.Addr.(*ssa.FieldAddr); ok {
+					// 全局结构体初始化/字段写：&G.A = v（FieldAddr X=Global）
+					if gg, ok2 := fa.X.(*ssa.Global); ok2 {
+						g = gg
+					}
+				}
+				if g == nil || strings.Contains(g.Name(), "$") {
+					continue
+				}
+				gID, err := ext.emitValue(g)
+				if err != nil || gID == "" {
+					continue
+				}
+				if err := ext.emitFlowValue(st.Val, gID); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+

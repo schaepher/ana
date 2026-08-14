@@ -237,7 +237,8 @@ func h() {
 	if w.Property("full_path") != "example.com/mtest.T.A" {
 		t.Errorf("global full_path = %q", w.Property("full_path"))
 	}
-	g := findSSAValue(t, nodes, funcID, "G")
+	// 全局变量节点跨函数共享（Q98 溯源锚点）：ID 与函数命名空间无关
+	g := nodeByID(t, nodes, "symbol:go:example.com/mtest:var.G")
 	if g.Property("origin_kind") != "global" {
 		t.Errorf("global origin_kind = %q", g.Property("origin_kind"))
 	}

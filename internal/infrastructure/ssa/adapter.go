@@ -105,6 +105,10 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, emit domai
 	if err := emitSummaries(a.fd, aliasRes, emit); err != nil {
 		return err
 	}
+	// 全局变量初始化溯源（Q98）：init（隐式函数）的 Store→Global 边
+	if err := emitGlobalInit(repo, prog, emit); err != nil {
+		return err
+	}
 	// 接口动态派发（Q91/Q93/Q94）：dispatch_to 边（接口类型 → 候选实现方法）
 	var typePkgs []*types.Package
 	for _, p := range pkgs {
