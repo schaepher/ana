@@ -54,7 +54,9 @@ export const EDGE_KIND_LABEL = {
   returns: '返回值',
   phi_operand: '分支输入',
   alias: '别名',
-  data_flows_to: '数据流'
+  data_flows_to: '数据流',
+  indirect_write: '间接写',
+  summary_io: '持久化映射'
 };
 export const EDGE_OUT_COLOR = '#1677ff';
 export const EDGE_IN_COLOR = '#f5222d';

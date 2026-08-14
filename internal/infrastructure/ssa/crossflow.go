@@ -136,6 +136,58 @@ func (ext *fieldExtractor) emitCall(cc *ssa.CallCommon, callVal ssa.Value) error
 							return err
 						}
 					}
+					// returns 边：候选实现 Return 值 → 调用点结果
+					// （举一反三——⑮ 只建了 argument，返回值贯通缺失）
+					nResults := implSSA.Signature.Results().Len()
+					if nResults > 0 && callVal != nil {
+						callID, err := ext.emitValue(callVal)
+						if err == nil && callID != "" {
+							rets := ext.returnOperandsCached(implSSA)
+							if nResults == 1 {
+								for _, ret := range rets {
+									if len(ret) == 0 {
+										continue
+									}
+									opID, err := ext.emitValue(ret[0])
+									if err == nil && opID != "" {
+										if err := ext.emitEdgeKind(opID, callID, domain.FactReturns); err != nil {
+											return err
+										}
+									}
+								}
+							} else if refs := callVal.Referrers(); refs != nil && len(*refs) > 0 {
+								for _, ret := range rets {
+									for _, op := range ret {
+										opID, err := ext.emitValue(op)
+										if err == nil && opID != "" {
+											if err := ext.emitEdgeKind(opID, callID, domain.FactReturns); err != nil {
+												return err
+											}
+										}
+									}
+								}
+								for _, u := range *refs {
+									ex, ok := u.(*ssa.Extract)
+									if !ok || ex.Tuple != callVal {
+										continue
+									}
+									idx := ex.Index
+									exID, err := ext.emitValue(ex)
+									if err != nil || exID == "" {
+										continue
+									}
+									if idx < len(rets[0]) {
+										opID, err := ext.emitValue(rets[0][idx])
+										if err == nil && opID != "" {
+											if err := ext.emitEdgeKind(opID, exID, domain.FactReturns); err != nil {
+												return err
+											}
+										}
+									}
+								}
+							}
+						}
+					}
 				}
 			}
 		}
