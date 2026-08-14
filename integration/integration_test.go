@@ -1967,3 +1967,101 @@ func main() {}
 		t.Errorf("value-trace 未经接口 argument 边进入候选实现，output=%q", out[:min(len(out), 400)])
 	}
 }
+
+// TestClosureWriteInSummarySelfContained：继续查——闭包内写入应计入
+// 外层函数的字段摘要（direct_write，funcData 归外层）。
+func TestClosureWriteInSummarySelfContained(t *testing.T) {
+	if !scipGoAvailable() {
+		t.Skip("scip-go not found")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/cs\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "main.go"), `package cs
+
+type Record struct {
+	FinalFee float64
+}
+
+func runA() {
+	rec := &Record{}
+	fn := func() {
+		rec.FinalFee = 700
+	}
+	fn()
+	_ = rec
+}
+
+func main() {}
+`)
+	if code := runCLI(t, "init", "--repo", dir); code != 0 {
+		t.Fatalf("init exit = %d", code)
+	}
+	code, out := runCLIOut(t, "query", "fields", "symbol:go:example.com/cs:runA", "--repo", dir)
+	if code != 0 {
+		t.Fatalf("fields exit = %d", code)
+	}
+	if !strings.Contains(out, "example.com/cs.Record.FinalFee") {
+		t.Errorf("闭包内写入未计入外层函数摘要，output=%q", out[:min(len(out), 300)])
+	}
+}
+
+// TestCallbackClosureArgTraceSelfContained：继续查——callback 模式
+// （apply(rec, func(r){r.FinalFee=...})——闭包字面量作为实参传入后在被
+// 调函数内调用）：预期为已知限制（函数值参数跨函数无法静态解析），
+// 此处验证不 panic 且不误连。
+func TestCallbackClosureArgTraceSelfContained(t *testing.T) {
+	if !scipGoAvailable() {
+		t.Skip("scip-go not found")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/cb\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "main.go"), `package cb
+
+type Record struct {
+	FinalFee float64
+}
+
+func apply(r *Record, fn func(*Record)) {
+	fn(r)
+}
+
+func runB() {
+	rec := &Record{}
+	apply(rec, func(r *Record) {
+		r.FinalFee = 900
+	})
+}
+
+func main() {}
+`)
+	if code := runCLI(t, "init", "--repo", dir); code != 0 {
+		t.Fatalf("init exit = %d", code)
+	}
+	code, _ := runCLIOut(t, "query", "trace-forward", "example.com/cb.Record.FinalFee",
+		"--func", "symbol:go:example.com/cb:runB", "--repo", dir)
+	if code != 0 {
+		t.Fatalf("trace-forward exit = %d", code)
+	}
+	// 已知限制：函数值参数跨函数无法静态解析——闭包内写入不要求必达；
+	// 但闭包字段访问归外层（runB）后，直接查 runB 内字段写入应存在
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := sqlite.NewRepo(db)
+	var cnt int
+	rows, err := repo.Query(`SELECT count(*) FROM nodes WHERE kind='field_access'
+		AND json_extract(properties, '$.full_path') = 'example.com/cb.Record.FinalFee'
+		AND json_extract(properties, '$.access_kind') = 'write'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows.Next() {
+		_ = rows.Scan(&cnt)
+	}
+	rows.Close()
+	if cnt == 0 {
+		t.Error("callback 闭包内字段写入节点应存在（归外层 runB）")
+	}
+}
