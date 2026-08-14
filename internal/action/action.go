@@ -458,22 +458,6 @@ func (a *Actions) SummaryChain(anchor domain.CanonicalID) ([]SummaryStep, error)
 	return dedup, nil
 }
 
-// pickSub 从子追溯结果按 depth 分层取首个（dir 指定）。
-func pickSub(dir int, rows []*domain.TraceRow) []*domain.TraceRow {
-	var out []*domain.TraceRow
-	maxDepth := -1
-	for _, r := range rows {
-		if r.Dir != dir {
-			continue
-		}
-		if r.Depth > maxDepth {
-			maxDepth = r.Depth
-			out = append(out, r)
-		}
-	}
-	return out
-}
-
 // shortFuncNameX 从 canonical ID 取函数短名（action 层展示用）。
 func shortFuncNameX(id string) string {
 	if i := strings.LastIndex(id, ":"); i >= 0 {

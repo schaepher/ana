@@ -152,7 +152,10 @@ func computeAliases(repo *domain.Repository, prog *ssa.Program,
 			}
 		}
 	}
-	// 跨函数传播：实参→形参、returns→调用者，迭代至稳定（上限 20 轮）
+	// 跨函数传播：实参→形参、returns→调用者，迭代至稳定（上限 20 轮）。
+	// S1：paramMay/callMay 更新时须清空受影响函数的 may 缓存——mayOfDepth
+	// 缓存了 paramMay/callMay 的 map 引用，参数首次从 nil 新建后旧缓存仍
+	// 指向旧 map，传播会过早停滞（结果依赖调用点处理顺序，不稳定）。
 	for round := 0; round < 20; round++ {
 		changed := false
 		for _, s := range sites {
@@ -164,6 +167,7 @@ func computeAliases(repo *domain.Repository, prog *ssa.Program,
 				pm := p.paramMay[param]
 				if mergeMay(&pm, p.mayOf(s.caller, arg)) {
 					p.paramMay[param] = pm
+					clearMayCache(p.may[p.funcIDs[s.callee]]) // 被调函数 may 缓存失效
 					changed = true
 				}
 			}
@@ -173,6 +177,7 @@ func computeAliases(repo *domain.Repository, prog *ssa.Program,
 						cm := p.callMay[s.callVal]
 						if mergeMay(&cm, p.mayOf(s.callee, op)) {
 							p.callMay[s.callVal] = cm
+							clearMayCache(p.may[p.funcIDs[s.caller]]) // 调用者函数 may 缓存失效
 							changed = true
 						}
 					}
@@ -291,6 +296,16 @@ func (p *aliasPass) mayOfDepth(fn *ssa.Function, v ssa.Value,
 	}
 	p.may[id][v] = out
 	return out
+}
+
+// clearMayCache 清空函数的 may 缓存（保留顶层条目：mayOfDepth 直接对
+// p.may[id][v] 赋值，删条目会让 p.may[id] 变 nil 导致 panic——S1 修复
+// 踩过）。nil 安全。
+func clearMayCache(m map[ssa.Value]map[ssa.Value]bool) {
+	if m == nil {
+		return
+	}
+	clear(m)
 }
 
 // mergeMay 合并 src 到 dst（dst 为 nil 时创建），返回是否有新增。
@@ -474,7 +489,7 @@ func (p *aliasPass) returnOperandsCached(fn *ssa.Function) [][]ssa.Value {
 
 // emitAliasEdges 发射 值 → alloc 的 ALIAS 边（may，conf 0.8）。
 func (p *aliasPass) emitAliasEdges(fn *ssa.Function, v ssa.Value) {
-	id, ok := p.funcIDOfValue(v)
+	id, ok := p.valueNodeID(v)
 	if !ok {
 		return
 	}
@@ -493,6 +508,49 @@ func (p *aliasPass) emitAliasEdges(fn *ssa.Function, v ssa.Value) {
 			return
 		}
 	}
+}
+
+// valueNodeID 生成并发射值节点的 canonical ID（funcID#slot，与 emitValue
+// 一致：shadowing 同名附加 @行号）。alias 边 source 用（B1：此前
+// funcIDOfValue 返回函数 ID，alias 边全部错挂在函数节点上——值节点
+// 看不到别名关系）。值节点可能未被 emitValue 发射（如 Field 指令的
+// 基值），此处保证端点存在（FK 约束）。
+func (p *aliasPass) valueNodeID(v ssa.Value) (domain.CanonicalID, bool) {
+	fn := v.Parent()
+	if fn == nil {
+		return "", false
+	}
+	funcID, ok := p.funcIDOf(fn)
+	if !ok {
+		return "", false
+	}
+	slots := p.slotSeen[funcID]
+	if slots == nil {
+		slots = map[string]bool{}
+		p.slotSeen[funcID] = slots
+	}
+	slot := v.Name()
+	if slots[slot] {
+		line := p.prog.Fset.PositionFor(v.Pos(), false).Line
+		slot = fmt.Sprintf("%s@%d", slot, line)
+	} else {
+		slots[slot] = true
+	}
+	id := domain.CanonicalID(string(funcID) + "#" + slot)
+	if err := p.emit(domain.Item{Node: &domain.CodeEntity{
+		ID:   id,
+		Kind: domain.KindSSAValue,
+		Name: slot,
+		Properties: map[string]any{
+			"origin_kind": originKind(v),
+			"ssa_op":      ssaOp(v),
+			"type_string": v.Type().String(),
+			"func_id":     string(funcID),
+		},
+	}}); err != nil {
+		return "", false
+	}
+	return id, true
 }
 
 // objectIDOf 确保对象创建点（alloc / MakeMap / MakeSlice）的 ssa_value
@@ -601,18 +659,6 @@ func (p *aliasPass) funcIDOf(fn *ssa.Function) (domain.CanonicalID, bool) {
 	}
 	p.funcIDs[fn] = id
 	return id, true
-}
-
-// funcIDOfValue 值 → 所属函数 ID。
-func (p *aliasPass) funcIDOfValue(v ssa.Value) (domain.CanonicalID, bool) {
-	if fn, ok := v.(*ssa.Function); ok {
-		return p.funcIDOf(fn)
-	}
-	parent := v.Parent()
-	if parent == nil {
-		return "", false
-	}
-	return p.funcIDOf(parent)
 }
 
 // elementWritePath 生成元素写路径（间接写条目用，Q5 记号）。

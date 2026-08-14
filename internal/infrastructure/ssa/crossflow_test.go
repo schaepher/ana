@@ -197,3 +197,42 @@ func findSummary(t *testing.T, summaries []*domain.FunctionFieldSummary,
 	t.Fatalf("summary not found: %s %s %s", funcID, accessKind, fieldPath)
 	return nil
 }
+
+// TestIndirectWriteExcludedDeepChain：S1 回归——跨函数参数 may 传播
+// （a→b→c 三层）须稳定生效：c 写自己内部对象（与实参无别名）时，
+// a 的调用点应被别名排除（无间接写）。此前 mayOfDepth 缓存 paramMay
+// 引用，参数首次 nil→新建后缓存失效，传播可能过早停滞（结果依赖
+// 调用点处理顺序，不稳定）。
+func TestIndirectWriteExcludedDeepChain(t *testing.T) {
+	_, _, summaries := indexFixtureFull(t, map[string]string{
+		"go.mod":  moduleGoMod,
+		"main.go": `package m
+
+type T struct {
+	A int
+}
+
+// c 写自己内部对象 inner（与实参 x 无别名）
+func c(x *T) {
+	var inner T
+	inner.A = 1
+	_ = x
+}
+
+func b(x *T) {
+	c(x)
+}
+
+func a() {
+	var t T
+	b(&t)
+}
+`,
+	})
+	funcA := "symbol:go:example.com/mtest:a"
+	for _, s := range summaries {
+		if s.FunctionID == domain.CanonicalID(funcA) && s.AccessKind == domain.SummaryIndirectWrite {
+			t.Errorf("a 不应有间接写（c 写内部对象，别名排除应生效）: %s", s.FieldPath)
+		}
+	}
+}

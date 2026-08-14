@@ -179,3 +179,40 @@ func main() {
 		t.Errorf("nil input = %v, %v", out, err)
 	}
 }
+
+// TestTraceConditionsDoesNotMutateInput：S5 回归——TraceConditions 不得修改
+// 入参行（返回新切片 + 新行对象）；此前 out[i] = r 共享指针，原行的
+// Conditions 字段被原地覆盖。
+func TestTraceConditionsDoesNotMutateInput(t *testing.T) {
+	a, dir := seedRepo(t)
+	mainPath := filepath.Join(dir, "main.go")
+	if err := os.WriteFile(mainPath, []byte(`package main
+
+func main() {
+	if x > 1 {
+		use(x)
+	}
+}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mainID := domain.CanonicalID("symbol:go:example.com/m:main")
+	rows := []*domain.TraceRow{
+		{ID: mainID, Line: 4}, // if 分支内
+	}
+	out, err := a.TraceConditions(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 入参行不得被修改（Conditions 保持 nil）
+	if rows[0].Conditions != nil {
+		t.Errorf("入参被修改: rows[0].Conditions = %+v", rows[0].Conditions)
+	}
+	// 返回行携带条件
+	if len(out) != 1 || len(out[0].Conditions) != 1 || out[0].Conditions[0] != "x > 1" {
+		t.Errorf("返回行条件 = %+v", out[0].Conditions)
+	}
+	// 返回行是新的对象（不是入参指针）
+	if out[0] == rows[0] {
+		t.Error("返回行与入参共享指针")
+	}
+}

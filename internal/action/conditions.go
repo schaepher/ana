@@ -101,7 +101,8 @@ func (a *Actions) TraceConditions(rows []*domain.TraceRow) ([]*domain.TraceRow, 
 	fileOf := map[string]string{}
 	out := make([]*domain.TraceRow, len(rows))
 	for i, r := range rows {
-		out[i] = r
+		cp := *r // 复制行：不得修改入参（S5：此前共享指针原地覆盖原行）
+		out[i] = &cp
 		if r.Line <= 0 {
 			continue
 		}

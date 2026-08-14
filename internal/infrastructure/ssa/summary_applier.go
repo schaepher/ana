@@ -273,10 +273,16 @@ func (ext *fieldExtractor) applyArgSummaryOne(cc *ssa.CallCommon, calleeID domai
 	base := ext.instancePath(realArg)
 	for _, f := range fields {
 		fullPath := f
-		// 相对字段路径（如 "Form"）补全为类型限定路径
-		if !strings.Contains(f, ".") || !strings.Contains(f, "/") {
+		// 相对字段路径（"Form" / "user.ID"）补全为类型限定路径：不含包路径
+		// （/）即相对；实例前缀（user.）剥除只取字段名（S2：此前含点相对
+		// 路径被全拼成 pkg.T.user.ID，匹配不到真实字段）
+		if !strings.Contains(f, "/") {
 			if named := namedStructOf(realArg.Type()); named != nil {
-				fullPath = named.Obj().Pkg().Path() + "." + named.Obj().Name() + "." + f
+				seg := f
+				if i := strings.LastIndex(f, "."); i >= 0 {
+					seg = f[i+1:]
+				}
+				fullPath = named.Obj().Pkg().Path() + "." + named.Obj().Name() + "." + seg
 			}
 		}
 		access := "read"

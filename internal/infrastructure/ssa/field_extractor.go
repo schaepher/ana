@@ -397,7 +397,6 @@ type fieldInfo struct {
 // fieldAccess 是单个字段访问的构建期表示。
 type fieldAccess struct {
 	id       domain.CanonicalID
-	addr     *ssa.FieldAddr // FieldAddr 指令（write 节点），Store 解析目标用
 	access   string         // read / write
 	instance string         // 变量访问链（如 req.Amount）
 	info     fieldInfo
@@ -446,7 +445,6 @@ func (ext *fieldExtractor) newFieldAccess(fa *ssa.FieldAddr, access string) *fie
 	ext.recordEntry(access, info, instance)
 	return &fieldAccess{
 		id:       ext.accessID(instance, access, fa.Pos()),
-		addr:     fa,
 		access:   access,
 		instance: instance,
 		info:     info,
@@ -1035,9 +1033,12 @@ func (ext *fieldExtractor) lookupAssignTarget(pos token.Pos) string {
 
 // emitGlobalInit 全局变量初始化溯源（Q98）：遍历模块内全部函数（含隐式
 // init——init 无 FuncDecl，emitFunction 不处理）的 Store→Global 指令，
-// 发 data_flows_to 边（写入值 → Global 节点）；常量初始化（var G = Const，
-// go/ssa 挂在 Global.Init 不进 init）同样发边。Global 节点跨函数共享
-// （symbol:go:<pkg>:var.<name>），value-trace 从使用处反向可达初始化表达式。
+// 发 data_flows_to 边（写入值 → Global 节点）。注意：go/ssa v0.26 的
+// Global 无 Init 字段，纯常量标量初始化（var G = 5）不产生 Store 指令、
+// 无初始化边（S4：注释曾声称"常量初始化同样发边"，实际不存在该路径）；
+// var G = T{...} 结构体初始化是字段级 Store（&G.A），经 FieldAddr 分支
+// 处理。Global 节点跨函数共享（symbol:go:<pkg>:var.<name>），value-trace
+// 从使用处反向可达初始化表达式。
 func emitGlobalInit(repo *domain.Repository, prog *ssa.Program, emit domain.EmitFunc) error {
 	logger := zap.L()
 	logger.Debug("enter emitGlobalInit")

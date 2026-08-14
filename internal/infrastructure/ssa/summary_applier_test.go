@@ -315,3 +315,52 @@ func TestParseSQLStmt(t *testing.T) {
 		}
 	}
 }
+
+// TestUserSummaryRelativeFieldPath：S2 回归——field-summary.yaml 相对字段
+// 路径（"user.ID" 带实例前缀）须补全为类型限定路径（pkg.T.ID），
+// 而非错误拼成 pkg.T.user.ID（此前补全条件含点相对路径全拼）。
+func TestUserSummaryRelativeFieldPath(t *testing.T) {
+	nodes, _, _ := indexFixtureFull(t, map[string]string{
+		"go.mod": moduleGoMod,
+		"external/external.go": `package external
+
+func Wrap(v any) {}
+`,
+		"main.go": `package m
+
+import "example.com/mtest/external"
+
+type T struct {
+	ID   int
+	Name string
+}
+
+func f(t *T) {
+	external.Wrap(t)
+}
+`,
+		"field-summary.yaml": `summaries:
+  - func: "example.com/mtest/external.Wrap"
+    reads: ["user.ID", "user.Name"]
+    param_index: 0
+`,
+	})
+	var idPath, namePath bool
+	for _, n := range nodes {
+		if n.Kind != domain.KindFieldAccess || n.Property("is_external") != "true" {
+			continue
+		}
+		fp := n.Property("full_path")
+		switch fp {
+		case "example.com/mtest.T.ID":
+			idPath = true
+		case "example.com/mtest.T.Name":
+			namePath = true
+		case "example.com/mtest.T.user.ID", "example.com/mtest.T.user.Name":
+			t.Errorf("相对路径补全错误: full_path = %q", fp)
+		}
+	}
+	if !idPath || !namePath {
+		t.Errorf("相对路径未补全为类型限定路径: id=%v name=%v", idPath, namePath)
+	}
+}

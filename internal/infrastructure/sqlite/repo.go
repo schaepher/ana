@@ -863,17 +863,27 @@ SELECT id, depth, name, edge_kinds, line FROM def_trace ORDER BY depth, id`
       AND json_extract(n.properties, '$.full_path') = ?
       AND json_extract(n.properties, '$.func_id') = ?
     UNION
-    -- 起点：函数参数、局部对象变量与同类型 local/phi 值（调用方经
-    -- argument 进入 callee 对该字段的实际写入；① param/receiver 传参、
-    -- ⑩ alloc 局部对象、⑭ DAO 返回对象→局部变量→helper——与目标字段
-    -- 所属结构体同类型的 SSA 值也作起点，避免"返回对象→局部变量"路径丢失）
+    -- 起点：与目标字段所属结构体同类型的 SSA 值（param/receiver/alloc/
+    -- local/phi/global——① 传参、⑩ 局部对象、⑭ DAO 返回对象→局部变量→
+    -- helper、global 溯源）。B2：类型不匹配的参数与全局变量（gitCommit
+    -- 等 string）不再是起点——此前 origin_kind IN ('param','receiver',
+    -- 'alloc','global') 无条件放行，全部参数与全局变量入链（噪音）
     SELECT n.id, 0, n.name, '', n.line_start, 0, n.kind
     FROM nodes n
     WHERE n.kind = 'ssa_value'
       AND (json_extract(n.properties, '$.func_id') = ?
            OR json_extract(n.properties, '$.origin_kind') = 'global')
-      AND (json_extract(n.properties, '$.origin_kind') IN ('param','receiver','alloc','global')
-           OR json_extract(n.properties, '$.type_string') = ?
+      AND (json_extract(n.properties, '$.type_string') = ?
+           OR json_extract(n.properties, '$.type_string') = ?)
+    UNION
+    -- 起点：承载目标类型对象的字段访问节点（C 形态：s.cfg → fill 写
+    -- c.Key——容器对象 Svc 自身类型不匹配，但其字段节点 s.cfg 类型
+    -- *Cfg 匹配，作起点经 argument 进入 callee）
+    SELECT n.id, 0, n.name, '', n.line_start, 0, n.kind
+    FROM nodes n
+    WHERE n.kind = 'field_access'
+      AND json_extract(n.properties, '$.func_id') = ?
+      AND (json_extract(n.properties, '$.type_string') = ?
            OR json_extract(n.properties, '$.type_string') = ?)
     UNION
     SELECT e.target_id, d.depth + 1, n_next.name,
@@ -907,6 +917,7 @@ SELECT id, depth, name, edge_kinds, line, is_usage FROM fwd_trace ORDER BY depth
 		targetType := strings.TrimSuffix(field, "."+lastSeg(field))
 		rows, err = r.Query(query, field, string(funcID), string(funcID),
 			targetType, "*"+targetType,
+			string(funcID), targetType, "*"+targetType,
 			field, field,
 			"%."+lastSeg(field), "%"+pkgOf(field)+".%", maxDepth)
 	} else {

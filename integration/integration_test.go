@@ -450,19 +450,29 @@ func TestCLIFullFlow(t *testing.T) {
 	if !strings.Contains(out, `s[0]`) {
 		t.Errorf("useMap direct_write 应含 slice 元素 s[0]，output=%q", out)
 	}
-	//    aliasLocal 内 b := a 别名同一 alloc → expand 返回 alias 边
+	//    aliasLocal 内 b := a 别名同一 alloc → alias 边挂值节点（B1 修复后
+	//    source 为 ssa_value 而非函数节点；expand 值节点 b 返回 alias 边）
 	aliasFacts, _, err := repo.Expand("symbol:go:example.com/app/svc:aliasLocal")
 	if err != nil {
 		t.Fatalf("expand aliasLocal: %v", err)
 	}
-	aliasHit := false
 	for _, f := range aliasFacts {
+		if f.Kind == domain.FactAlias {
+			t.Errorf("expand 函数节点不应返回 alias 边（B1 后 alias 挂值节点）: %+v", f)
+		}
+	}
+	valFacts, _, err := repo.Expand("symbol:go:example.com/app/svc:aliasLocal#t0")
+	if err != nil {
+		t.Fatalf("expand aliasLocal#t0: %v", err)
+	}
+	aliasHit := false
+	for _, f := range valFacts {
 		if f.Kind == domain.FactAlias {
 			aliasHit = true
 		}
 	}
 	if !aliasHit {
-		t.Errorf("expand aliasLocal 应返回 alias 边（b 与 a 别名同一 alloc）: %+v", aliasFacts)
+		t.Errorf("expand 值节点应返回 alias 边（b 与 a 别名同一 alloc）: %+v", valFacts)
 	}
 
 	// 6. 嵌套字段读链（fieldAddrUse 传播，radar m.cfg.APIKey 场景固化为
