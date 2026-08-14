@@ -136,6 +136,47 @@ func useMap() {
 	s := make([]int, 3)
 	s[0] = 2
 }
+
+// 嵌套字段读链场景（fieldAddrUse 传播）：newLLM 读 m.cfg.APIKey——
+// 读链中间层 m.cfg 应为 read，不误报 write、不污染调用者的间接写
+type Config struct {
+	APIKey  string
+	BaseURL string
+}
+
+type Manager struct {
+	cfg Config
+}
+
+func NewManager(cfg Config) *Manager {
+	return &Manager{cfg: cfg}
+}
+
+func newLLM(m *Manager) {
+	if m.cfg.APIKey == "" {
+		return
+	}
+	_ = m.cfg.BaseURL
+}
+
+func runNested() {
+	m := NewManager(Config{APIKey: "x"})
+	newLLM(m)
+}
+
+// 字面量与数组场景：[]T{...} 字面量初始化（lifting 无源码位置）不产
+// 元素节点；真数组变量 a[0]（有源码位置）保留
+type Option struct{ V int }
+
+func opts() {
+	_ = []Option{{V: 1}, {V: 2}}
+}
+
+func arr() {
+	var a [3]int
+	a[0] = 1
+	_ = a[0]
+}
 `)
 	return dir
 }
@@ -154,6 +195,30 @@ func writeFile(t *testing.T, path, content string) {
 func runCLI(t *testing.T, args ...string) int {
 	t.Helper()
 	return cli.Main(context.Background(), args)
+}
+
+// fieldAccessID 查函数内指定 instance_path + access_kind 的字段访问节点 ID
+// （value-trace 锚点用；行号不硬编码，避免 fixture 行号漂移）。
+func fieldAccessID(t *testing.T, repo *sqlite.Repo, funcID, instance, access string) string {
+	t.Helper()
+	rows, err := repo.Query(`SELECT id FROM nodes
+		WHERE kind = 'field_access'
+		  AND json_extract(properties, '$.func_id') = ?
+		  AND json_extract(properties, '$.instance_path') = ?
+		  AND json_extract(properties, '$.access_kind') = ?
+		LIMIT 1`, funcID, instance, access)
+	if err != nil {
+		t.Fatalf("fieldAccessID: %v", err)
+	}
+	defer rows.Close()
+	var id string
+	if rows.Next() {
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan fieldAccessID: %v", err)
+		}
+		return id
+	}
+	return ""
 }
 
 // runCLIOut 同 runCLI，额外捕获 stdout（CLI 输出断言用）。
@@ -345,7 +410,94 @@ func TestCLIFullFlow(t *testing.T) {
 		t.Errorf("expand aliasLocal 应返回 alias 边（b 与 a 别名同一 alloc）: %+v", aliasFacts)
 	}
 
-	// 4. clean 删除索引
+	// 6. 嵌套字段读链（fieldAddrUse 传播，radar m.cfg.APIKey 场景固化为
+	//    fixture）：newLLM 读 m.cfg.APIKey——读链中间层 m.cfg 是 read，
+	//    不误报 write；runNested 无 Manager.cfg 间接写（newLLM 只读）
+	llmID := "symbol:go:example.com/app/svc:newLLM"
+	code, out = runCLIOut(t, "query", "fields", llmID, "--repo", dir)
+	if code != 0 {
+		t.Errorf("query fields newLLM exit = %d", code)
+	}
+	llmRows, err := repo.GetFunctionFields(domain.CanonicalID(llmID))
+	if err != nil {
+		t.Fatalf("GetFunctionFields newLLM: %v", err)
+	}
+	llmReadCfg, llmReadKey, llmWriteCfg := false, false, false
+	for _, s := range llmRows {
+		switch {
+		case s.AccessKind == domain.SummaryDirectRead && strings.Contains(s.FieldPath, "Manager.cfg"):
+			llmReadCfg = true
+		case s.AccessKind == domain.SummaryDirectRead && strings.Contains(s.FieldPath, "Config.APIKey"):
+			llmReadKey = true
+		case s.AccessKind == domain.SummaryDirectWrite && strings.Contains(s.FieldPath, "Manager.cfg"):
+			llmWriteCfg = true
+		}
+	}
+	if !llmReadCfg || !llmReadKey {
+		t.Errorf("newLLM 应读 Manager.cfg（内层）与 Config.APIKey，rows=%+v", llmRows)
+	}
+	if llmWriteCfg {
+		t.Errorf("newLLM 读链中间层 Manager.cfg 不应标 write（污染间接写闭包）")
+	}
+	if !strings.Contains(out, "Config.APIKey") {
+		t.Errorf("query fields newLLM output = %q", out)
+	}
+	code, out = runCLIOut(t, "query", "fields", "symbol:go:example.com/app/svc:runNested", "--repo", dir)
+	if code != 0 {
+		t.Errorf("query fields runNested exit = %d", code)
+	}
+	runRows, err := repo.GetFunctionFields("symbol:go:example.com/app/svc:runNested")
+	if err != nil {
+		t.Fatalf("GetFunctionFields runNested: %v", err)
+	}
+	for _, s := range runRows {
+		if s.AccessKind == domain.SummaryIndirectWrite && strings.Contains(s.FieldPath, "Manager.cfg") {
+			t.Errorf("runNested 不应有 Manager.cfg 间接写（newLLM 只读 cfg），rows=%+v", runRows)
+		}
+	}
+
+	// 7. lifting 字面量噪音：[]T{...} 初始化不产元素节点；真数组 a[0] 保留
+	optsRows, err := repo.GetFunctionFields("symbol:go:example.com/app/svc:opts")
+	if err != nil {
+		t.Fatalf("GetFunctionFields opts: %v", err)
+	}
+	for _, s := range optsRows {
+		if strings.Contains(s.FieldPath, "opts[") {
+			t.Errorf("[]T{...} 字面量初始化不应产元素路径 opts[i]，rows=%+v", optsRows)
+		}
+	}
+	arrRows, err := repo.GetFunctionFields("symbol:go:example.com/app/svc:arr")
+	if err != nil {
+		t.Fatalf("GetFunctionFields arr: %v", err)
+	}
+	arrHit := false
+	for _, s := range arrRows {
+		if strings.Contains(s.FieldPath, "a[0]") {
+			arrHit = true
+		}
+	}
+	if !arrHit {
+		t.Errorf("真数组变量 a[0] 应保留元素访问，rows=%+v", arrRows)
+	}
+
+	// 8. value-trace 穿层：从 newLLM 的 m.cfg.APIKey 读节点出发，反向
+	//    链应穿过嵌套字段层与函数边界：
+	//    newLLM.m ← argument ← runNested.m ← returns ← NewManager
+	llmReadID := fieldAccessID(t, repo, llmID, "m.cfg.APIKey", "read")
+	if llmReadID == "" {
+		t.Fatalf("newLLM m.cfg.APIKey read node missing")
+	}
+	code, out = runCLIOut(t, "query", "value-trace", llmReadID, "--repo", dir)
+	if code != 0 {
+		t.Errorf("query value-trace exit = %d", code)
+	}
+	for _, want := range []string{"argument", "returns", "runNested", "NewManager", "m.cfg.APIKey"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("value-trace 输出缺 %q（追溯链应穿层跨函数），output=%q", want, out)
+		}
+	}
+
+	// 9. clean 删除索引
 	if code := runCLI(t, "clean", "--repo", dir, "--force"); code != 0 {
 		t.Fatalf("clean exit = %d", code)
 	}
