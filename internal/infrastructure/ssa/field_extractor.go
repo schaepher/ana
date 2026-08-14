@@ -73,12 +73,12 @@ func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Func
 				}
 				hasStore, hasDeref := faUses(ia)
 				if hasStore || !hasDeref {
-					if f := ext.newElementAccess(ia.X, ia.Index, ia.Pos(), "write"); f != nil {
+					if f := ext.newElementAccess(ia.X, ia.Index, ia.Pos(), "write", ""); f != nil {
 						ext.indexes[ia] = f
 					}
 				}
 				if hasDeref {
-					if f := ext.newElementAccess(ia.X, ia.Index, ia.Pos(), "read"); f != nil {
+					if f := ext.newElementAccess(ia.X, ia.Index, ia.Pos(), "read", ""); f != nil {
 						ext.indexReads[ia] = f
 					}
 				}
@@ -108,7 +108,7 @@ func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Func
 				if !isSliceLike(v.X.Type()) && !isMapLike(v.X.Type()) {
 					continue
 				}
-				if f := ext.newElementAccess(v.X, v.Index, v.Pos(), "read"); f != nil {
+				if f := ext.newElementAccess(v.X, v.Index, v.Pos(), "read", ""); f != nil {
 					if err := f.emit(); err != nil {
 						return err
 					}
@@ -121,7 +121,7 @@ func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Func
 				if !isSliceLike(v.X.Type()) {
 					continue
 				}
-				if f := ext.newElementAccess(v.X, v.Index, v.Pos(), "read"); f != nil {
+				if f := ext.newElementAccess(v.X, v.Index, v.Pos(), "read", ""); f != nil {
 					if err := f.emit(); err != nil {
 						return err
 					}
@@ -133,7 +133,7 @@ func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Func
 				if !isMapLike(v.Map.Type()) {
 					continue
 				}
-				if f := ext.newElementAccess(v.Map, v.Key, v.Pos(), "write"); f != nil {
+				if f := ext.newElementAccess(v.Map, v.Key, v.Pos(), "write", ""); f != nil {
 					if err := f.emit(); err != nil {
 						return err
 					}
@@ -145,11 +145,24 @@ func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Func
 						return err
 					}
 				}
-			case *ssa.Range:
-				if isChanLike(v.X.Type()) {
-					continue // channel 排除（Q2）
+			case *ssa.Send:
+				if !isChanLike(v.Chan.Type()) {
+					continue
 				}
-				if f := ext.newElementAccess(v.X, nil, v.Pos(), "read"); f != nil {
+				// channel 发送（ch <- v）= 写元素（Q83 扩展，记号 [send]）
+				if f := ext.newElementAccess(v.Chan, nil, v.Pos(), "write", "[send]"); f != nil {
+					if err := f.emit(); err != nil {
+						return err
+					}
+					if err := ext.emitFlowValue(v.Chan, f.id); err != nil {
+						return err
+					}
+					if err := ext.emitFlowValue(v.X, f.id); err != nil {
+						return err
+					}
+				}
+			case *ssa.Range:
+				if f := ext.newElementAccess(v.X, nil, v.Pos(), "read", ""); f != nil {
 					if err := f.emit(); err != nil {
 						return err
 					}
@@ -227,6 +240,21 @@ func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Func
 					}
 				}
 			case *ssa.UnOp:
+				if v.Op == token.ARROW {
+					// channel 接收（<-ch）= 读元素（[recv]）
+					if !isChanLike(v.X.Type()) {
+						continue
+					}
+					if f := ext.newElementAccess(v.X, nil, v.Pos(), "read", "[recv]"); f != nil {
+						if err := f.emit(); err != nil {
+							return err
+						}
+						if err := ext.emitFlow(f.id, v); err != nil {
+							return err
+						}
+					}
+					continue
+				}
 				if v.Op != token.MUL {
 					continue
 				}
@@ -727,11 +755,14 @@ func isSSAName(name string) bool {
 
 // newElementAccess 创建容器元素访问节点（map/slice/array 元素，Q83）。
 // key 为 nil 表示 Range 迭代（[*]）。
-func (ext *fieldExtractor) newElementAccess(container, key ssa.Value, pos token.Pos, access string) *fieldAccess {
+func (ext *fieldExtractor) newElementAccess(container, key ssa.Value, pos token.Pos, access, mark string) *fieldAccess {
 	logger := zap.L()
 	logger.Debug("enter (fieldExtractor).newElementAccess")
 	defer logger.Debug("exit (fieldExtractor).newElementAccess")
-	full, instance := ext.elementPath(container, key)
+	if mark == "" {
+		mark = elementMark(key)
+	}
+	full, instance := ext.elementPathMark(container, mark)
 	line := ext.prog.Fset.PositionFor(pos, false).Line
 	fi := fieldInfo{
 		fullPath:   full,
@@ -755,7 +786,10 @@ func (ext *fieldExtractor) newElementAccess(container, key ssa.Value, pos token.
 //   常量字符串 key → m["a"]；常量 int 索引 → s[0]；变量 key → [key]；Range → [*]
 //   full_path 基：字段路径（容器是结构体字段）> named 容器类型 > 回退 instance
 func (ext *fieldExtractor) elementPath(container, key ssa.Value) (full, instance string) {
-	mark := elementMark(key)
+	return ext.elementPathMark(container, elementMark(key))
+}
+
+func (ext *fieldExtractor) elementPathMark(container ssa.Value, mark string) (full, instance string) {
 	instance = ext.containerInstance(container) + mark
 	full = ext.containerFullPath(container)
 	if full == "" {

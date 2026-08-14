@@ -81,7 +81,7 @@ func f(k string) {
 }
 
 func TestElementRangeAndChan(t *testing.T) {
-	// range 迭代 = 读（[*]）；channel 排除
+	// range 迭代 = 读（[*]）；channel 收发 = 写/读元素（[send]/[recv]）
 	nodes, _ := indexFixture(t, map[string]string{
 		"go.mod":  moduleGoMod,
 		"main.go": `package m
@@ -91,6 +91,8 @@ func f(m map[string]int, ch chan int) {
 		_ = k
 		_ = v
 	}
+	ch <- 1
+	_ = <-ch
 	for v := range ch {
 		_ = v
 	}
@@ -99,12 +101,16 @@ func f(m map[string]int, ch chan int) {
 	})
 	funcID := "symbol:go:example.com/mtest:f"
 	findFieldByPath(t, nodes, funcID, `m[*]`)
-	for _, n := range nodes {
-		if n.Kind == domain.KindFieldAccess && n.Property("func_id") == funcID &&
-			(n.Property("instance_path") == "ch[*]" || n.Property("full_path") == "ch[*]") {
-			t.Errorf("channel range 不应建节点: %+v", n)
-		}
+	w := findFieldByPath(t, nodes, funcID, `ch[send]`)
+	if w.Property("access_kind") != "write" {
+		t.Errorf("send access = %q, want write", w.Property("access_kind"))
 	}
+	r := findFieldByPath(t, nodes, funcID, `ch[recv]`)
+	if r.Property("access_kind") != "read" {
+		t.Errorf("recv access = %q, want read", r.Property("access_kind"))
+	}
+	// range channel 在 SSA 中降级为接收循环（UnOp ARROW），同样产出 [recv]
+	findFieldByPath(t, nodes, funcID, `ch[recv]`)
 }
 
 func TestElementNamedContainer(t *testing.T) {

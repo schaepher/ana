@@ -336,6 +336,23 @@ func (p *aliasPass) processCall(s callSite) {
 					continue
 				}
 				container, key, pos = v.Map, v.Key, v.Pos()
+			case *ssa.Send:
+				if !isChanLike(v.X.Type()) {
+					continue
+				}
+				// channel 发送 = 写元素（Q83 扩展）
+				if path, ok2 := p.elementWritePath(v.X, nil); ok2 {
+					if len(argMay) > 0 && overlapMay(argMay, p.mayOf(s.callee, v.X)) {
+						if fd := p.funcData[callerID]; fd != nil {
+							fd.indirectWrites = append(fd.indirectWrites, fieldEntry{
+								fieldPath:    path + "[send]",
+								instancePath: path + "[send]",
+								line:         p.prog.Fset.PositionFor(v.Pos(), false).Line,
+							})
+						}
+					}
+				}
+				continue
 			case *ssa.Store:
 				ia, ok := v.Addr.(*ssa.IndexAddr)
 				if !ok || !isSliceLike(ia.X.Type()) {

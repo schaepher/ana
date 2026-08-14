@@ -67,6 +67,11 @@ func cmdInit(ctx context.Context, args []string) int {
 		return 1
 	}
 
+	// 全量重建后 VACUUM 整理碎片（field_trace.md §9：定期执行 VACUUM）
+	if _, err := db.Exec("VACUUM"); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: VACUUM: %v\n", err)
+	}
+
 	// 构建报告（TD.md 6.1）
 	fmt.Println()
 	fmt.Println("===== 构建报告 =====")
