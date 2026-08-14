@@ -183,6 +183,43 @@ func TestQueryFields(t *testing.T) {
 	}
 }
 
+// TestQueryFieldsCallSite：indirect_write 摘要展示调用点（Q90 调用点级回连）：
+// INDIRECT_WRITE 边 metadata 的调用点行号与实参变量名出现在 fields 输出。
+func TestQueryFieldsCallSite(t *testing.T) {
+	dir := seedFieldTrace(t)
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	r := sqlite.NewRepo(db)
+	// 追加间接写摘要行 + INDIRECT_WRITE 边（metadata 携带调用点；
+	// target 须为已存在节点，否则 FK 跳过）
+	funcID := "symbol:go:example.com/m:main"
+	calleeID := "symbol:go:example.com/m/svc:(Svc).Run"
+	r.SaveBatchStats(nil, nil, []*domain.FunctionFieldSummary{
+		{FunctionID: domain.CanonicalID(funcID), AccessKind: domain.SummaryIndirectWrite,
+			FieldPath: "example.com/m.T.A", InstancePath: "t.A", LineStart: 9, CodeSnippet: "t.A = v"},
+	})
+	if _, err := r.SaveBatchStats(nil, []*domain.Fact{{
+		SourceID: domain.CanonicalID(funcID), TargetID: domain.CanonicalID(calleeID),
+		Kind: domain.FactIndirectWrite, ToolSource: domain.ToolSSA, Confidence: 1,
+		Metadata: map[string]any{"call_line": float64(16), "call_args": "t"},
+	}}, nil); err != nil {
+		t.Fatalf("save indirect edge: %v", err)
+	}
+	out := captureStdout(func() {
+		if code := cmdQuery([]string{"fields", "main", "--repo", dir}); code != 0 {
+			t.Errorf("query fields exit = %d", code)
+		}
+	})
+	for _, want := range []string{"调用点", "16", "t"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("query fields 输出应含调用点信息 %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestQueryTraceBackward(t *testing.T) {
 	dir := seedFieldTrace(t)
 	out := captureStdout(func() {

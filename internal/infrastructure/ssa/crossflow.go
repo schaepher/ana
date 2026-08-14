@@ -31,12 +31,16 @@ type fieldEntry struct {
 	instancePath string
 	line         int
 	snippet      string
+	callLine     int    // 调用点行号（间接写回连，Q90）
+	callArg      string // 调用点实参变量名（间接写回连，Q90）
 }
 
 // callInfo 静态调用记录（间接写匹配用）。
 type callInfo struct {
 	calleeID       domain.CanonicalID
 	argStructPaths []string
+	callLine       int      // 调用点行号（Q90 调用点级回连）
+	argNames       []string // 非 const 实参变量名（Q90）
 }
 
 // emitCrossFlow 发射单个函数的跨过程边并记录摘要数据。
@@ -183,7 +187,7 @@ func (ext *fieldExtractor) emitCall(cc *ssa.CallCommon, callVal ssa.Value) error
 	// 摘要收集（间接写闭包计算用）。
 	// 常量实参（nil、字面量）不产生实例传递，不参与类型匹配
 	if ext.funcData != nil {
-		var argPaths []string
+		var argPaths, argNames []string
 		for _, arg := range cc.Args {
 			if _, isConst := arg.(*ssa.Const); isConst {
 				continue
@@ -191,10 +195,18 @@ func (ext *fieldExtractor) emitCall(cc *ssa.CallCommon, callVal ssa.Value) error
 			if p := structPathOfType(arg.Type()); p != "" {
 				argPaths = append(argPaths, p)
 			}
+			// 实参变量名（Q90 调用点回连展示；SSA 临时名回退原名）
+			name := ext.instancePath(arg)
+			if isSSAName(name) {
+				name = arg.Name()
+			}
+			argNames = append(argNames, name)
 		}
 		ext.funcData.calls = append(ext.funcData.calls, callInfo{
 			calleeID:       calleeID,
 			argStructPaths: argPaths,
+			callLine:       ext.prog.Fset.PositionFor(cc.Pos(), false).Line,
+			argNames:       argNames,
 		})
 	}
 	return nil

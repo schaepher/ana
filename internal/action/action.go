@@ -30,6 +30,7 @@ type Reader interface {
 	GetRoots() ([]*domain.CodeEntity, error)
 	Expand(id domain.CanonicalID) (facts []*domain.Fact, nodes []*domain.CodeEntity, err error)
 	AllSummaries() ([]*domain.FunctionFieldSummary, error)
+	GetIndirectWriteEdges(funcID domain.CanonicalID) ([]*domain.Fact, error)
 	Counts() (nodes int, edges int, err error)
 	GetLatest() (*domain.BuildMeta, error)
 }
@@ -215,6 +216,12 @@ func (a *Actions) Counts() (nodes, edges int, err error) {
 // Latest 返回最近一次构建元数据（serve 启动校验用）。
 func (a *Actions) Latest() (*domain.BuildMeta, error) {
 	return a.repo.GetLatest()
+}
+
+// IndirectWriteSites 返回函数的 INDIRECT_WRITE 边（Q90 调用点回连：
+// metadata 含 call_line / call_args，fields 展示用）。
+func (a *Actions) IndirectWriteSites(funcID domain.CanonicalID) ([]*domain.Fact, error) {
+	return a.repo.GetIndirectWriteEdges(funcID)
 }
 
 // ExportIndex 生成 字段 → 产生者/消费者 的双层索引（S4）。

@@ -190,6 +190,17 @@ func queryFields(acts *action.Actions, input string, opts outputOpts) int {
 			continue
 		}
 		fmt.Printf("  [%s] %d 个字段\n", kind, len(items))
+		// 调用点级回连（Q90）：间接写展示调用位置与实参（INDIRECT_WRITE 边 metadata）
+		if kind == domain.SummaryIndirectWrite && !opts.json {
+			if sites, err := acts.IndirectWriteSites(n.ID); err == nil {
+				for _, f := range sites {
+					line, _ := f.Metadata["call_line"].(float64)
+					args, _ := f.Metadata["call_args"].(string)
+					callee := shortFuncName(string(f.TargetID))
+					fmt.Printf("    调用点: :%d %s(%s)\n", int(line), callee, args)
+				}
+			}
+		}
 		for _, it := range items {
 			line := ""
 			if it.LineStart > 0 {

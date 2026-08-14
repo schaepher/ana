@@ -6,6 +6,8 @@
 package ssa
 
 import (
+	"strings"
+
 	"github.com/schaepher/codeintel/internal/domain"
 	"go.uber.org/zap"
 )
@@ -37,6 +39,10 @@ func emitSummaries(data map[domain.CanonicalID]*funcData, alias *aliasResult, em
 					if !contains(c.argStructPaths, structPathOf(e.fieldPath)) {
 						continue
 					}
+					// 调用点级回连（Q90）：fID 视角的调用点 = fID 直接调用
+					// 的位置与实参（多层闭包传播时覆盖为当前层）
+					e.callLine = c.callLine
+					e.callArg = strings.Join(c.argNames, ", ")
 					indirect[fID][e.fieldPath] = e
 					changed = true
 				}
@@ -64,15 +70,32 @@ func emitSummaries(data map[domain.CanonicalID]*funcData, alias *aliasResult, em
 		if err := emitSummaryRows(fID, domain.SummaryIndirectWrite, valuesOf(ind), emit); err != nil {
 			return err
 		}
-		// INDIRECT_WRITE 边：f → g（本次调用存在匹配写）
+		// INDIRECT_WRITE 边：f → g（本次调用存在匹配写），metadata 携带
+		// 调用点（Q90 回连：行号 + 实参变量名）。调用点在 fID 的 indirect
+		// 条目（闭包传播时按 fID 的直接调用点设置）
 		for _, c := range fd.calls {
 			if calleeHasMatchingWrite(data, indirect, c.calleeID, c.argStructPaths) {
+				meta := map[string]any{}
+				for _, e := range calleeWrites(data, indirect, c.calleeID) {
+					if contains(c.argStructPaths, structPathOf(e.fieldPath)) {
+						if got, ok := indirect[fID][e.fieldPath]; ok {
+							if got.callLine > 0 {
+								meta["call_line"] = got.callLine
+							}
+							if got.callArg != "" {
+								meta["call_args"] = got.callArg
+							}
+						}
+						break
+					}
+				}
 				if err := emit(domain.Item{Fact: &domain.Fact{
 					SourceID:   fID,
 					TargetID:   c.calleeID,
 					Kind:       domain.FactIndirectWrite,
 					ToolSource: domain.ToolSSA,
 					Confidence: 1.0,
+					Metadata:   meta,
 				}}); err != nil {
 					return err
 				}

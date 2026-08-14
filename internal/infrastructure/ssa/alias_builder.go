@@ -342,6 +342,8 @@ func (p *aliasPass) processCall(s callSite) {
 				fieldPath:    w.path,
 				instancePath: w.path,
 				line:         p.prog.Fset.PositionFor(w.pos, false).Line,
+				callLine:     p.prog.Fset.PositionFor(s.cc.Pos(), false).Line, // Q90 调用点
+				callArg:      callArgNames(p, s.cc),
 			})
 		}
 	}
@@ -379,6 +381,25 @@ func (p *aliasPass) processCall(s callSite) {
 			calExcl[fieldPath] = true // 确认不别名：排除
 		}
 	}
+}
+
+// callArgNames 提取调用点非 const 实参的源码变量名（Q90 回连展示；
+// Alloc 从标识符索引恢复，其余回退 SSA 名）。
+func callArgNames(p *aliasPass, cc *ssa.CallCommon) string {
+	var names []string
+	for _, arg := range cc.Args {
+		if _, isConst := arg.(*ssa.Const); isConst {
+			continue
+		}
+		name := arg.Name()
+		if alloc, ok := arg.(*ssa.Alloc); ok {
+			if n, ok2 := p.idents[alloc.Pos()]; ok2 {
+				name = n
+			}
+		}
+		names = append(names, name)
+	}
+	return strings.Join(names, ", ")
 }
 
 // writeInfoOf 惰性构建被调函数的写指令静态信息（字段写 faBase + 元素写列表）。

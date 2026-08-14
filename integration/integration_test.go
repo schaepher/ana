@@ -377,6 +377,10 @@ func TestCLIFullFlow(t *testing.T) {
 	if strings.Contains(out, "svc.Cfg.Local") {
 		t.Errorf("run 间接写不应含 Cfg.Local（fillLocal 写内部对象，无别名），output=%q", out)
 	}
+	//    调用点级回连（Q90）：run 的间接写展示调用点（run 调 fillParam 的行）
+	if !strings.Contains(out, "调用点") {
+		t.Errorf("run 间接写应展示调用点信息，output=%q", out)
+	}
 	//    map/slice 元素追踪（Q83）：fillM 直接写元素；useMap 经 fillM 间接写
 	code, out = runCLIOut(t, "query", "fields", "symbol:go:example.com/app/svc:fillM", "--repo", dir)
 	if code != 0 {

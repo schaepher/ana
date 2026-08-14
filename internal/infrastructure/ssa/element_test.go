@@ -1,6 +1,7 @@
 package ssa
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/schaepher/codeintel/internal/domain"
@@ -146,6 +147,52 @@ func f(t *T) {
 `,
 	})
 	findFieldByPath(t, nodes, "symbol:go:example.com/mtest:f", `example.com/mtest.T.M["a"]`)
+}
+
+func TestIndirectWriteCallSite(t *testing.T) {
+	// 调用点级回连（Q90）：run 调 fillParam 写实参 c.Key——INDIRECT_WRITE
+	// 边 metadata 携带调用点行号与实参变量名（run:10 fillParam(c)）
+	_, facts, _ := indexFixtureFull(t, map[string]string{
+		"go.mod":  moduleGoMod,
+		"main.go": `package m
+
+type Cfg struct {
+	Key string
+}
+
+func fillParam(c *Cfg) {
+	c.Key = "x"
+}
+
+func run(c *Cfg) {
+	fillParam(c)
+}
+`,
+	})
+	runID := "symbol:go:example.com/mtest:run"
+	fillID := "symbol:go:example.com/mtest:fillParam"
+	for _, f := range facts {
+		if f.Kind != domain.FactIndirectWrite || string(f.SourceID) != runID || string(f.TargetID) != fillID {
+			continue
+		}
+		// 内存 facts 的 metadata 为 int；DB 反序列化为 float64
+		var line int
+		switch v := f.Metadata["call_line"].(type) {
+		case float64:
+			line = int(v)
+		case int:
+			line = v
+		}
+		if line != 12 {
+			t.Errorf("INDIRECT_WRITE call_line = %v, want 12（run 调 fillParam 的行）", f.Metadata["call_line"])
+		}
+		args, _ := f.Metadata["call_args"].(string)
+		if !strings.Contains(args, "c") {
+			t.Errorf("INDIRECT_WRITE call_args = %q, want 含实参 c", args)
+		}
+		return
+	}
+	t.Fatal("INDIRECT_WRITE 边缺失（run → fillParam）")
 }
 
 func TestElementIndirectWrite(t *testing.T) {

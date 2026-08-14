@@ -1105,3 +1105,18 @@ SELECT id, depth, name, edge_kinds, line, dir, kind, access, func_id, full_path 
 	}
 	return out, rows.Err()
 }
+
+// GetIndirectWriteEdges 返回函数的 INDIRECT_WRITE 边（Q90 调用点回连：
+// metadata 含 call_line / call_args）。
+func (r *Repo) GetIndirectWriteEdges(funcID domain.CanonicalID) ([]*domain.Fact, error) {
+	logger := zap.L()
+	logger.Debug("enter (Repo).GetIndirectWriteEdges")
+	defer logger.Debug("exit (Repo).GetIndirectWriteEdges")
+	rows, err := r.Query(`SELECT source_id, target_id, kind, tool_source, confidence, metadata
+		FROM edges WHERE source_id = ? AND kind = 'indirect_write'`, string(funcID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanFacts(rows)
+}
