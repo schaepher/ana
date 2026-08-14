@@ -110,6 +110,15 @@ export function renderNodePanel(data) {
       if (inn.length) { state.panelGroupNodes[gi] = inn.map(function (g) { return g.id; }); html.push(relGroupHtml('接收者（' + inn.length + '）', inn, gi++)); }
       return;
     }
+    if (kind === 'has_param') {
+      // 参数分组：receiver（kind=receiver）与普通参数区分成两组，
+      // 接收者在前（index=-1，与图布局一致）
+      var recvs = items.filter(function (g) { return byId[g.id] && byId[g.id].kind === 'receiver'; });
+      var params = items.filter(function (g) { return !(byId[g.id] && byId[g.id].kind === 'receiver'); });
+      if (recvs.length) { state.panelGroupNodes[gi] = recvs.map(function (g) { return g.id; }); html.push(relGroupHtml('接收者（' + recvs.length + '）', recvs, gi++)); }
+      if (params.length) { state.panelGroupNodes[gi] = params.map(function (g) { return g.id; }); html.push(relGroupHtml('参数（' + params.length + '）', params, gi++)); }
+      return;
+    }
     if (kind === 'implements') {
       // 实现线（接口 → 实现者）按视角分组：接口节点视角=出边（实现者们），
       // 实现者节点视角=入边（它实现的接口）

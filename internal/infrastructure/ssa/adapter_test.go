@@ -190,9 +190,10 @@ func plain(x bool) bool {
 	mID := "symbol:go:example.com/mtest:(T).Handle"
 	fID := "symbol:go:example.com/mtest:plain"
 
-	// 方法：接收者 + 2 参数（has_param 边），2 个返回（has_result 边，索引后缀）
+	// 方法：接收者（独立 kind=receiver）+ 2 参数（has_param 边），
+	// 2 个返回（has_result 边，索引后缀）
 	recv := findNode(t, nodes, mID+"#param.recv.s")
-	if recv.Kind != domain.KindParameter || recv.Property("receiver") != "true" {
+	if recv.Kind != domain.KindReceiver || recv.Property("receiver") != "true" {
 		t.Errorf("receiver node = %+v", recv)
 	}
 	if recv.Property("type_string") != "*example.com/mtest.T" {

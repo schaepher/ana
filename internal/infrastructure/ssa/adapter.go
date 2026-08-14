@@ -201,7 +201,8 @@ func emitSignatureNodes(fn *ssa.Function, funcID domain.CanonicalID, pos token.P
 	if sig == nil {
 		return nil
 	}
-	// 接收者（方法）：types.Signature.Params() 不含接收者，接收者在 Recv() 单独存在
+	// 接收者（方法）：types.Signature.Params() 不含接收者，接收者在 Recv() 单独存在。
+	// 独立 kind=receiver，与普通参数区分展示（前端分组/配色）
 	if recvVar := sig.Recv(); recvVar != nil {
 		name := recvVar.Name()
 		if name == "" {
@@ -210,7 +211,7 @@ func emitSignatureNodes(fn *ssa.Function, funcID domain.CanonicalID, pos token.P
 		id := domain.CanonicalID(string(funcID) + "#param.recv." + name)
 		if err := emit(domain.Item{Node: &domain.CodeEntity{
 			ID:        id,
-			Kind:      domain.KindParameter,
+			Kind:      domain.KindReceiver,
 			Name:      name,
 			FilePath:  filePath,
 			LineStart: pos.Line,

@@ -9,6 +9,7 @@ export const KIND_COLOR = {
   commit: '#595959',   // 提交：深灰
   object: '#00b96b',   // 对象：薄荷绿
   parameter: '#d48806', // 签名参数：金
+  receiver: '#d4380d',  // 方法接收者：深橙（与参数同系更红，区分展示）
   result: '#f759ab',   // 返回值：粉
   field_access: '#7cb305', // 字段访问：酸橙
   ssa_value: '#bfbfbf' // SSA 值：浅灰
@@ -72,7 +73,7 @@ export const ROW_KIND_RANK = {};
 export const KIND_LABEL = {
   function: '函数', method: '方法', struct: '结构体', interface: '接口',
   package: '包', file: '文件', commit: '提交', object: '对象',
-  parameter: '参数', result: '返回', field_access: '字段访问', ssa_value: 'SSA 值'
+  parameter: '参数', receiver: '接收者', result: '返回', field_access: '字段访问', ssa_value: 'SSA 值'
 };
 export const FLAG_LABEL = { main: 'main 入口', http: 'HTTP 服务', grpc: 'gRPC 服务', framework: '框架回调' };
 

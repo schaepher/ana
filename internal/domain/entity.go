@@ -28,7 +28,8 @@ const (
 	KindFieldAccess    EntityKind = "field_access"    // 结构体字段访问（实例槽）
 	KindSSAValue       EntityKind = "ssa_value"       // SSA 值（参数/局部/Phi/Alloc 等）
 	KindExternalSummary EntityKind = "external_summary" // 外部库摘要函数
-	KindParameter      EntityKind = "parameter"       // 函数/方法签名参数（含 receiver）
+	KindParameter      EntityKind = "parameter"       // 函数签名参数
+	KindReceiver       EntityKind = "receiver"        // 方法接收者（与普通参数区分展示）
 	KindResult         EntityKind = "result"          // 函数/方法返回值
 )
 

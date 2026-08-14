@@ -613,12 +613,12 @@ func (r *Repo) Expand(id domain.CanonicalID) (facts []*domain.Fact, nodes []*dom
 	logger := zap.L()
 	logger.Debug("enter (Repo).Expand")
 	defer logger.Debug("exit (Repo).Expand")
-	// parameter 节点：代理到对应的 ssa_value 参数（数据流端点），
+	// parameter/receiver 节点：代理到对应的 ssa_value 参数（数据流端点），
 	// 使展开能返回该参数的数据流上下游（field_trace.md 参数展开）
 	queryID := string(id)
 	var bridgeID string // 桥边：parameter → ssa_value（不落库，仅响应）
 	cur, gerr := r.GetSymbol(id)
-	if gerr == nil && cur.Kind == domain.KindParameter {
+	if gerr == nil && (cur.Kind == domain.KindParameter || cur.Kind == domain.KindReceiver) {
 		queryID = paramValueID(string(id))
 		if queryID != "" {
 			if _, gerr := r.GetSymbol(domain.CanonicalID(queryID)); gerr == nil {
@@ -1005,7 +1005,7 @@ SELECT id, depth, name, edge_kinds, line, dir, kind, access, func_id, full_path 
 	return out, rows.Err()
 }
 
-// paramValueID 将 parameter 节点 ID 转换为对应的 ssa_value 参数 ID：
+// paramValueID 将 parameter/receiver 节点 ID 转换为对应的 ssa_value 参数 ID：
 // #param.recv.<name> / #param.<name> → #<name>；非参数 slot 返回空。
 func paramValueID(id string) string {
 	hash := strings.LastIndex(id, "#")

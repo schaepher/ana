@@ -649,7 +649,7 @@ func TestServerEndToEnd(t *testing.T) {
 		for _, raw := range nodes {
 			n := raw.(map[string]any)
 			switch n["kind"] {
-			case "parameter":
+			case "parameter", "receiver": // receiver 为独立 kind（与参数区分）
 				paramNode = true
 			case "result":
 				resultNode = true
@@ -657,7 +657,7 @@ func TestServerEndToEnd(t *testing.T) {
 		}
 	}
 	if !paramNode || !resultNode {
-		t.Errorf("expand handle neighbors = %v, want parameter+result nodes", m["neighbors"])
+		t.Errorf("expand handle neighbors = %v, want parameter/receiver+result nodes", m["neighbors"])
 	}
 
 	// /api/flows：函数内字段数据流
