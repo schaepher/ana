@@ -56,6 +56,23 @@ type aliasPass struct {
 	fieldValues map[domain.CanonicalID]map[ssa.Value]bool // 参与字段访问的值（alias 边范围）
 	slotSeen    map[domain.CanonicalID]map[string]bool
 	funcData    map[domain.CanonicalID]*funcData // 元素间接写条目（Q83）
+	lines       map[string][]string              // 源码行缓存（fieldInfoFor 用）
+	calleeInfo  map[*ssa.Function]*calleeWritesInfo // 被调函数写指令缓存（processCall 复用）
+	rets        map[*ssa.Function][][]ssa.Value     // 被调函数 Return 指令缓存（returns 传播复用）
+}
+
+// calleeWritesInfo 被调函数的写指令静态信息（每个被调函数只扫描一次，
+// 多个调用点共享——避免 O(调用点×被调函数大小) 的重复遍历）。
+type calleeWritesInfo struct {
+	faBase map[string]ssa.Value // 字段写：fieldPath → base
+	writes []writeInstr         // 元素写：map/slice/channel
+}
+
+// writeInstr 元素写指令的静态信息（path 已含元素记号）。
+type writeInstr struct {
+	container ssa.Value
+	path      string
+	pos       token.Pos
 }
 
 // computeAliases 执行轻量别名分析，返回间接写排除集（emitSummaries 消费）。
@@ -79,6 +96,9 @@ func computeAliases(repo *domain.Repository, prog *ssa.Program,
 		fieldValues: map[domain.CanonicalID]map[ssa.Value]bool{},
 		slotSeen:    map[domain.CanonicalID]map[string]bool{},
 		funcData:    funcData,
+		lines:       map[string][]string{},
+		calleeInfo:  map[*ssa.Function]*calleeWritesInfo{},
+		rets:        map[*ssa.Function][][]ssa.Value{},
 	}
 	// 项目内函数（FuncDecl 过滤，与 emitFunction 一致）
 	var funcs []*ssa.Function
@@ -148,7 +168,7 @@ func computeAliases(repo *domain.Repository, prog *ssa.Program,
 				}
 			}
 			if s.callVal != nil && s.callee.Signature.Results().Len() > 0 {
-				for _, ret := range returnOperands(s.callee) {
+				for _, ret := range p.returnOperandsCached(s.callee) {
 					for _, op := range ret {
 						cm := p.callMay[s.callVal]
 						if mergeMay(&cm, p.mayOf(s.callee, op)) {
@@ -305,81 +325,24 @@ func (p *aliasPass) processCall(s callSite) {
 		hasInstanceArg = true
 		mergeMay(&argMay, p.mayOf(s.caller, arg))
 	}
-	// 扫描被调写字段指令（fieldPath → base）
-	faBase := map[string]ssa.Value{}
-	for _, b := range s.callee.Blocks {
-		for _, instr := range b.Instrs {
-			st, ok := instr.(*ssa.Store)
-			if !ok {
-				continue
-			}
-			fa, ok := st.Addr.(*ssa.FieldAddr)
-			if !ok {
-				continue
-			}
-			info, ok := p.fieldInfoFor(fa)
-			if !ok {
-				continue
-			}
-			faBase[info.fullPath] = fa.X
-		}
-	}
-	// 元素写（map/slice 元素间接写，Q83）：只走别名命中（Q7a-②）
+	// 被调函数写指令静态信息（缓存：每函数只扫描一次，多调用点共享）
+	info := p.writeInfoOf(s.callee)
+	// 元素写（map/slice/channel 元素间接写，Q83）：只走别名命中（Q7a-②）
 	// 容器 base may ∩ 调用点实参 may ≠ ∅ → 调用者间接写条目
-	for _, b := range s.callee.Blocks {
-		for _, instr := range b.Instrs {
-			var container, key ssa.Value
-			var pos token.Pos
-			switch v := instr.(type) {
-			case *ssa.MapUpdate:
-				if !isMapLike(v.Map.Type()) {
-					continue
-				}
-				container, key, pos = v.Map, v.Key, v.Pos()
-			case *ssa.Send:
-				if !isChanLike(v.X.Type()) {
-					continue
-				}
-				// channel 发送 = 写元素（Q83 扩展）
-				if path, ok2 := p.elementWritePath(v.X, nil); ok2 {
-					if len(argMay) > 0 && overlapMay(argMay, p.mayOf(s.callee, v.X)) {
-						if fd := p.funcData[callerID]; fd != nil {
-							fd.indirectWrites = append(fd.indirectWrites, fieldEntry{
-								fieldPath:    path + "[send]",
-								instancePath: path + "[send]",
-								line:         p.prog.Fset.PositionFor(v.Pos(), false).Line,
-							})
-						}
-					}
-				}
-				continue
-			case *ssa.Store:
-				ia, ok := v.Addr.(*ssa.IndexAddr)
-				if !ok || !isSliceLike(ia.X.Type()) {
-					continue
-				}
-				container, key, pos = ia.X, ia.Index, v.Pos()
-			default:
-				continue
-			}
-			path, ok := p.elementWritePath(container, key)
-			if !ok {
-				continue
-			}
-			if len(argMay) == 0 {
-				continue
-			}
-			baseMay := p.mayOf(s.callee, container)
-			if len(baseMay) == 0 || !overlapMay(argMay, baseMay) {
-				continue
-			}
-			if fd := p.funcData[callerID]; fd != nil {
-				fd.indirectWrites = append(fd.indirectWrites, fieldEntry{
-					fieldPath:    path,
-					instancePath: path,
-					line:         p.prog.Fset.PositionFor(pos, false).Line,
-				})
-			}
+	for _, w := range info.writes {
+		if len(argMay) == 0 {
+			continue
+		}
+		baseMay := p.mayOf(s.callee, w.container)
+		if len(baseMay) == 0 || !overlapMay(argMay, baseMay) {
+			continue
+		}
+		if fd := p.funcData[callerID]; fd != nil {
+			fd.indirectWrites = append(fd.indirectWrites, fieldEntry{
+				fieldPath:    w.path,
+				instancePath: w.path,
+				line:         p.prog.Fset.PositionFor(w.pos, false).Line,
+			})
 		}
 	}
 	// 判定排除（确认不别名）
@@ -393,7 +356,7 @@ func (p *aliasPass) processCall(s callSite) {
 		calExcl = map[string]bool{}
 		excl[calleeID] = calExcl
 	}
-	for fieldPath, base := range faBase {
+	for fieldPath, base := range info.faBase {
 		if !hasInstanceArg {
 			calExcl[fieldPath] = true // 无实例传递（无参/全 const）：写的是被调内部对象
 			continue
@@ -416,6 +379,71 @@ func (p *aliasPass) processCall(s callSite) {
 			calExcl[fieldPath] = true // 确认不别名：排除
 		}
 	}
+}
+
+// writeInfoOf 惰性构建被调函数的写指令静态信息（字段写 faBase + 元素写列表）。
+// 语义与原 processCall 内联扫描一致；每个被调函数只扫描一次，
+// 多个调用点共享缓存（避免 O(调用点×被调函数大小) 的重复遍历）。
+func (p *aliasPass) writeInfoOf(fn *ssa.Function) *calleeWritesInfo {
+	if info, ok := p.calleeInfo[fn]; ok {
+		return info
+	}
+	info := &calleeWritesInfo{faBase: map[string]ssa.Value{}}
+	for _, b := range fn.Blocks {
+		for _, instr := range b.Instrs {
+			switch v := instr.(type) {
+			case *ssa.Store:
+				fa, ok := v.Addr.(*ssa.FieldAddr)
+				if !ok {
+					continue
+				}
+				fi, ok := p.fieldInfoFor(fa)
+				if !ok {
+					continue
+				}
+				info.faBase[fi.fullPath] = fa.X
+			case *ssa.MapUpdate:
+				if !isMapLike(v.Map.Type()) {
+					continue
+				}
+				if path, ok2 := p.elementWritePath(v.Map, v.Key); ok2 {
+					info.writes = append(info.writes, writeInstr{container: v.Map, path: path, pos: v.Pos()})
+				}
+			case *ssa.Send:
+				if !isChanLike(v.X.Type()) {
+					continue
+				}
+				// channel 发送 = 写元素（Q83 扩展）
+				if path, ok2 := p.elementWritePath(v.X, nil); ok2 {
+					info.writes = append(info.writes, writeInstr{container: v.X, path: path + "[send]", pos: v.Pos()})
+				}
+			case *ssa.IndexAddr:
+				// slice 元素写：Store 写入 IndexAddr 目标
+				if !isSliceLike(v.X.Type()) || v.Referrers() == nil {
+					continue
+				}
+				for _, ref := range *v.Referrers() {
+					if st, ok2 := ref.(*ssa.Store); ok2 && st.Addr == v {
+						if path, ok3 := p.elementWritePath(v.X, v.Index); ok3 {
+							info.writes = append(info.writes, writeInstr{container: v.X, path: path, pos: st.Pos()})
+						}
+					}
+				}
+			}
+		}
+	}
+	p.calleeInfo[fn] = info
+	return info
+}
+
+// returnOperandsCached 惰性缓存函数的 Return 指令操作数（returns 传播复用）。
+func (p *aliasPass) returnOperandsCached(fn *ssa.Function) [][]ssa.Value {
+	if rets, ok := p.rets[fn]; ok {
+		return rets
+	}
+	rets := returnOperands(fn)
+	p.rets[fn] = rets
+	return rets
 }
 
 // emitAliasEdges 发射 值 → alloc 的 ALIAS 边（may，conf 0.8）。
@@ -505,9 +533,31 @@ func (p *aliasPass) fieldInfoFor(fa *ssa.FieldAddr) (fieldInfo, bool) {
 	fi.filePath = relPath(p.repo.Path, pos.Filename)
 	fi.line = pos.Line
 	if fi.line > 0 {
-		fi.snippet = sourceLineAt(p.repo.Path, fi.filePath, fi.line)
+		fi.snippet = p.sourceLine(fi.filePath, fi.line)
 	}
 	return fi, true
+}
+
+// sourceLine 读仓库文件指定行的源码（去掉缩进，供 code_snippet 展示）。
+// 文件内容按路径缓存，避免每个调用点重复读盘（与 fieldExtractor.sourceLine 一致）。
+func (p *aliasPass) sourceLine(filePath string, line int) string {
+	if line <= 0 || filePath == "" {
+		return ""
+	}
+	lines, ok := p.lines[filePath]
+	if !ok {
+		data, err := os.ReadFile(filepath.Join(p.repo.Path, filepath.FromSlash(filePath)))
+		if err != nil {
+			p.lines[filePath] = nil
+			return ""
+		}
+		lines = strings.Split(string(data), "\n")
+		p.lines[filePath] = lines
+	}
+	if line > len(lines) {
+		return ""
+	}
+	return strings.TrimSpace(lines[line-1])
 }
 
 // funcIDOf 函数 → canonical ID（缓存）。
@@ -537,22 +587,6 @@ func (p *aliasPass) funcIDOfValue(v ssa.Value) (domain.CanonicalID, bool) {
 		return "", false
 	}
 	return p.funcIDOf(parent)
-}
-
-// sourceLineAt 读源码行。
-func sourceLineAt(repoPath, filePath string, line int) string {
-	if line <= 0 || filePath == "" {
-		return ""
-	}
-	data, err := os.ReadFile(filepath.Join(repoPath, filepath.FromSlash(filePath)))
-	if err != nil {
-		return ""
-	}
-	lines := strings.Split(string(data), "\n")
-	if line > len(lines) {
-		return ""
-	}
-	return strings.TrimSpace(lines[line-1])
 }
 
 // elementWritePath 生成元素写路径（间接写条目用，Q5 记号）。

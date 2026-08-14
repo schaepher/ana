@@ -139,7 +139,7 @@ func (ext *fieldExtractor) emitCall(cc *ssa.CallCommon, callVal ssa.Value) error
 	if nResults > 0 && callVal != nil {
 		callID, err := ext.emitValue(callVal)
 		if err == nil && callID != "" {
-			rets := returnOperands(callee)
+			rets := ext.returnOperandsCached(callee)
 			if nResults == 1 {
 				for _, ret := range rets {
 					if len(ret) == 0 {
@@ -242,6 +242,17 @@ func returnOperands(fn *ssa.Function) [][]ssa.Value {
 		}
 	}
 	return out
+}
+
+// returnOperandsCached 惰性缓存函数的 Return 指令操作数（多调用点复用，
+// 避免每次 emitCall 重复扫描被调函数）。
+func (ext *fieldExtractor) returnOperandsCached(fn *ssa.Function) [][]ssa.Value {
+	if rets, ok := ext.rets[fn]; ok {
+		return rets
+	}
+	rets := returnOperands(fn)
+	ext.rets[fn] = rets
+	return rets
 }
 
 // structPathOfType 取实参类型的结构体限定路径（*T → pkg.T；非具名结构体 → 空）。

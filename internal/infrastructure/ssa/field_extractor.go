@@ -21,6 +21,7 @@ import (
 	"go/types"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/schaepher/codeintel/internal/domain"
@@ -30,7 +31,7 @@ import (
 
 // emitFunctionFields 发射单个函数内的字段访问节点与数据流边。
 func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
-	funcID domain.CanonicalID, idents map[token.Pos]string, assignTargets map[token.Pos]assignTarget,
+	funcID domain.CanonicalID, idents map[token.Pos]string, assignTargets []assignTarget,
 	funcData *funcData, specs map[string]summarySpec, fallbackTotal *int, emit domain.EmitFunc) error {
 	logger := zap.L()
 	logger.Debug("enter emitFunctionFields")
@@ -56,6 +57,7 @@ func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Func
 		funcIDs:  map[*ssa.Function]domain.CanonicalID{},
 		slotsFor: map[domain.CanonicalID]map[string]bool{funcID: {}},
 		extSummaries: map[domain.CanonicalID]bool{},
+		rets:     map[*ssa.Function][][]ssa.Value{},
 	}
 
 	// 第一遍：按使用方式判定 FieldAddr/IndexAddr 的读写（go/ssa v0.26 表示，
@@ -722,7 +724,7 @@ type fieldExtractor struct {
 	fn     *ssa.Function
 	funcID domain.CanonicalID
 	idents        map[token.Pos]string // 源码标识符索引（Alloc 反查变量名）
-	assignTargets map[token.Pos]assignTarget // 赋值表达式区间 → 目标变量名（MakeMap/MakeSlice 恢复）
+	assignTargets []assignTarget       // 赋值表达式区间（按 start 排序）→ 目标变量名（MakeMap/MakeSlice 恢复）
 	emit          domain.EmitFunc
 
 	fields   map[*ssa.FieldAddr]*fieldAccess // FieldAddr → write 节点（Store 解析目标）
@@ -732,6 +734,7 @@ type fieldExtractor struct {
 	values   map[ssa.Value]domain.CanonicalID // 已发射的 ssa_value
 	funcIDs  map[*ssa.Function]domain.CanonicalID // 函数 → canonical ID 缓存
 	slotsFor map[domain.CanonicalID]map[string]bool // 每函数 slot 占用（shadowing 消歧）
+	rets     map[*ssa.Function][][]ssa.Value // 被调函数 Return 指令缓存（returns 边复用）
 	lines    map[string][]string             // 源码行缓存（filePath → 行数组）
 	funcData *funcData                       // 摘要收集（direct 读写 + 静态调用）
 	specs    map[string]summarySpec          // 外部函数摘要（内置 + 用户）
@@ -901,11 +904,14 @@ func isChanLike(t types.Type) bool {
 }
 
 // lookupAssignTarget 区间匹配赋值目标（MakeMap.Pos 落在字面量内部）。
+// 切片按 start 排序：二分找最后一个 start <= pos 的区间，检查 end 覆盖。
+// 嵌套赋值（f(x := 1)）内层 start 更大，二分自然命中内层区间。
 func (ext *fieldExtractor) lookupAssignTarget(pos token.Pos) string {
-	for start, t := range ext.assignTargets {
-		if pos >= start && pos <= t.end {
-			return t.name
-		}
+	i := sort.Search(len(ext.assignTargets), func(i int) bool {
+		return ext.assignTargets[i].start > pos
+	}) - 1
+	if i < 0 || pos > ext.assignTargets[i].end {
+		return ""
 	}
-	return ""
+	return ext.assignTargets[i].name
 }

@@ -14,6 +14,7 @@ import (
 	"go/types"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/schaepher/codeintel/internal/canonicalizer"
@@ -138,7 +139,7 @@ func isModuleFunction(fn *ssa.Function, module string) bool {
 // 仅处理有 FuncDecl 源码的顶层函数/方法——闭包（FuncLit）与合成 wrapper 跳过；
 // 闭包内字段访问在 Phase 2 归入外层函数（field_trace.md Q14 适配）。
 func emitFunction(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
-	idents map[token.Pos]string, assignTargets map[token.Pos]assignTarget,
+	idents map[token.Pos]string, assignTargets []assignTarget,
 	data map[domain.CanonicalID]*funcData,
 	specs map[string]summarySpec, fallbackTotal *int, emit domain.EmitFunc) error {
 	logger := zap.L()
@@ -352,18 +353,19 @@ func isInModule(pkgPath, module string) bool {
 
 // assignTarget 赋值表达式区间 → 目标变量名。
 type assignTarget struct {
-	name string
-	end  token.Pos
+	name  string
+	start token.Pos
+	end   token.Pos
 }
 
 // buildAssignTargets 构建 赋值表达式区间 → 目标变量名（Q83：lifting 后
 // map/slice 字面量为 MakeMap/MakeSlice 寄存器，其 Pos 落在字面量内部，
-// 用区间匹配恢复容器名）。
-func buildAssignTargets(pkgs []*packages.Package, module string) map[token.Pos]assignTarget {
+// 用区间匹配恢复容器名）。按 start 排序返回，供二分查找。
+func buildAssignTargets(pkgs []*packages.Package, module string) []assignTarget {
 	logger := zap.L()
 	logger.Debug("enter buildAssignTargets")
 	defer logger.Debug("exit buildAssignTargets")
-	targets := map[token.Pos]assignTarget{}
+	targets := []assignTarget{}
 	for _, p := range pkgs {
 		if !isInModule(p.PkgPath, module) {
 			continue
@@ -375,13 +377,13 @@ func buildAssignTargets(pkgs []*packages.Package, module string) map[token.Pos]a
 					for i, rhs := range st.Rhs {
 						name := lhsIdentName(st.Lhs, i)
 						if name != "" {
-							targets[rhs.Pos()] = assignTarget{name: name, end: rhs.End()}
+							targets = append(targets, assignTarget{name: name, start: rhs.Pos(), end: rhs.End()})
 						}
 					}
 				case *ast.ValueSpec:
 					for i, v := range st.Values {
 						if i < len(st.Names) {
-							targets[v.Pos()] = assignTarget{name: st.Names[i].Name, end: v.End()}
+							targets = append(targets, assignTarget{name: st.Names[i].Name, start: v.Pos(), end: v.End()})
 						}
 					}
 				}
@@ -389,6 +391,7 @@ func buildAssignTargets(pkgs []*packages.Package, module string) map[token.Pos]a
 			})
 		}
 	}
+	sort.Slice(targets, func(i, j int) bool { return targets[i].start < targets[j].start })
 	return targets
 }
 
