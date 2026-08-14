@@ -6,7 +6,6 @@ package ast
 
 import (
 	"context"
-	"fmt"
 	"go/ast"
 	"go/token"
 	"go/types"
@@ -39,20 +38,10 @@ func (a *Adapter) Name() string {
 }
 
 // Index 加载仓库全部包并产出 CALLS / IMPORTS 边。
-func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, emit domain.EmitFunc) error {
+func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*packages.Package, emit domain.EmitFunc) error {
 	logger := logging.FromContext(ctx)
 	logger.Debug("enter (Adapter).Index")
 	defer logger.Debug("exit (Adapter).Index")
-	cfg := &packages.Config{
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
-			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps,
-		Dir: repo.Path,
-		// Tests 默认 false：不加载 _test.go（测试符号不入图）
-	}
-	pkgs, err := packages.Load(cfg, "./...")
-	if err != nil {
-		return fmt.Errorf("go/packages load: %w", err)
-	}
 	packages.PrintErrors(pkgs) // 诊断信息打到 stderr，不中断
 
 	// 全部 module 内包的引用（跨包解析构造器 return 用）

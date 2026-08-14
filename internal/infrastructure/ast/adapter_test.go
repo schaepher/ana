@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/schaepher/codeintel/internal/domain"
+	"golang.org/x/tools/go/packages"
 )
 
 // writeFile 写入测试模块文件。
@@ -32,7 +33,11 @@ func indexFixture(t *testing.T, files map[string]string) ([]*domain.CodeEntity, 
 	var facts []*domain.Fact
 	adapter := &Adapter{}
 	repo := &domain.Repository{Path: dir, Module: "example.com/mtest"}
-	err := adapter.Index(context.Background(), repo, func(item domain.Item) error {
+	pkgs, err := astLoadTestPackages(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	err = adapter.Index(context.Background(), repo, pkgs, func(item domain.Item) error {
 		if item.Node != nil {
 			nodes = append(nodes, item.Node)
 		}
@@ -271,4 +276,18 @@ func TestIndexUnrelatedPackagesNotIncluded(t *testing.T) {
 			t.Errorf("fact escapes module: %+v", f)
 		}
 	}
+}
+
+// astLoadTestPackages 加载测试仓库 packages（共享加载改造后由测试提供）。
+func astLoadTestPackages(dir string) ([]*packages.Package, error) {
+	cfg := &packages.Config{
+		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
+			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps,
+		Dir: dir,
+	}
+	pkgs, err := packages.Load(cfg, "./...")
+	if err != nil {
+		return nil, err
+	}
+	return pkgs, nil
 }

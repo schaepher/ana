@@ -25,6 +25,7 @@ import (
 	"github.com/schaepher/codeintel/internal/infrastructure/ssa"
 	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
 	"github.com/schaepher/codeintel/internal/logging"
+	"golang.org/x/tools/go/packages"
 	"go.uber.org/zap"
 )
 
@@ -90,7 +91,11 @@ func (o *Orchestrator) FullBuild(ctx context.Context) (*BuildResult, error) {
 	if _, err := o.RepoImpl.Exec("DELETE FROM nodes"); err != nil {
 		return nil, fmt.Errorf("clear nodes: %w", err)
 	}
-	results, skipped, err := o.runAdapters(ctx, nil)
+	pkgs, err := o.loadPackages(ctx)
+	if err != nil {
+		return nil, err
+	}
+	results, skipped, err := o.runAdapters(ctx, pkgs, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -147,11 +152,31 @@ func (o *Orchestrator) IncrementalBuild(ctx context.Context, changedFiles []stri
 		}
 		return false
 	}
-	results, skipped, err := o.runAdapters(ctx, keep)
+	pkgs, err := o.loadPackages(ctx)
+	if err != nil {
+		return nil, err
+	}
+	results, skipped, err := o.runAdapters(ctx, pkgs, keep)
 	if err != nil {
 		return nil, err
 	}
 	return o.finishBuild(start, results, skipped, "incremental")
+}
+
+// loadPackages 统一加载仓库 go/packages（内存优化：AST/SSA 适配器共享
+// 一次类型检查，避免各自 Load 翻倍）。返回共享结果供适配器复用。
+func (o *Orchestrator) loadPackages(ctx context.Context) ([]*packages.Package, error) {
+	cfg := &packages.Config{
+		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
+			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps,
+		Dir: o.Repo.Path,
+		// Tests 默认 false：不加载 _test.go（与适配器既有语义一致）
+	}
+	pkgs, err := packages.Load(cfg, "./...")
+	if err != nil {
+		return nil, fmt.Errorf("go/packages load: %w", err)
+	}
+	return pkgs, nil
 }
 
 // deleteFiles 删除指定文件的节点（级联删边与摘要行）；分批避免 SQLite
@@ -177,8 +202,9 @@ func deleteFiles(repo *sqlite.Repo, files []string) error {
 }
 
 // runAdapters 并行执行适配器并写库（keep 为 nil 时全部写入；否则只保留
-// keep(item) 为 true 的条目）。返回各适配器结果与跳过的 FK 冲突边数。
-func (o *Orchestrator) runAdapters(ctx context.Context, keep func(domain.Item) bool) ([]AdapterResult, int, error) {
+// keep(item) 为 true 的条目）。pkgs 为共享加载的 go/packages 结果
+// （AST/SSA 复用，避免重复类型检查）。返回各适配器结果与跳过的 FK 冲突边数。
+func (o *Orchestrator) runAdapters(ctx context.Context, pkgs []*packages.Package, keep func(domain.Item) bool) ([]AdapterResult, int, error) {
 	var (
 		results []AdapterResult
 		skipped int
@@ -226,7 +252,7 @@ func (o *Orchestrator) runAdapters(ctx context.Context, keep func(domain.Item) b
 			defer cancel()
 			r := AdapterResult{Name: adapter.Name()}
 			adapterStart := time.Now()
-			r.Err = adapter.Index(adapterCtx, o.Repo, func(item domain.Item) error {
+			r.Err = adapter.Index(adapterCtx, o.Repo, pkgs, func(item domain.Item) error {
 				select {
 				case ch <- item:
 					return nil

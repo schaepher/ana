@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/schaepher/codeintel/internal/domain"
+	"golang.org/x/tools/go/packages"
 )
 
 // writeFile 写入测试模块文件。
@@ -40,7 +41,11 @@ func indexFixtureFull(t *testing.T, files map[string]string) ([]*domain.CodeEnti
 	var summaries []*domain.FunctionFieldSummary
 	adapter := &Adapter{}
 	repo := &domain.Repository{Path: dir, Module: "example.com/mtest"}
-	err := adapter.Index(context.Background(), repo, func(item domain.Item) error {
+	pkgs, err := loadTestPackages(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	err = adapter.Index(context.Background(), repo, pkgs, func(item domain.Item) error {
 		if item.Node != nil {
 			nodes = append(nodes, item.Node)
 		}
@@ -219,4 +224,18 @@ func plain(x bool) bool {
 		t.Errorf("plain param = %+v", p)
 	}
 	findNode(t, nodes, fID+"#result")
+}
+
+// loadTestPackages 加载测试仓库的 packages（共享加载改造后由测试提供）。
+func loadTestPackages(dir string) ([]*packages.Package, error) {
+	cfg := &packages.Config{
+		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
+			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps,
+		Dir: dir,
+	}
+	pkgs, err := packages.Load(cfg, "./...")
+	if err != nil {
+		return nil, err
+	}
+	return pkgs, nil
 }

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/schaepher/codeintel/internal/domain"
+	"golang.org/x/tools/go/packages"
 	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
 )
 
@@ -16,7 +17,7 @@ type fakeAdapter struct {
 }
 
 func (f *fakeAdapter) Name() string { return f.name }
-func (f *fakeAdapter) Index(ctx context.Context, repo *domain.Repository, emit domain.EmitFunc) error {
+func (f *fakeAdapter) Index(ctx context.Context, repo *domain.Repository, _ []*packages.Package, emit domain.EmitFunc) error {
 	if f.err != nil {
 		return f.err
 	}

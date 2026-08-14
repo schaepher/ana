@@ -45,7 +45,7 @@ func TestIndexGitHistory(t *testing.T) {
 	var nodes []*domain.CodeEntity
 	var facts []*domain.Fact
 	adapter := &Adapter{}
-	err := adapter.Index(context.Background(), &domain.Repository{Path: dir}, func(item domain.Item) error {
+	err := adapter.Index(context.Background(), &domain.Repository{Path: dir}, nil, func(item domain.Item) error {
 		if item.Node != nil {
 			nodes = append(nodes, item.Node)
 		}
@@ -101,7 +101,7 @@ func TestIndexNonGitDir(t *testing.T) {
 	// 非 git 目录：git log 失败 → 返回错误
 	adapter := &Adapter{}
 	dir := t.TempDir()
-	err := adapter.Index(context.Background(), &domain.Repository{Path: dir}, func(domain.Item) error { return nil })
+	err := adapter.Index(context.Background(), &domain.Repository{Path: dir}, nil, func(domain.Item) error { return nil })
 	if err == nil {
 		t.Error("Index on non-git dir should fail")
 	}
@@ -115,7 +115,7 @@ func TestIndexMaxCommits(t *testing.T) {
 	// MaxCommits=1：只取最近一个 commit
 	adapter := &Adapter{MaxCommits: 1}
 	count := 0
-	err := adapter.Index(context.Background(), &domain.Repository{Path: dir}, func(item domain.Item) error {
+	err := adapter.Index(context.Background(), &domain.Repository{Path: dir}, nil, func(item domain.Item) error {
 		if item.Node != nil {
 			count++
 		}

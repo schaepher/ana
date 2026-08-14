@@ -14,7 +14,7 @@ import (
 func TestIndexScipMissingBin(t *testing.T) {
 	// BinPath 指向不存在的二进制 → Index 返回错误（Orchestrator 标记失败）
 	adapter := &Adapter{BinPath: filepath.Join(t.TempDir(), "no-such-scip-go")}
-	err := adapter.Index(context.Background(), &domain.Repository{Path: t.TempDir()}, func(domain.Item) error { return nil })
+	err := adapter.Index(context.Background(), &domain.Repository{Path: t.TempDir()}, nil, func(domain.Item) error { return nil })
 	if err == nil {
 		t.Error("Index with missing scip-go should fail")
 	}

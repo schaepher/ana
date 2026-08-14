@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/schaepher/codeintel/internal/domain"
+	"golang.org/x/tools/go/packages"
 	"github.com/schaepher/codeintel/internal/logging"
 	"go.uber.org/zap"
 )
@@ -31,7 +32,7 @@ func (a *Adapter) Name() string {
 }
 
 // Index 扫描仓库最近提交，为每个变更文件建立 MODIFIED_BY 边。
-func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, emit domain.EmitFunc) error {
+func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, _ []*packages.Package, emit domain.EmitFunc) error {
 	logger := logging.FromContext(ctx)
 	logger.Debug("enter (Adapter).Index")
 	defer logger.Debug("exit (Adapter).Index")

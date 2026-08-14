@@ -20,6 +20,7 @@ import (
 
 	"github.com/schaepher/codeintel/internal/canonicalizer"
 	"github.com/schaepher/codeintel/internal/domain"
+	"golang.org/x/tools/go/packages"
 	"github.com/schaepher/codeintel/internal/logging"
 	"go.uber.org/zap"
 )
@@ -40,7 +41,7 @@ func (a *Adapter) Name() string {
 }
 
 // Index 在仓库上执行全量 SCIP 索引并流式产出节点与边。
-func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, emit domain.EmitFunc) error {
+func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, _ []*packages.Package, emit domain.EmitFunc) error {
 	logger := logging.FromContext(ctx)
 	logger.Debug("enter (Adapter).Index")
 	defer logger.Debug("exit (Adapter).Index")

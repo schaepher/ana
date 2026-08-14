@@ -1,6 +1,10 @@
 package domain
 
-import "context"
+import (
+	"context"
+
+	"golang.org/x/tools/go/packages"
+)
 
 // Item 是适配器流式产出的原始数据单元：节点 / 边 / 函数字段摘要行。
 type Item struct {
@@ -49,9 +53,11 @@ type EmitFunc func(Item) error
 
 // IndexerPort 六边形架构端口：所有外部分析工具（SCIP/CodeGraph/Git 等）
 // 通过该端口接入，核心领域不依赖具体实现。
+// pkgs 为 orchestrator 统一加载的 go/packages 结果（AST/SSA 适配器复用，
+// 避免各自 Load 的类型检查翻倍——内存优化）；scip/git 适配器忽略。
 type IndexerPort interface {
 	Name() string
-	Index(ctx context.Context, repo *Repository, emit EmitFunc) error
+	Index(ctx context.Context, repo *Repository, pkgs []*packages.Package, emit EmitFunc) error
 }
 
 // CodeRepository 仓储接口（TD.md 4.2）：节点与边的 CRUD 及图查询。
