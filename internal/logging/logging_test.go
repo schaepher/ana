@@ -2,6 +2,9 @@ package logging
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"go.opentelemetry.io/otel/sdk/trace"
@@ -9,6 +12,44 @@ import (
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
 )
+
+// TestToFile：日志切换到文件后，zap 日志写入指定文件（.codeintel/ 同目录）。
+func TestToFile(t *testing.T) {
+	if _, err := Setup("test", false, ""); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	dir := t.TempDir()
+	if err := ToFile(dir); err != nil {
+		t.Fatalf("ToFile: %v", err)
+	}
+	zap.L().Info("hello-file")
+
+	data, err := os.ReadFile(filepath.Join(dir, ".codeintel", "codeintel.log"))
+	if err != nil {
+		t.Fatalf("read log file: %v", err)
+	}
+	if !strings.Contains(string(data), "hello-file") {
+		t.Errorf("log file 应含日志行: %q", data)
+	}
+}
+
+// TestToFileTwice：重复调用 ToFile 不报错（幂等重建 logger）。
+func TestToFileTwice(t *testing.T) {
+	if _, err := Setup("test", false, ""); err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	dir := t.TempDir()
+	if err := ToFile(dir); err != nil {
+		t.Fatalf("ToFile: %v", err)
+	}
+	if err := ToFile(dir); err != nil {
+		t.Fatalf("ToFile twice: %v", err)
+	}
+	zap.L().Info("twice")
+	if _, err := os.Stat(filepath.Join(dir, ".codeintel", "codeintel.log")); err != nil {
+		t.Errorf("log file missing: %v", err)
+	}
+}
 
 func TestWithLoggerFromContext(t *testing.T) {
 	// nil ctx 回退 zap.L()，不 panic
@@ -63,7 +104,7 @@ func TestFromContextSpanFields(t *testing.T) {
 }
 
 func TestSetup(t *testing.T) {
-	tp, err := Setup("test-service", false)
+	tp, err := Setup("test-service", false, "")
 	if err != nil {
 		t.Fatalf("Setup: %v", err)
 	}

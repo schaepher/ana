@@ -5,6 +5,8 @@ package logging
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -18,6 +20,10 @@ import (
 
 // ctxKey 是 context 中 logger 的键（非导出，避免碰撞）。
 type ctxKey struct{}
+
+// debugEnabled 记录 Setup 的 debug 标志，ToFile 重建 logger 时沿用
+// （zap.Logger 无公开的级别读取接口）。
+var debugEnabled bool
 
 // WithLogger 将 logger 存入 context，供下游函数通过 FromContext 取出。
 func WithLogger(ctx context.Context, l *zap.Logger) context.Context {
@@ -49,24 +55,38 @@ func FromContext(ctx context.Context) *zap.Logger {
 }
 
 // Setup 初始化全局日志与追踪：
-//   - zap development logger，输出到 stdout；默认 Info 级，
+//   - zap development logger，默认输出到 stdout（logDir 非空时写入
+//     logDir/.codeintel/codeintel.log，与 db 同目录，Q88——root span
+//     与早期日志从创建起即走文件，避免 stdout 混流）；默认 Info 级，
 //     debug=true（CLI --verbose/--debug）时输出 Debug 级
-//   - OTel TracerProvider（stdout 导出器），并设为全局 tracer provider
+//   - OTel TracerProvider（stdout 或文件导出器），并设为全局 tracer provider
 //
 // 返回 TracerProvider 供入口创建 root span，退出时须 Shutdown。
-func Setup(serviceName string, debug bool) (*sdktrace.TracerProvider, error) {
-	devCfg := zap.NewDevelopmentConfig()
-	devCfg.OutputPaths = []string{"stdout"}
-	level := zapcore.InfoLevel
-	if debug {
-		level = zapcore.DebugLevel
+func Setup(serviceName string, debug bool, logDir string) (*sdktrace.TracerProvider, error) {
+	debugEnabled = debug
+	logPath := ""
+	if logDir != "" {
+		if err := os.MkdirAll(filepath.Join(logDir, ".codeintel"), 0o755); err != nil {
+			return nil, err
+		}
+		logPath = filepath.Join(logDir, ".codeintel", "codeintel.log")
 	}
-	devCfg.Level = zap.NewAtomicLevelAt(level)
-	zap.ReplaceGlobals(zap.Must(devCfg.Build()))
+	buildLogger(logPath, debug)
 
 	exporter, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
 	if err != nil {
 		return nil, err
+	}
+	if logPath != "" {
+		f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			return nil, err
+		}
+		exporter, err = stdouttrace.New(stdouttrace.WithWriter(f), stdouttrace.WithPrettyPrint())
+		if err != nil {
+			f.Close()
+			return nil, err
+		}
 	}
 	res := resource.NewSchemaless(attribute.String("service.name", serviceName))
 	tp := sdktrace.NewTracerProvider(
@@ -75,4 +95,47 @@ func Setup(serviceName string, debug bool) (*sdktrace.TracerProvider, error) {
 	)
 	otel.SetTracerProvider(tp)
 	return tp, nil
+}
+
+// buildLogger 重建全局 zap logger（logPath 为空时写 stdout，否则写文件）。
+func buildLogger(logPath string, debug bool) {
+	level := zapcore.InfoLevel
+	if debug {
+		level = zapcore.DebugLevel
+	}
+	devCfg := zap.NewDevelopmentConfig()
+	devCfg.Level = zap.NewAtomicLevelAt(level)
+	if logPath != "" {
+		devCfg.OutputPaths = []string{logPath}
+	}
+	zap.ReplaceGlobals(zap.Must(devCfg.Build()))
+}
+
+// ToFile 将全局日志（zap）与 OTel 追踪切换到 dir 下的 codeintel.log
+// （与 codeintel.db 同目录，Q88：stdout 只承载查询结果）。
+// 保留当前日志级别（debug 标志随 Setup 传入）；幂等，可重复调用。
+// 调用时机：各命令解析 --repo 后。
+func ToFile(dir string) error {
+	logDir := filepath.Join(dir, ".codeintel")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return err
+	}
+	logPath := filepath.Join(logDir, "codeintel.log")
+	buildLogger(logPath, debugEnabled)
+
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	exporter, err := stdouttrace.New(stdouttrace.WithWriter(f), stdouttrace.WithPrettyPrint())
+	if err != nil {
+		f.Close()
+		return err
+	}
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exporter),
+		sdktrace.WithResource(resource.NewSchemaless(attribute.String("service.name", "codeintel"))),
+	)
+	otel.SetTracerProvider(tp)
+	return nil
 }

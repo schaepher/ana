@@ -12,6 +12,7 @@ import (
 
 	"github.com/schaepher/codeintel/internal/domain"
 	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
+	"github.com/schaepher/codeintel/internal/logging"
 	"github.com/schaepher/codeintel/internal/orchestrator"
 	"go.uber.org/zap"
 )
@@ -53,6 +54,10 @@ func cmdInit(ctx context.Context, args []string) int {
 	}
 
 	fmt.Printf("构建索引: %s (module=%s)\n", abs, module)
+	// 日志切换到 .codeintel/codeintel.log（stdout 只留查询结果，Q88）
+	if err := logging.ToFile(abs); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: 日志切换失败: %v\n", err)
+	}
 	db, err := sqlite.Open(abs)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

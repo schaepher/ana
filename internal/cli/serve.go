@@ -14,6 +14,7 @@ import (
 	"github.com/schaepher/codeintel/internal/action"
 	"github.com/schaepher/codeintel/internal/domain"
 	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
+	"github.com/schaepher/codeintel/internal/logging"
 	"github.com/schaepher/codeintel/internal/server"
 	"go.uber.org/zap"
 )
@@ -33,6 +34,10 @@ func cmdServe(ctx context.Context, args []string) int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
+	}
+	// 日志切换到 .codeintel/codeintel.log（stdout 只留查询结果，Q88）
+	if err := logging.ToFile(abs); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: 日志切换失败: %v\n", err)
 	}
 	db, err := sqlite.Open(abs)
 	if err != nil {

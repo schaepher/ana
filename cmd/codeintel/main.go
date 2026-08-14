@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"os"
+	"strings"
 
 	"go.opentelemetry.io/otel"
 	"go.uber.org/zap"
@@ -22,7 +23,10 @@ func main() {
 			break
 		}
 	}
-	tp, err := logging.Setup("codeintel", verbose)
+	// 日志目录：粗解析 --repo（Q88 日志与 db 同目录）——root span 与
+	// 早期日志从创建起即写 .codeintel/codeintel.log，stdout 只留查询结果
+	repoDir := extractRepoDir(os.Args[1:])
+	tp, err := logging.Setup("codeintel", verbose, repoDir)
 	if err != nil {
 		// 追踪初始化失败不阻塞主流程：全局 provider 保持 noop，日志照常
 		zap.L().Warn("tracing setup failed, tracing disabled", zap.Error(err))
@@ -42,4 +46,19 @@ func main() {
 		_ = tp.Shutdown(context.Background())
 	}
 	os.Exit(code)
+}
+
+// extractRepoDir 从命令行粗解析 --repo 目录（`--repo X` / `--repo=X`），
+// 未指定返回空串（日志保持 stdout）。
+func extractRepoDir(args []string) string {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--repo" && i+1 < len(args) {
+			return args[i+1]
+		}
+		if strings.HasPrefix(a, "--repo=") {
+			return strings.TrimPrefix(a, "--repo=")
+		}
+	}
+	return ""
 }

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -10,8 +11,22 @@ import (
 	"github.com/schaepher/codeintel/internal/action"
 	"github.com/schaepher/codeintel/internal/domain"
 	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
+	"github.com/schaepher/codeintel/internal/logging"
 	"go.uber.org/zap"
 )
+
+// outputOpts 查询输出选项（--json / --compact，Q96）。
+type outputOpts struct {
+	json    bool // 结构化 JSON 输出（stdout 仅 JSON，日志已切文件）
+	compact bool // 树形/表格输出压缩为紧凑形式
+}
+
+// encodeJSON 输出结构化 JSON（stdout 唯一内容）。
+func encodeJSON(v any) {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(v)
+}
 
 // cmdQuery 实现 `codeintel query ...`。
 func cmdQuery(args []string) int {
@@ -38,6 +53,10 @@ func cmdQuery(args []string) int {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
+	// 日志切换到 .codeintel/codeintel.log（stdout 只留查询结果，Q88）
+	if err := logging.ToFile(abs); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: 日志切换失败: %v\n", err)
+	}
 	db, err := sqlite.Open(abs)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -46,15 +65,16 @@ func cmdQuery(args []string) int {
 	defer db.Close()
 	acts := action.New(sqlite.NewRepo(db))
 
+	opts := outputOpts{json: f.json, compact: f.compact}
 	switch sub {
 	case "symbol":
-		return querySymbol(acts, target)
+		return querySymbol(acts, target, opts)
 	case "fields":
-		return queryFields(acts, target)
+		return queryFields(acts, target, opts)
 	case "trace-backward", "trace-forward":
-		return queryTraceDir(acts, target, f.funcPath, f.maxDepth, sub == "trace-forward")
+		return queryTraceDir(acts, target, f.funcPath, f.maxDepth, sub == "trace-forward", opts)
 	case "value-trace":
-		return queryValueTrace(acts, target, f.maxDepth)
+		return queryValueTrace(acts, target, f.maxDepth, opts)
 	case "callers", "callees", "impact":
 		d := f.depth
 		if d <= 0 {
@@ -65,7 +85,7 @@ func cmdQuery(args []string) int {
 				d = 1
 			}
 		}
-		return queryGraph(acts, sub, target, d)
+		return queryGraph(acts, sub, target, d, opts)
 	default:
 		fmt.Fprintf(os.Stderr, "error: unknown query subcommand %q\n", sub)
 		return 2
@@ -79,6 +99,8 @@ type queryFlags struct {
 	maxDepth   int
 	funcPath   string
 	positional []string
+	json       bool
+	compact    bool
 }
 
 // parseQueryFlags 手动解析 query 子命令的参数，支持 flags 与位置参数任意顺序。
@@ -110,6 +132,10 @@ func parseQueryFlags(args []string) queryFlags {
 			i++
 		case strings.HasPrefix(a, "--func="):
 			f.funcPath = strings.TrimPrefix(a, "--func=")
+		case a == "--json":
+			f.json = true
+		case a == "--compact":
+			f.compact = true
 		case strings.HasPrefix(a, "-"):
 			// 未知 flag：忽略
 		default:
@@ -121,7 +147,7 @@ func parseQueryFlags(args []string) queryFlags {
 
 // queryFields 输出函数的字段读写摘要（S1，field_trace.md §6.2），
 // 按 direct_read / direct_write / indirect_write 分组。
-func queryFields(acts *action.Actions, input string) int {
+func queryFields(acts *action.Actions, input string, opts outputOpts) int {
 	logger := zap.L()
 	logger.Debug("enter queryFields")
 	defer logger.Debug("exit queryFields")
@@ -129,6 +155,21 @@ func queryFields(acts *action.Actions, input string) int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
+	}
+	if opts.json {
+		type fieldRow struct {
+			AccessKind   string `json:"access_kind"`
+			FieldPath    string `json:"field_path"`
+			InstancePath string `json:"instance_path"`
+			Line         int    `json:"line"`
+			CodeSnippet  string `json:"code_snippet"`
+		}
+		jrows := make([]fieldRow, 0, len(rows))
+		for _, r := range rows {
+			jrows = append(jrows, fieldRow{r.AccessKind, r.FieldPath, r.InstancePath, r.LineStart, r.CodeSnippet})
+		}
+		encodeJSON(map[string]any{"name": n.Name, "rows": jrows})
+		return 0
 	}
 	fmt.Printf("字段读写（%s）:\n", n.Name)
 	if len(rows) == 0 {
@@ -162,8 +203,8 @@ func queryFields(acts *action.Actions, input string) int {
 }
 
 // queryTraceDir 输出字段追溯路径（S2/S3，field_trace.md §6.3/6.4）。
-// 树形渲染：缩进 + 边类型 + 节点名 + (行号)（Q28）。
-func queryTraceDir(acts *action.Actions, field, funcPath string, maxDepth int, forward bool) int {
+// 树形渲染：缩进 + 边类型 + 节点名 + (行号)（Q28）；--compact 去缩进。
+func queryTraceDir(acts *action.Actions, field, funcPath string, maxDepth int, forward bool, opts outputOpts) int {
 	logger := zap.L()
 	logger.Debug("enter queryTraceDir")
 	defer logger.Debug("exit queryTraceDir")
@@ -175,6 +216,22 @@ func queryTraceDir(acts *action.Actions, field, funcPath string, maxDepth int, f
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
+	}
+	if opts.json {
+		type traceRow struct {
+			ID     string `json:"id"`
+			Depth  int    `json:"depth"`
+			Name   string `json:"name"`
+			Edge   string `json:"edge"`
+			Line   int    `json:"line"`
+			IsUsage bool  `json:"is_usage"`
+		}
+		jrows := make([]traceRow, 0, len(rows))
+		for _, r := range rows {
+			jrows = append(jrows, traceRow{string(r.ID), r.Depth, r.Name, lastEdgeKind(r.EdgeKinds), r.Line, r.IsUsage})
+		}
+		encodeJSON(map[string]any{"field": field, "func": n.Name, "rows": jrows})
+		return 0
 	}
 	if len(rows) == 0 {
 		fmt.Printf("无追溯路径：%s 在 %s 中无匹配的字段访问点（--max-depth %d）\n",
@@ -198,7 +255,11 @@ func queryTraceDir(acts *action.Actions, field, funcPath string, maxDepth int, f
 		if r.Line > 0 {
 			line = fmt.Sprintf(" (%d)", r.Line)
 		}
-		fmt.Printf("%s%s %s %s%s%s\n", strings.Repeat("  ", r.Depth), direction, edge, r.Name, line, mark)
+		indent := strings.Repeat("  ", r.Depth)
+		if opts.compact {
+			indent = ""
+		}
+		fmt.Printf("%s%s %s %s%s%s\n", indent, direction, edge, r.Name, line, mark)
 	}
 	return 0
 }
@@ -212,7 +273,7 @@ func lastEdgeKind(kinds string) string {
 }
 
 // querySymbol 输出符号摘要（对齐 TD.md 7.1 explore_symbol 摘要层）。
-func querySymbol(acts *action.Actions, input string) int {
+func querySymbol(acts *action.Actions, input string, opts outputOpts) int {
 	logger := zap.L()
 	logger.Debug("enter querySymbol")
 	defer logger.Debug("exit querySymbol")
@@ -222,6 +283,20 @@ func querySymbol(acts *action.Actions, input string) int {
 		return 1
 	}
 	n := d.Node
+	if opts.json {
+		encodeJSON(map[string]any{
+			"id":      string(n.ID),
+			"name":    n.Name,
+			"kind":    string(n.Kind),
+			"file":    n.FilePath,
+			"line":    n.LineStart,
+			"signature": n.Signature(),
+			"doc":     n.DocComment(),
+			"callers": factIDs(d.Callers, "source"),
+			"callees": factIDs(d.Callees, "target"),
+		})
+		return 0
+	}
 	fmt.Printf("ID:         %s\n", n.ID)
 	fmt.Printf("名称:       %s\n", n.Name)
 	fmt.Printf("种类:       %s\n", n.Kind)
@@ -254,7 +329,7 @@ func querySymbol(acts *action.Actions, input string) int {
 }
 
 // queryGraph 输出 callers/callees/impact 查询结果。
-func queryGraph(acts *action.Actions, sub, input string, depth int) int {
+func queryGraph(acts *action.Actions, sub, input string, depth int, opts outputOpts) int {
 	logger := zap.L()
 	logger.Debug("enter queryGraph")
 	defer logger.Debug("exit queryGraph")
@@ -262,6 +337,32 @@ func queryGraph(acts *action.Actions, sub, input string, depth int) int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
+	}
+	if opts.json {
+		switch sub {
+		case "callers":
+			facts, err := acts.Callers(n.ID, depth)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				return 1
+			}
+			encodeJSON(map[string]any{"target": input, "rows": factIDs(facts, "source")})
+		case "callees":
+			facts, err := acts.Callees(n.ID, depth)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				return 1
+			}
+			encodeJSON(map[string]any{"target": input, "rows": factIDs(facts, "target")})
+		case "impact":
+			nodes, err := acts.Impact(n.ID, depth)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				return 1
+			}
+			encodeJSON(map[string]any{"target": input, "nodes": nodeBriefs(nodes)})
+		}
+		return 0
 	}
 
 	switch sub {
@@ -291,6 +392,38 @@ func queryGraph(acts *action.Actions, sub, input string, depth int) int {
 		printNodes(nodes)
 	}
 	return 0
+}
+
+// factIDs 提取边的端点 ID 列表（endpoint=source/target，JSON 输出用）。
+func factIDs(facts []*domain.Fact, endpoint string) []map[string]any {
+	out := make([]map[string]any, 0, len(facts))
+	for _, f := range facts {
+		id := f.SourceID
+		if endpoint == "target" {
+			id = f.TargetID
+		}
+		out = append(out, map[string]any{
+			"id":         string(id),
+			"tool":       f.ToolSource,
+			"confidence": f.Confidence,
+		})
+	}
+	return out
+}
+
+// nodeBriefs 提取节点摘要（JSON 输出用）。
+func nodeBriefs(nodes []*domain.CodeEntity) []map[string]any {
+	out := make([]map[string]any, 0, len(nodes))
+	for _, n := range nodes {
+		out = append(out, map[string]any{
+			"id":   string(n.ID),
+			"name": n.Name,
+			"kind": string(n.Kind),
+			"file": n.FilePath,
+			"line": n.LineStart,
+		})
+	}
+	return out
 }
 
 // printFacts 打印边列表；endpoint 为 "source" 时显示边左端（调用者场景），
@@ -364,7 +497,7 @@ func printNodes(nodes []*domain.CodeEntity) {
 
 // queryValueTrace 输出数据值在整条链路上的处理过程，按函数上下文分组
 // （field_trace.md §14.2 数据值全链追踪）。
-func queryValueTrace(acts *action.Actions, nodeID string, maxDepth int) int {
+func queryValueTrace(acts *action.Actions, nodeID string, maxDepth int, opts outputOpts) int {
 	logger := zap.L()
 	logger.Debug("enter queryValueTrace")
 	defer logger.Debug("exit queryValueTrace")
@@ -372,6 +505,27 @@ func queryValueTrace(acts *action.Actions, nodeID string, maxDepth int) int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
+	}
+	if opts.json {
+		type flowRow struct {
+			ID       string `json:"id"`
+			Name     string `json:"name"`
+			Depth    int    `json:"depth"`
+			Dir      int    `json:"dir"`
+			Edge     string `json:"edge"`
+			Line     int    `json:"line"`
+			Kind     string `json:"kind"`
+			Access   string `json:"access"`
+			FuncID   string `json:"func_id"`
+			FuncName string `json:"func_name"`
+		}
+		jrows := make([]flowRow, 0, len(rows))
+		for _, r := range rows {
+			jrows = append(jrows, flowRow{string(r.ID), r.Name, r.Depth, r.Dir,
+				lastEdgeKind(r.EdgeKinds), r.Line, string(r.Kind), r.Access, r.FuncID, shortFuncName(r.FuncID)})
+		}
+		encodeJSON(map[string]any{"flows": jrows})
+		return 0
 	}
 	if len(rows) == 0 {
 		fmt.Println("无数据流（节点不存在或无数据流边）")
@@ -406,7 +560,11 @@ func queryValueTrace(acts *action.Actions, nodeID string, maxDepth int) int {
 		if r.Line > 0 {
 			line = fmt.Sprintf(":%d", r.Line)
 		}
-		fmt.Printf("  %s%s %s %s%s\n", strings.Repeat("  ", r.Depth), arrow, edge, r.Name+acc, line)
+		indent := strings.Repeat("  ", r.Depth)
+		if opts.compact {
+			indent = ""
+		}
+		fmt.Printf("%s%s %s %s%s\n", indent, arrow, edge, r.Name+acc, line)
 	}
 	return 0
 }

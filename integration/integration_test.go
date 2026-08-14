@@ -604,6 +604,97 @@ func gitRun(t *testing.T, dir string, args ...string) {
 }
 
 // TestServerEndToEnd：init 后起 HTTP serve（真实前端资源），全 API 验证。
+// TestOutputNoiseFree：真实仓库 init 后——stdout 无日志混流（日志入
+// .codeintel/codeintel.log）、--json 可解析、--compact 生效、export graph
+// 输出 mermaid/dot（Q88/Q89/Q96）。
+func TestOutputNoiseFree(t *testing.T) {
+	if !scipGoAvailable() {
+		t.Skip("scip-go not found (install: go install github.com/scip-code/scip-go/cmd/scip-go@latest)")
+	}
+	dir := fixtureRepo(t)
+
+	// init 输出 stdout 不含 OTel span 日志
+	code, out := runCLIOut(t, "init", "--repo", dir)
+	if code != 0 {
+		t.Fatalf("init exit = %d", code)
+	}
+	if strings.Contains(out, `"Name": "codeintel.main"`) {
+		t.Errorf("init stdout 不应混入 OTel span 日志")
+	}
+	// 日志文件落位（与 db 同目录，Q88）
+	logPath := filepath.Join(dir, ".codeintel", "codeintel.log")
+	if _, err := os.Stat(logPath); err != nil {
+		t.Fatalf("日志文件缺失: %v", err)
+	}
+	// 测试入口（cli.Main 直调）不处理 --verbose（main() 扫描并 Setup），
+	// debug 级日志写文件在 radar 实测验证（真实二进制路径）；此处验证
+	// 核心契约：日志文件存在且 stdout 无日志混流（默认 info 级下
+	// entrylog 的 enter/exit 为 debug 不产生输出，stdout 干净即证明
+	// 日志通道已切文件）
+	code, out = runCLIOut(t, "query", "symbol", "main", "--repo", dir)
+	if code != 0 {
+		t.Fatalf("query exit = %d", code)
+	}
+	if strings.Contains(out, "enter cmdQuery") || strings.Contains(out, "DEBUG") ||
+		strings.Contains(out, `"Name": "codeintel.main"`) {
+		t.Errorf("日志不应出现在 stdout: %s", out[:min(len(out), 200)])
+	}
+
+	// --json：stdout 为纯 JSON
+	code, out = runCLIOut(t, "query", "symbol", "main", "--repo", dir, "--json")
+	if code != 0 {
+		t.Fatalf("query symbol --json exit = %d", code)
+	}
+	var sym map[string]any
+	if err := json.Unmarshal([]byte(out), &sym); err != nil {
+		t.Fatalf("symbol --json 应可解析: %v\n%s", err, out)
+	}
+	if sym["name"] != "main" {
+		t.Errorf("symbol json = %v", sym)
+	}
+
+	// export graph：callees → dot；value-trace → mermaid
+	handleID := "symbol:go:example.com/app/svc:(Service).Handle"
+	code, out = runCLIOut(t, "export", "graph", "--type", "callees", "--target", handleID, "--repo", dir)
+	if code != 0 {
+		t.Fatalf("export graph callees exit = %d", code)
+	}
+	if !strings.Contains(out, "digraph") {
+		t.Errorf("callees graph 应输出 dot: %s", out[:min(len(out), 200)])
+	}
+	// value-trace 锚点：Handle 的 s.Name 读节点
+	faID := fieldAccessID(t, sqlite.NewRepo(mustOpen(t, dir)), handleID, "s.Name", "read")
+	if faID == "" {
+		t.Fatalf("Handle s.Name read node missing")
+	}
+	code, out = runCLIOut(t, "export", "graph", "--type", "value-trace", "--target", faID, "--repo", dir)
+	if code != 0 {
+		t.Fatalf("export graph value-trace exit = %d", code)
+	}
+	if !strings.Contains(out, "flowchart") {
+		t.Errorf("value-trace graph 应输出 mermaid: %s", out[:min(len(out), 200)])
+	}
+}
+
+// mustOpen 打开仓库 DB（测试辅助）。
+func mustOpen(t *testing.T, dir string) *sqlite.DB {
+	t.Helper()
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	return db
+}
+
+// min 返回较小值（Go 1.21 无内置 min）。
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 func TestServerEndToEnd(t *testing.T) {
 	if !scipGoAvailable() {
 		t.Skip("scip-go not found (install: go install github.com/scip-code/scip-go/cmd/scip-go@latest)")

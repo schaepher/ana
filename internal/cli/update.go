@@ -13,6 +13,7 @@ import (
 
 	"github.com/schaepher/codeintel/internal/domain"
 	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
+	"github.com/schaepher/codeintel/internal/logging"
 	"github.com/schaepher/codeintel/internal/orchestrator"
 	"go.uber.org/zap"
 )
@@ -68,6 +69,10 @@ func cmdUpdate(ctx context.Context, args []string) int {
 	fmt.Printf("增量更新: %s (%d 个文件变更)\n", abs, len(changed))
 	for _, f := range changed {
 		fmt.Printf("  - %s\n", f)
+	}
+	// 日志切换到 .codeintel/codeintel.log（stdout 只留查询结果，Q88）
+	if err := logging.ToFile(abs); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: 日志切换失败: %v\n", err)
 	}
 	db, err := sqlite.Open(abs)
 	if err != nil {
