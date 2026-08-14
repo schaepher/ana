@@ -298,3 +298,55 @@ func TestFlowsEndpoint(t *testing.T) {
 		t.Errorf("use-chain row = %v", second)
 	}
 }
+
+// TestValueTraceEndpoint：⑬ 猎 bug——/api/value-trace 端点（此前 0%
+// 覆盖）：数据值全链 JSON 输出 + 不存在的节点返回空。
+func TestValueTraceEndpoint(t *testing.T) {
+	repoDir := t.TempDir()
+	db, err := sqlite.Open(repoDir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	r := sqlite.NewRepo(db)
+	funcID := "symbol:go:example.com/app:Greet"
+	write := &domain.CodeEntity{
+		ID: domain.CanonicalID(funcID + "#s.Name.write@2"), Kind: domain.KindFieldAccess,
+		Name: "s.Name", FilePath: "app.go", LineStart: 2,
+		Properties: map[string]any{"full_path": "example.com/app.T.Name",
+			"instance_path": "s.Name", "access_kind": "write", "func_id": funcID},
+	}
+	val := &domain.CodeEntity{
+		ID: domain.CanonicalID(funcID + "#t0"), Kind: domain.KindSSAValue, Name: "t0",
+		Properties: map[string]any{"func_id": funcID},
+	}
+	if _, err := r.SaveBatchStats([]*domain.CodeEntity{write, val}, []*domain.Fact{{
+		SourceID: val.ID, TargetID: write.ID, Kind: domain.FactDataFlowsTo,
+		ToolSource: domain.ToolSSA, Confidence: 1,
+	}}, nil); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	web := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<html>x</html>")}}
+	ts := httptest.NewServer(New(context.Background(), action.New(r), web, repoDir).Handler())
+	t.Cleanup(ts.Close)
+
+	resp, body := get(t, ts, "/api/value-trace?id="+url.QueryEscape(string(write.ID)))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d: %v", resp.StatusCode, body)
+	}
+	flows, ok := body["flows"].([]any)
+	if !ok {
+		t.Fatalf("flows missing: %v", body)
+	}
+	if len(flows) != 2 {
+		t.Fatalf("flows = %d, want 2", len(flows))
+	}
+	// 不存在的节点 → 空 flows 且 200（不报错）
+	resp, body = get(t, ts, "/api/value-trace?id=nope")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("missing node status = %d", resp.StatusCode)
+	}
+	if flows, _ := body["flows"].([]any); len(flows) != 0 {
+		t.Fatalf("missing node flows = %v, want empty", flows)
+	}
+}

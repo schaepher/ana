@@ -1091,3 +1091,190 @@ func TestValueTraceMulti(t *testing.T) {
 		}
 	}
 }
+
+// TestTraceForwardPkgBoundary：⑬ 猎 bug——跳板容器判据的包路径 LIKE
+// 不得误匹配同名前缀包（example.com/app2 的类型不得被 example.com/app
+// 的 LIKE '%example.com/app%' 放行）。
+func TestTraceForwardPkgBoundary(t *testing.T) {
+	r := newTestRepo(t)
+	runID := "symbol:go:example.com/app:run"
+	fillID := "symbol:go:example.com/app2:fill"
+	nodes := []*domain.CodeEntity{
+		{ID: domain.CanonicalID(runID), Kind: domain.KindFunction, Name: "run"},
+		{ID: domain.CanonicalID(fillID), Kind: domain.KindFunction, Name: "fill"},
+		{ID: domain.CanonicalID(runID + "#c"), Kind: domain.KindSSAValue, Name: "c",
+			Properties: map[string]any{"func_id": runID, "origin_kind": "param"}},
+		{ID: domain.CanonicalID(fillID + "#c"), Kind: domain.KindSSAValue, Name: "c",
+			Properties: map[string]any{"func_id": fillID, "origin_kind": "param"}},
+		// 无关字段读：类型属于 example.com/app2（前缀包）——不得被 app 的
+		// 容器 LIKE 放行（type_string 含 "example.com/app" 子串）
+		{ID: domain.CanonicalID(fillID + "#c.Other.read@8"), Kind: domain.KindFieldAccess, Name: "c.Other",
+			Properties: map[string]any{"func_id": fillID, "full_path": "example.com/app2.T2.Other",
+				"access_kind": "read", "type_string": "example.com/app2.T2"}},
+		// 目标字段写入（example.com/app.T.FinalFee）
+		{ID: domain.CanonicalID(fillID + "#c.FinalFee.write@9"), Kind: domain.KindFieldAccess, Name: "c.FinalFee",
+			Properties: map[string]any{"func_id": fillID, "full_path": "example.com/app.T.FinalFee",
+				"access_kind": "write"}},
+	}
+	edges := []*domain.Fact{
+		{SourceID: domain.CanonicalID(runID + "#c"), TargetID: domain.CanonicalID(fillID + "#c"),
+			Kind: domain.FactArgument, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: domain.CanonicalID(fillID + "#c"), TargetID: domain.CanonicalID(fillID + "#c.Other.read@8"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: domain.CanonicalID(fillID + "#c"), TargetID: domain.CanonicalID(fillID + "#c.FinalFee.write@9"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+	}
+	save(t, r, nodes, edges)
+	rows, err := r.TraceForward("example.com/app.T.FinalFee", domain.CanonicalID(runID), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hasWrite := false
+	for _, row := range rows {
+		if strings.Contains(row.Name, "Other") {
+			t.Errorf("前缀包 example.com/app2 的类型被容器 LIKE 误放行: %s", row.Name)
+		}
+		if string(row.ID) == fillID+"#c.FinalFee.write@9" {
+			hasWrite = true
+		}
+	}
+	if !hasWrite {
+		t.Errorf("目标写入未到达: %+v", rows)
+	}
+}
+
+// TestTraceCycle：⑬ 猎 bug——trace-forward 环（a→b→a）不挂且行数有限。
+func TestTraceCycle(t *testing.T) {
+	r := newTestRepo(t)
+	funcID := "symbol:go:example.com/m:run"
+	nodes := []*domain.CodeEntity{
+		{ID: domain.CanonicalID(funcID + "#p"), Kind: domain.KindSSAValue, Name: "p",
+			Properties: map[string]any{"func_id": funcID, "origin_kind": "param"}},
+		{ID: domain.CanonicalID(funcID + "#a"), Kind: domain.KindSSAValue, Name: "a",
+			Properties: map[string]any{"func_id": funcID}},
+		{ID: domain.CanonicalID(funcID + "#b"), Kind: domain.KindSSAValue, Name: "b",
+			Properties: map[string]any{"func_id": funcID}},
+		{ID: domain.CanonicalID(funcID + "#f.write@5"), Kind: domain.KindFieldAccess, Name: "f",
+			Properties: map[string]any{"func_id": funcID, "full_path": "example.com/m.T.F", "access_kind": "write"}},
+	}
+	edges := []*domain.Fact{
+		{SourceID: domain.CanonicalID(funcID + "#p"), TargetID: domain.CanonicalID(funcID + "#a"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: domain.CanonicalID(funcID + "#a"), TargetID: domain.CanonicalID(funcID + "#b"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: domain.CanonicalID(funcID + "#b"), TargetID: domain.CanonicalID(funcID + "#a"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1}, // 环
+		{SourceID: domain.CanonicalID(funcID + "#a"), TargetID: domain.CanonicalID(funcID + "#f.write@5"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+	}
+	save(t, r, nodes, edges)
+	rows, err := r.TraceForward("example.com/m.T.F", domain.CanonicalID(funcID), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) > 40 {
+		t.Errorf("环导致行数爆炸: %d", len(rows))
+	}
+	hit := false
+	for _, row := range rows {
+		if string(row.ID) == funcID+"#f.write@5" {
+			hit = true
+		}
+	}
+	if !hit {
+		t.Errorf("环场景目标写入未到达: %+v", rows)
+	}
+}
+
+// TestValueTraceCycle：⑬ 猎 bug——value-trace 环不挂。
+func TestValueTraceCycle(t *testing.T) {
+	r := newTestRepo(t)
+	funcID := "symbol:go:example.com/m:run"
+	nodes := []*domain.CodeEntity{
+		{ID: domain.CanonicalID(funcID + "#a"), Kind: domain.KindSSAValue, Name: "a",
+			Properties: map[string]any{"func_id": funcID}},
+		{ID: domain.CanonicalID(funcID + "#b"), Kind: domain.KindSSAValue, Name: "b",
+			Properties: map[string]any{"func_id": funcID}},
+	}
+	edges := []*domain.Fact{
+		{SourceID: domain.CanonicalID(funcID + "#a"), TargetID: domain.CanonicalID(funcID + "#b"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: domain.CanonicalID(funcID + "#b"), TargetID: domain.CanonicalID(funcID + "#a"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+	}
+	save(t, r, nodes, edges)
+	rows, err := r.GetValueTrace(domain.CanonicalID(funcID+"#a"), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) > 40 {
+		t.Errorf("value-trace 环行数爆炸: %d", len(rows))
+	}
+}
+
+// TestTraceBackwardCrossFunction：⑬ 猎 bug——trace-backward 从 callee
+// 的写入出发，经 argument 反向连到调用方的产生点（值来源）。
+func TestTraceBackwardCrossFunction(t *testing.T) {
+	r := newTestRepo(t)
+	runID := "symbol:go:example.com/m:run"
+	fillID := "symbol:go:example.com/m:fill"
+	nodes := []*domain.CodeEntity{
+		{ID: domain.CanonicalID(runID), Kind: domain.KindFunction, Name: "run"},
+		{ID: domain.CanonicalID(fillID), Kind: domain.KindFunction, Name: "fill"},
+		{ID: domain.CanonicalID(runID + "#c"), Kind: domain.KindSSAValue, Name: "c",
+			Properties: map[string]any{"func_id": runID, "origin_kind": "param"}},
+		{ID: domain.CanonicalID(fillID + "#c"), Kind: domain.KindSSAValue, Name: "c",
+			Properties: map[string]any{"func_id": fillID, "origin_kind": "param"}},
+		{ID: domain.CanonicalID(fillID + "#c.Key.write@8"), Kind: domain.KindFieldAccess, Name: "c.Key",
+			Properties: map[string]any{"func_id": fillID, "full_path": "example.com/m.Cfg.Key",
+				"access_kind": "write"}},
+	}
+	edges := []*domain.Fact{
+		{SourceID: domain.CanonicalID(runID + "#c"), TargetID: domain.CanonicalID(fillID + "#c"),
+			Kind: domain.FactArgument, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: domain.CanonicalID(fillID + "#c"), TargetID: domain.CanonicalID(fillID + "#c.Key.write@8"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+	}
+	save(t, r, nodes, edges)
+	rows, err := r.TraceBackward("example.com/m.Cfg.Key", domain.CanonicalID(fillID), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hasCaller := false
+	for _, row := range rows {
+		if string(row.ID) == runID+"#c" {
+			hasCaller = true
+		}
+	}
+	if !hasCaller {
+		t.Errorf("backward 未连到调用方产生点 run#c: %+v", rows)
+	}
+}
+
+// TestFindFieldReadsOrder：⑬ 猎 bug——FindFieldReads 结果顺序稳定
+// （ResolveAnchor 取首个做锚点——顺序不稳定会导致锚点漂移）。
+func TestFindFieldReadsOrder(t *testing.T) {
+	r := newTestRepo(t)
+	funcID := "symbol:go:example.com/m:run"
+	nodes := []*domain.CodeEntity{
+		{ID: domain.CanonicalID(funcID + "#r1"), Kind: domain.KindFieldAccess, Name: "t.A",
+			LineStart: 9, Properties: map[string]any{"func_id": funcID, "full_path": "example.com/m.T.A", "access_kind": "read"}},
+		{ID: domain.CanonicalID(funcID + "#r2"), Kind: domain.KindFieldAccess, Name: "t.A",
+			LineStart: 3, Properties: map[string]any{"func_id": funcID, "full_path": "example.com/m.T.A", "access_kind": "read"}},
+	}
+	save(t, r, nodes, nil)
+	first := func() string {
+		rows, err := r.FindFieldReads("example.com/m.T.A")
+		if err != nil || len(rows) == 0 {
+			t.Fatalf("FindFieldReads: %v", err)
+		}
+		return string(rows[0].ID)
+	}
+	// 多次查询首个应一致（按行号稳定排序——r2 行号 3 应在前）
+	want := string(nodes[1].ID)
+	for i := 0; i < 3; i++ {
+		if got := first(); got != want {
+			t.Fatalf("FindFieldReads 首个不稳定: %s != %s", got, want)
+		}
+	}
+}

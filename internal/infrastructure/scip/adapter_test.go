@@ -2,6 +2,7 @@ package scip
 
 import (
 	"context"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -227,5 +228,30 @@ func TestProcessDocumentProtobufRoundtrip(t *testing.T) {
 	}
 	if len(out.Symbols) != 1 || out.Symbols[0].Symbol == "" {
 		t.Error("roundtrip lost symbols")
+	}
+}
+
+// TestResolveBin：⑬ 猎 bug——resolveBin 的分支覆盖：显式 BinPath、
+// PATH 命中、go env GOBIN/GOPATH 兜底、全失败报错。
+func TestResolveBin(t *testing.T) {
+	a := &Adapter{}
+	// 显式 BinPath 优先
+	a.BinPath = "/opt/fake/scip-go"
+	if p, err := a.resolveBin(); err != nil || p != "/opt/fake/scip-go" {
+		t.Errorf("BinPath = %q, %v", p, err)
+	}
+	// PATH 命中（scip-go 在 PATH 时）
+	if _, err := exec.LookPath("scip-go"); err == nil {
+		a.BinPath = ""
+		if p, err := a.resolveBin(); err != nil || p == "" {
+			t.Errorf("PATH resolve = %q, %v", p, err)
+		}
+	}
+	// GOBIN/GOPATH 兜底（伪造 go env 输出不可行——PATH 未命中且 go env
+	// 无 scip-go 时返回错误即可；此处仅验证错误分支不 panic）
+	a2 := &Adapter{}
+	a2.BinPath = ""
+	if p, err := a2.resolveBin(); err == nil && p == "" {
+		t.Errorf("resolveBin empty path without error")
 	}
 }

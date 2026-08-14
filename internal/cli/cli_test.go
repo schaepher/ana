@@ -441,3 +441,56 @@ func TestVersionNoOTLNoise(t *testing.T) {
 		t.Errorf("version stdout 不应含 OTel span JSON:\n%s", out[:min(len(out), 200)])
 	}
 }
+
+// TestQueryGraphOutputs：⑬ 猎 bug——impact/callees 文本输出与 JSON 输出
+// 的 nodeBriefs/printNodes/printFacts 格式路径。
+func TestQueryGraphOutputs(t *testing.T) {
+	dir := seedRepo(t)
+	// impact 文本输出（printNodes）
+	out := captureStdout(func() {
+		if code := cmdQuery([]string{"impact", "main", "--repo", dir}); code != 0 {
+			t.Errorf("impact exit = %d", code)
+		}
+	})
+	for _, want := range []string{"影响范围", "function", "main"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("impact 输出缺 %q:\n%s", want, out)
+		}
+	}
+	// impact --json（nodeBriefs）
+	out = captureStdout(func() {
+		if code := cmdQuery([]string{"impact", "main", "--repo", dir, "--json"}); code != 0 {
+			t.Errorf("impact --json exit = %d", code)
+		}
+	})
+	if !strings.Contains(out, `"nodes"`) {
+		t.Errorf("impact --json 缺 nodes:\n%s", out)
+	}
+	// callees --json（factIDs）
+	out = captureStdout(func() {
+		if code := cmdQuery([]string{"callees", "main", "--repo", dir, "--json"}); code != 0 {
+			t.Errorf("callees --json exit = %d", code)
+		}
+	})
+	if !strings.Contains(out, `"rows"`) || !strings.Contains(out, `symbol:go:example.com/m/svc:(Svc).Run`) {
+		t.Errorf("callees --json 缺 rows:\n%s", out)
+	}
+}
+
+// TestExportGraphValueTraceDot：⑬ 猎 bug——export graph value-trace 的
+// DOT 渲染路径（renderValueTraceDot，此前 0% 覆盖）。
+func TestExportGraphValueTraceDot(t *testing.T) {
+	dir := seedFieldTrace(t)
+	writeNode := "symbol:go:example.com/m:main#t.A.write@5"
+	out := captureStdout(func() {
+		if code := cmdExportGraph([]string{"--type", "value-trace", "--target", writeNode,
+			"--format", "dot", "--repo", dir}); code != 0 {
+			t.Errorf("export graph dot exit = %d", code)
+		}
+	})
+	for _, want := range []string{"digraph", "->", "t.A"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("dot 输出缺 %q:\n%s", want, out)
+		}
+	}
+}

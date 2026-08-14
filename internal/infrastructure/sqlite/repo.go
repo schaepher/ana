@@ -901,7 +901,7 @@ SELECT id, depth, name, edge_kinds, line, is_usage FROM fwd_trace ORDER BY depth
 	)
 	if forward {
 		rows, err = r.Query(query, field, string(funcID), string(funcID), field, field,
-			"%."+lastSeg(field), "%"+pkgOf(field)+"%", maxDepth)
+			"%."+lastSeg(field), "%"+pkgOf(field)+".%", maxDepth)
 	} else {
 		rows, err = r.Query(query, field, string(funcID), maxDepth)
 	}
@@ -1327,7 +1327,8 @@ func (r *Repo) FindFieldReads(fullPath string) ([]*domain.CodeEntity, error) {
 	rows, err := r.Query(`SELECT id, kind, name, file_path, line_start, line_end, properties
 		FROM nodes WHERE kind = 'field_access'
 		  AND json_extract(properties, '$.access_kind') = 'read'
-		  AND json_extract(properties, '$.full_path') = ?`, fullPath)
+		  AND json_extract(properties, '$.full_path') = ?
+		ORDER BY line_start, id`, fullPath)
 	if err != nil {
 		return nil, err
 	}
