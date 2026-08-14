@@ -291,3 +291,81 @@ func astLoadTestPackages(dir string) ([]*packages.Package, error) {
 	}
 	return pkgs, nil
 }
+
+// TestIndexHTTPHandlerLeaves：⑬ 猎 bug——ast 叶子覆盖：接口方法链式调用
+// 具体化（concreteMethodFor/concreteReturnType）、匿名嵌入字段名
+// （embeddedTypeName）、protoc 风格 RegisterXxxServer 服务实现
+// （serviceImplNode/isRegisterServerName）。
+func TestIndexHTTPHandlerLeaves(t *testing.T) {
+	nodes, facts := indexFixture(t, map[string]string{
+		"go.mod": fixtureGoMod,
+		"main.go": `package main
+
+import "example.com/mtest/pb"
+
+type Service interface {
+	Handle()
+}
+
+type impl struct{}
+
+func (i *impl) Handle() {}
+
+func NewService() Service {
+	return &impl{}
+}
+
+// 匿名嵌入字段（embeddedTypeName）
+type Base struct{}
+
+type S struct {
+	*Base
+}
+
+func setup() {
+	pb.RegisterFooServer(nil, &pb.FooImpl{})
+	NewService().Handle()
+}
+
+func main() {}
+`,
+		// protoc 生成的注册函数在 .pb.go 文件（collectRegisterServers 按
+		// 文件名后缀收集）
+		"pb/service.pb.go": `package pb
+
+type FooImpl struct{}
+
+func RegisterFooServer(s any, impl any) {}
+`,
+	})
+	// 接口方法具体化：setup → (impl).Handle（而非接口 Service）
+	found := false
+	for _, f := range facts {
+		if f.Kind == domain.FactCalls && strings.Contains(string(f.TargetID), "(impl).Handle") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("接口方法具体化未产出 (impl).Handle 调用边")
+	}
+	// 注册服务实现节点：FooImpl 标记 serves_grpc（节点可能先以普通 struct
+	// 产出再补标记——同 ID 属性经 DB json_patch 合并，测试侧遍历断言）
+	marked := false
+	for _, n := range nodes {
+		if string(n.ID) == "symbol:go:example.com/mtest/pb:FooImpl" && n.Properties["serves_grpc"] == "true" {
+			marked = true
+		}
+	}
+	if !marked {
+		t.Errorf("FooImpl 应标记 serves_grpc")
+	}
+	// 匿名嵌入字段显示名（embeddedTypeName：*Base → Base）
+	s := findNode(t, nodes, "symbol:go:example.com/mtest:S")
+	fields, ok := s.Properties["fields"].([]map[string]any)
+	if !ok || len(fields) != 1 {
+		t.Fatalf("S fields = %+v", s.Properties["fields"])
+	}
+	if fields[0]["name"] != "Base" {
+		t.Errorf("嵌入字段名 = %v, want Base", fields[0]["name"])
+	}
+}

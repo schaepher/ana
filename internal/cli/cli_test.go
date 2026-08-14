@@ -494,3 +494,22 @@ func TestExportGraphValueTraceDot(t *testing.T) {
 		}
 	}
 }
+
+// TestUpdateNoGitRepo：⑬ 猎 bug——update 在非 git 仓库（无 .git）应
+// 报错而非 panic/静默成功（变更检测依赖 git）。
+func TestUpdateNoGitRepo(t *testing.T) {
+	dir := t.TempDir()
+	// 无 go.mod 也无 .git：update 应返回非 0
+	if code := cmdUpdate(context.Background(), []string{"--repo", dir}); code == 0 {
+		t.Error("update 非 git 仓库应失败")
+	}
+}
+
+// TestInitNoGoMod：⑬ 猎 bug——init 在无 go.mod 目录（ensureGoEnv 路径）
+// 应报错而非 panic。
+func TestInitNoGoMod(t *testing.T) {
+	dir := t.TempDir()
+	if code := cmdInit(context.Background(), []string{"--repo", dir}); code == 0 {
+		t.Error("init 无 go.mod 应失败")
+	}
+}
