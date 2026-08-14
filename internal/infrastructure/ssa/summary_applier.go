@@ -10,6 +10,7 @@ package ssa
 import (
 	"fmt"
 	"go/constant"
+	"go/token"
 	"go/types"
 	"os"
 	"path/filepath"
@@ -40,6 +41,7 @@ type summarySpec struct {
 	SQLStmt     bool // database/sql 语句调用：SQL 字符串在第 0 实参（Q97）
 	SQLWrite    bool // Exec 写 / Query 读
 	TxBoundary  string // 事务边界标记（begin/commit/rollback，Q97）
+	ORMWrite    bool // ORM（GORM）写对象：字段→表.列 映射（②）
 }
 
 // userSummaryFile 对应 field-summary.yaml。
@@ -143,6 +145,13 @@ func builtinSummaries() map[string]summarySpec {
 			ReadArgsAll: true, // 观测：读实参字段（指标维度/值来源）
 		}
 	}
+	// GORM 写操作（②：ORM 更新映射字段→列）：实参对象类型→表名、
+	// 字段→列名（snake_case）
+	for _, fn := range []string{"Create", "Save", "Updates", "Delete", "Update"} {
+		specs["gorm.io/gorm.(DB)."+fn] = summarySpec{
+			Func: "gorm.io/gorm.(DB)." + fn, ParamIndex: 1, ORMWrite: true,
+		}
+	}
 	specs["database/sql.(DB).Begin"] = summarySpec{Func: "database/sql.(DB).Begin", TxBoundary: "begin"}
 	specs["database/sql.(Tx).Commit"] = summarySpec{Func: "database/sql.(Tx).Commit", TxBoundary: "commit"}
 	specs["database/sql.(Tx).Rollback"] = summarySpec{Func: "database/sql.(Tx).Rollback", TxBoundary: "rollback"}
@@ -200,6 +209,10 @@ func (ext *fieldExtractor) applySummary(cc *ssa.CallCommon, callee *ssa.Function
 	// 事务边界（Q97）：Begin/Commit/Rollback → 事务虚拟节点
 	if spec.TxBoundary != "" {
 		return true, ext.applyTxBoundary(cc, calleeID, spec.TxBoundary)
+	}
+	// ORM 写（②）：GORM 对象写 → 字段→表.列 映射
+	if spec.ORMWrite {
+		return true, ext.applyORMWrite(cc, calleeID)
 	}
 	// 逐参数应用
 	start := spec.ParamIndex
@@ -611,4 +624,147 @@ func parseSQLStmt(sql string) (table string, cols []string) {
 		}
 	}
 	return table, cols
+}
+
+// applyORMWrite 处理 ORM 写调用（②：GORM Create/Save/Updates/Delete/Update）：
+// 实参对象类型 → 表名（snake_case）+ 字段 → 列名 → 虚拟节点 表.列 +
+// summary_io 边（字段值 → 虚拟节点）。
+func (ext *fieldExtractor) applyORMWrite(cc *ssa.CallCommon, calleeID domain.CanonicalID) error {
+	logger := zap.L()
+	logger.Debug("enter (fieldExtractor).applyORMWrite")
+	defer logger.Debug("exit (fieldExtractor).applyORMWrite")
+	if len(cc.Args) < 2 {
+		return nil
+	}
+	arg := cc.Args[1] // 对象实参（args[0] 为接收者 db）
+	realArg := arg
+	if mi, ok := arg.(*ssa.MakeInterface); ok {
+		realArg = mi.X
+	}
+	t := derefType(realArg.Type())
+	named, ok := t.(*types.Named)
+	if !ok {
+		return nil
+	}
+	st, ok := named.Underlying().(*types.Struct)
+	if !ok {
+		return nil
+	}
+	table := snakeCase(named.Obj().Name())
+	line := ext.prog.Fset.PositionFor(cc.Pos(), false).Line
+	for i := 0; i < st.NumFields(); i++ {
+		field := st.Field(i)
+		if !field.Exported() {
+			continue
+		}
+		col := snakeCase(field.Name())
+		name := table + "." + col
+		// 字段值 → 虚拟节点（summary_io）
+		fieldVal := fieldValueOf(realArg, i)
+		if fieldVal == nil {
+			continue
+		}
+		argID, err := ext.emitValue(fieldVal)
+		if err != nil || argID == "" {
+			continue
+		}
+		id := domain.CanonicalID(string(ext.funcID) + "#ext.gorm." + name + ".write@" + fmt.Sprintf("%d", line))
+		if err := ext.emit(domain.Item{Node: &domain.CodeEntity{
+			ID:        id,
+			Kind:      domain.KindFieldAccess,
+			Name:      name,
+			FilePath:  ext.currentFile,
+			LineStart: line,
+			Properties: map[string]any{
+				"full_path":     name,
+				"instance_path": name,
+				"access_kind":   "write",
+				"code_snippet":  cc.String(),
+				"type_string":   "gorm",
+				"func_id":       string(ext.funcID),
+			},
+		}}); err != nil {
+			return err
+		}
+		if err := ext.emitEdgeKind(argID, id, domain.FactSummaryIO); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// fieldValueOf 按字段索引取对象值的字段读取（对象为 Alloc/寄存器时经
+// FieldAddr 或 Field 指令；无法定位时返回 nil——字段值无 SSA 实体则
+// 跳过该列）。
+func fieldValueOf(obj ssa.Value, idx int) ssa.Value {
+	refs := obj.Referrers()
+	if refs == nil {
+		return nil
+	}
+	for _, ref := range *refs {
+		switch r := ref.(type) {
+		case *ssa.FieldAddr:
+			if r.Field == idx {
+				// 写路径：Store 到该字段的值（Create 前对象字段填充）
+				if r.Referrers() != nil {
+					for _, ref2 := range *r.Referrers() {
+						if st, ok := ref2.(*ssa.Store); ok && st.Addr == r {
+							return st.Val
+						}
+					}
+				}
+				return nil
+			}
+		case *ssa.Field:
+			if r.Field == idx {
+				return r
+			}
+		}
+	}
+	return nil
+}
+
+func firstDeref(v ssa.Value) (ssa.Value, bool) {
+	if v.Referrers() == nil {
+		return v, false
+	}
+	for _, ref := range *v.Referrers() {
+		if un, ok := ref.(*ssa.UnOp); ok && un.Op == token.MUL && un.X == v {
+			return un, true
+		}
+	}
+	return v, false
+}
+
+// derefType 解指针。
+func derefType(t types.Type) types.Type {
+	if p, ok := t.(*types.Pointer); ok {
+		return p.Elem()
+	}
+	return t
+}
+
+// snakeCase 类型/字段名 → 表/列名（UserProfile → user_profile，
+// HTTPServer → http_server，APIKey → api_key，ID → id）。
+// 词边界：大写前插下划线（前一字符小写，或后一字符小写时——连续大写
+// 视为一个词，仅最后一个大写前插）。
+func snakeCase(s string) string {
+	var sb strings.Builder
+	runes := []rune(s)
+	for i, r := range runes {
+		if r >= 'A' && r <= 'Z' {
+			if i > 0 && (isLowerRune(runes[i-1]) ||
+				(i+1 < len(runes) && isLowerRune(runes[i+1]))) {
+				sb.WriteByte('_')
+			}
+			sb.WriteRune(r + ('a' - 'A'))
+		} else {
+			sb.WriteRune(r)
+		}
+	}
+	return sb.String()
+}
+
+func isLowerRune(r rune) bool {
+	return r >= 'a' && r <= 'z'
 }

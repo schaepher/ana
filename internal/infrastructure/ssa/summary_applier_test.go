@@ -238,3 +238,35 @@ func TestBuiltinSummaryMetrics(t *testing.T) {
 		}
 	}
 }
+
+// TestBuiltinSummaryGORM：GORM 写操作内置摘要（②：ORM 更新映射字段→列）。
+func TestBuiltinSummaryGORM(t *testing.T) {
+	specs := builtinSummaries()
+	for _, fn := range []string{
+		"gorm.io/gorm.(DB).Create",
+		"gorm.io/gorm.(DB).Save",
+		"gorm.io/gorm.(DB).Updates",
+		"gorm.io/gorm.(DB).Delete",
+		"gorm.io/gorm.(DB).Update",
+	} {
+		if _, ok := specs[fn]; !ok {
+			t.Errorf("内置摘要缺 GORM 写函数: %s", fn)
+		}
+	}
+}
+
+// TestSnakeCase：表名/列名转换（UserProfile → user_profile）。
+func TestSnakeCase(t *testing.T) {
+	cases := map[string]string{
+		"UserProfile": "user_profile",
+		"APIKey":      "api_key",
+		"Name":        "name",
+		"HTTPServer":  "http_server",
+		"ID":          "id",
+	}
+	for in, want := range cases {
+		if got := snakeCase(in); got != want {
+			t.Errorf("snakeCase(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

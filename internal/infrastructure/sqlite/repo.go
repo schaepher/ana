@@ -863,6 +863,14 @@ SELECT id, depth, name, edge_kinds, line FROM def_trace ORDER BY depth, id`
       AND json_extract(n.properties, '$.full_path') = ?
       AND json_extract(n.properties, '$.func_id') = ?
     UNION
+    -- 起点：函数参数（调用方经 argument 进入 callee 对该字段的实际写入，
+    -- 问题①：调用方函数内无该字段直接访问时仍能正向追踪）
+    SELECT n.id, 0, n.name, '', n.line_start, 0
+    FROM nodes n
+    WHERE n.kind = 'ssa_value'
+      AND json_extract(n.properties, '$.func_id') = ?
+      AND json_extract(n.properties, '$.origin_kind') IN ('param','receiver')
+    UNION
     SELECT e.target_id, d.depth + 1, n_next.name,
            CASE WHEN d.edge_kinds = '' THEN e.kind
                  ELSE d.edge_kinds || ',' || e.kind END, n_next.line_start,
@@ -872,6 +880,9 @@ SELECT id, depth, name, edge_kinds, line FROM def_trace ORDER BY depth, id`
     JOIN fwd_trace d ON e.source_id = d.id
     JOIN nodes n_next ON e.target_id = n_next.id
     WHERE e.kind IN ('data_flows_to','argument','returns','phi_operand','alias')
+      -- 数据流步不限字段；字段访问步须匹配目标字段（避免参数全部使用入链）
+      AND (n_next.kind != 'field_access'
+           OR json_extract(n_next.properties, '$.full_path') = ?)
       AND d.depth < ?
 )
 SELECT id, depth, name, edge_kinds, line, is_usage FROM fwd_trace ORDER BY depth, id`
@@ -881,7 +892,7 @@ SELECT id, depth, name, edge_kinds, line, is_usage FROM fwd_trace ORDER BY depth
 		err  error
 	)
 	if forward {
-		rows, err = r.Query(query, field, string(funcID), field, maxDepth)
+		rows, err = r.Query(query, field, string(funcID), string(funcID), field, field, maxDepth)
 	} else {
 		rows, err = r.Query(query, field, string(funcID), maxDepth)
 	}
@@ -1133,4 +1144,21 @@ func (r *Repo) GetDispatchEdges(ifaceID domain.CanonicalID) ([]*domain.Fact, err
 	}
 	defer rows.Close()
 	return scanFacts(rows)
+}
+
+// FindFieldReads 按 full_path 查字段读节点（③：写锚点的下游消费跳板——
+// 同字段的读节点及其使用链）。
+func (r *Repo) FindFieldReads(fullPath string) ([]*domain.CodeEntity, error) {
+	logger := zap.L()
+	logger.Debug("enter (Repo).FindFieldReads")
+	defer logger.Debug("exit (Repo).FindFieldReads")
+	rows, err := r.Query(`SELECT id, kind, name, file_path, line_start, line_end, properties
+		FROM nodes WHERE kind = 'field_access'
+		  AND json_extract(properties, '$.access_kind') = 'read'
+		  AND json_extract(properties, '$.full_path') = ?`, fullPath)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanNodes(rows)
 }

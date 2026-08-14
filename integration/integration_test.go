@@ -609,7 +609,32 @@ func TestCLIFullFlow(t *testing.T) {
 		t.Errorf("symbol Handler 应展示候选实现，output=%q", out[:min(len(out), 200)])
 	}
 
-	// 14. clean 删除索引
+	// 14. trace-forward 跨函数（问题①）：从 run 出发（run 内无 Cfg.Key
+	//     直接访问）应经 argument 进入 callee fillParam 的实际写入
+	code, out = runCLIOut(t, "query", "trace-forward", "example.com/app/svc.Cfg.Key",
+		"--func", "symbol:go:example.com/app/svc:run", "--repo", dir)
+	if code != 0 {
+		t.Errorf("trace-forward 跨函数 exit = %d", code)
+	}
+	if !strings.Contains(out, "c.Key") {
+		t.Errorf("trace-forward 应从 run 经 argument 进入 fillParam 的 c.Key 写入，output=%q", out[:min(len(out), 200)])
+	}
+
+	// 15. summary 写锚点下游（③）：从 s.Name 写节点出发应含使用链
+	//     （同字段读节点 → 返回消费）
+	handleWrite := fieldAccessID(t, repo, "symbol:go:example.com/app/svc:(Service).Handle", "s.Name", "write")
+	if handleWrite == "" {
+		t.Fatalf("Handle s.Name write node missing")
+	}
+	code, out = runCLIOut(t, "query", "summary", handleWrite, "--repo", dir)
+	if code != 0 {
+		t.Errorf("summary 写锚点 exit = %d", code)
+	}
+	if !strings.Contains(out, "consume") {
+		t.Errorf("summary 写锚点应含下游使用链（consume 读节点），output=%q", out[:min(len(out), 400)])
+	}
+
+	// 16. clean 删除索引
 	if code := runCLI(t, "clean", "--repo", dir, "--force"); code != 0 {
 		t.Fatalf("clean exit = %d", code)
 	}

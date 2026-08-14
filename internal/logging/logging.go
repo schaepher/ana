@@ -5,6 +5,7 @@ package logging
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -73,7 +74,9 @@ func Setup(serviceName string, debug bool, logDir string) (*sdktrace.TracerProvi
 	}
 	buildLogger(logPath, debug)
 
-	exporter, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
+	// 无日志目录（version/help 等无 --repo 命令）：OTel span 丢弃，
+	// 避免 OTel JSON 污染 stdout（Q88 输出契约）
+	exporter, err := stdouttrace.New(stdouttrace.WithWriter(io.Discard), stdouttrace.WithPrettyPrint())
 	if err != nil {
 		return nil, err
 	}

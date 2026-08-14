@@ -32,6 +32,7 @@ type Reader interface {
 	AllSummaries() ([]*domain.FunctionFieldSummary, error)
 	GetIndirectWriteEdges(funcID domain.CanonicalID) ([]*domain.Fact, error)
 	GetDispatchEdges(ifaceID domain.CanonicalID) ([]*domain.Fact, error)
+	FindFieldReads(fullPath string) ([]*domain.CodeEntity, error)
 	Counts() (nodes int, edges int, err error)
 	GetLatest() (*domain.BuildMeta, error)
 	RepoPath() string
@@ -275,6 +276,8 @@ type SummaryStep struct {
 // （产生链到源头 + 使用链到消费），每 depth 层取首个节点（value-trace
 // 结果按 dir/depth/id 有序）。步骤类型标注：源头=entry、sql/metric/
 // 字段写=write、末端=consume、其余=compute。
+// 写锚点的下游（③）：写节点无出边——经"同 full_path 的读节点"跳板
+// 接入读的使用链（字段级关联：写入 → 后续读取消费）。
 func (a *Actions) SummaryChain(anchor domain.CanonicalID) ([]SummaryStep, error) {
 	rows, err := a.repo.GetValueTrace(anchor, 8)
 	if err != nil {
@@ -300,6 +303,26 @@ func (a *Actions) SummaryChain(anchor domain.CanonicalID) ([]SummaryStep, error)
 	}
 	producers := pick(0) // depth 递增：锚点 → ... → 源头
 	consumers := pick(1) // depth 递增：锚点 → ... → 消费
+
+	// 写锚点：下游经同字段读节点跳板（③）——读节点的使用链并入
+	if len(consumers) <= 1 {
+		if n, err := a.repo.GetSymbol(anchor); err == nil && n.Kind == domain.KindFieldAccess &&
+			n.Property("access_kind") == "write" {
+			fullPath := n.Property("full_path")
+			if fullPath != "" {
+				if reads, rerr := a.repo.FindFieldReads(fullPath); rerr == nil {
+					for _, rn := range reads {
+						if rn.ID == anchor {
+							continue // 同节点跳过
+						}
+						if sub, serr := a.repo.GetValueTrace(rn.ID, 8); serr == nil {
+							consumers = append(consumers, pickSub(1, sub)...)
+						}
+					}
+				}
+			}
+		}
+	}
 
 	// 主链（正向）：源头 → ... → 锚点 → ... → 消费
 	var chain []*domain.TraceRow
@@ -334,6 +357,22 @@ func (a *Actions) SummaryChain(anchor domain.CanonicalID) ([]SummaryStep, error)
 		})
 	}
 	return steps, nil
+}
+
+// pickSub 从子追溯结果按 depth 分层取首个（dir 指定）。
+func pickSub(dir int, rows []*domain.TraceRow) []*domain.TraceRow {
+	var out []*domain.TraceRow
+	maxDepth := -1
+	for _, r := range rows {
+		if r.Dir != dir {
+			continue
+		}
+		if r.Depth > maxDepth {
+			maxDepth = r.Depth
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // shortFuncNameX 从 canonical ID 取函数短名（action 层展示用）。
