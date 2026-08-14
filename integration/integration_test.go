@@ -1343,3 +1343,151 @@ func main() {}
 		t.Errorf("无 Model 的 Update 不应产表.列节点（表名不可推导），got %d", n)
 	}
 }
+
+// TestCrossFunctionNoiseSelfContained：⑩ 跨函数追踪噪音复现——A 传
+// *Record 给 B，B 写 record.FinalFee 且读多个无关字段。trace-forward
+// A 的 FinalFee 下游：应连到 B 的 record.FinalFee 写入，且不含
+// Metadata/Status 等无关字段读（同名跳板过滤）。
+func TestCrossFunctionNoiseSelfContained(t *testing.T) {
+	if !scipGoAvailable() {
+		t.Skip("scip-go not found")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/noise\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "main.go"), `package noise
+
+type Record struct {
+	FinalFee float64
+	Metadata string
+	Status   string
+}
+
+// B：写入 FinalFee，并读多个无关字段
+func B(record *Record) {
+	record.FinalFee = 100
+	_ = record.Metadata
+	_ = record.Status
+}
+
+// A：传入 record，查 FinalFee 下游
+func A(record *Record) {
+	B(record)
+	_ = record.FinalFee
+}
+
+func main() {}
+`)
+	if code := runCLI(t, "init", "--repo", dir); code != 0 {
+		t.Fatalf("init exit = %d", code)
+	}
+	code, out := runCLIOut(t, "query", "trace-forward", "example.com/noise.Record.FinalFee",
+		"--func", "symbol:go:example.com/noise:A", "--repo", dir)
+	if code != 0 {
+		t.Fatalf("trace-forward exit = %d", code)
+	}
+	// B 的 record.FinalFee 写入应到达
+	if !strings.Contains(out, "FinalFee [写]") && !strings.Contains(out, "FinalFee") {
+		t.Errorf("未连到 B 的 record.FinalFee 写入，output=%q", out[:min(len(out), 400)])
+	}
+	// 无关字段读（Metadata/Status）不得入链
+	for _, noise := range []string{"Metadata", "Status"} {
+		if strings.Contains(out, noise) {
+			t.Errorf("无关字段 %s 不应入链，output=%q", noise, out[:min(len(out), 400)])
+		}
+	}
+}
+
+// TestORMUpdateRecordScopeSelfContained：⑪ ORM——session.Where(...)
+// .Update(record, scope) 对象实参形态：record 变量 → 表.列 节点 +
+// 对象兜底持久化边（summary_io）。
+func TestORMUpdateRecordScopeSelfContained(t *testing.T) {
+	if !scipGoAvailable() {
+		t.Skip("scip-go not found")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/orms\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "field-summary.yaml"), `summaries:
+  - func: example.com/orms.(Session).Update
+    orm_write: true
+    param_index: 1
+`)
+	writeFile(t, filepath.Join(dir, "main.go"), `package orms
+
+type Session struct{}
+
+type Record struct {
+	FinalFee float64
+}
+
+func (s *Session) Where(q string, v any) *Session { return s }
+
+func (s *Session) Update(record *Record, scope any) {}
+
+// DAO：带条件的会话更新（对象实参 + 附加条件参数）
+func UpdateFee(s *Session, record *Record) {
+	s.Where("state = ?", "active").Update(record, nil)
+}
+
+func main() {}
+`)
+	if code := runCLI(t, "init", "--repo", dir); code != 0 {
+		t.Fatalf("init exit = %d", code)
+	}
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := sqlite.NewRepo(db)
+	funcID := "symbol:go:example.com/orms:UpdateFee"
+	rows, err := repo.Query(`SELECT id, name FROM nodes WHERE kind='field_access'
+		AND json_extract(properties, '$.func_id') = ? AND json_extract(properties, '$.type_string') = 'gorm'`, funcID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	names := map[string]bool{}
+	ids := map[string]bool{}
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			t.Fatal(err)
+		}
+		names[name] = true
+		ids[id] = true
+	}
+	if !names["record.final_fee"] {
+		t.Errorf("Update(record, scope) 未生成 record.final_fee 表.列 节点: %v", names)
+	}
+	// 持久化边：对象值 → 节点（summary_io）
+	rows2, err := repo.Query(`SELECT count(*) FROM edges WHERE kind = 'summary_io' AND target_id = ?`,
+		funcID+"#ext.gorm.record.final_fee.write@0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if rows2.Next() {
+		_ = rows2.Scan(&n)
+	}
+	rows2.Close()
+	if n == 0 {
+		// 行号未知——按名字匹配节点再查边
+		for id := range ids {
+			var cnt int
+			rows3, err := repo.Query(`SELECT count(*) FROM edges WHERE kind='summary_io' AND target_id = ?`, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rows3.Next() {
+				_ = rows3.Scan(&cnt)
+			}
+			rows3.Close()
+			if cnt > 0 {
+				n = cnt
+			}
+		}
+	}
+	if n == 0 {
+		t.Error("Update(record, scope) 缺 summary_io 持久化边（对象值 → 表.列 节点）")
+	}
+}

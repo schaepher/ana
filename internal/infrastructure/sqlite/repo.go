@@ -883,12 +883,14 @@ SELECT id, depth, name, edge_kinds, line FROM def_trace ORDER BY depth, id`
     JOIN nodes n_next ON e.target_id = n_next.id
     WHERE e.kind IN ('data_flows_to','argument','returns','phi_operand','alias')
       -- 字段访问步：目标字段任意读写放行；参数/值 → 其他字段读 放行
-      -- （① 跳板入口：dest.Field = src.Field 拷贝链经中间读连到目标写入）；
-      -- 字段访问 → 字段访问 仅限目标字段（切断嵌套展开与参数全部
-      -- 字段入链的指数噪音，④ 超时防护）
+      -- 但仅限与目标字段同名的读（⑫ 跳板精确化：dest.ID = src.ID 拷贝链
+      -- 同名保留——kg.ID → t42.ID；record.Metadata/Status 等无关字段
+      -- 读拦截——噪音与超时来源）；字段访问 → 字段访问 仅限目标字段
       AND (n_next.kind != 'field_access'
            OR json_extract(n_next.properties, '$.full_path') = ?
-           OR (d.kind != 'field_access' AND json_extract(n_next.properties, '$.access_kind') = 'read'))
+           OR (d.kind != 'field_access' AND json_extract(n_next.properties, '$.access_kind') = 'read'
+               AND (json_extract(n_next.properties, '$.full_path') LIKE ?
+                    OR json_extract(n_next.properties, '$.type_string') LIKE ?)))
       AND d.depth < ?
 )
 SELECT id, depth, name, edge_kinds, line, is_usage FROM fwd_trace ORDER BY depth, id`
@@ -898,7 +900,8 @@ SELECT id, depth, name, edge_kinds, line, is_usage FROM fwd_trace ORDER BY depth
 		err  error
 	)
 	if forward {
-		rows, err = r.Query(query, field, string(funcID), string(funcID), field, field, maxDepth)
+		rows, err = r.Query(query, field, string(funcID), string(funcID), field, field,
+			"%."+lastSeg(field), "%"+pkgOf(field)+"%", maxDepth)
 	} else {
 		rows, err = r.Query(query, field, string(funcID), maxDepth)
 	}
@@ -931,6 +934,23 @@ SELECT id, depth, name, edge_kinds, line, is_usage FROM fwd_trace ORDER BY depth
 		out = append(out, &row)
 	}
 	return out, rows.Err()
+}
+
+// lastSeg 取类型限定字段路径的字段名（example.com/m.T.FinalFee → FinalFee）。
+func lastSeg(fullPath string) string {
+	if i := strings.LastIndex(fullPath, "."); i >= 0 {
+		return fullPath[i+1:]
+	}
+	return fullPath
+}
+
+// pkgOf 取类型限定字段路径的模块包路径（example.com/m.T.FinalFee → example.com/m）。
+func pkgOf(fullPath string) string {
+	parts := strings.Split(fullPath, ".")
+	if len(parts) <= 2 {
+		return fullPath
+	}
+	return strings.Join(parts[:len(parts)-2], ".")
 }
 
 // GetFunctionFlows 返回函数内完整字段数据流（前端 /api/flows 用）：
