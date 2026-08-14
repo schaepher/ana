@@ -911,3 +911,31 @@ codeintel export graph --type modules [--format mermaid] --repo <path>
   扩展加载与模块归属）——Q121 备注
 - **模块图进前端图探索**（serve 页面模块视图）：当前仅 CLI/export
   输出，无 module 节点落库——Q129 备注
+
+### 18.6 手写 client + gRPC 方法路径调用（Q131–Q134，2026-08-14）
+
+一期（§18.2）识别 `NewXxxClient` 生成 client；另一种常见形态是**手写
+client**——不经过生成代码，直接以 gRPC 方法路径发起调用：
+
+```go
+conn.Invoke(ctx, "/example.com.pb.Greeter/SayHello", req, resp)  // ClientConn.Invoke：路径在第 2 参
+conn.NewStream(ctx, desc, "/example.com.pb.Greeter/SayHello")    // NewStream：路径在第 3 参
+grpc.Invoke(ctx, target, "/example.com.pb.Greeter/SayHello", ...) // 旧版顶层：路径在第 3 参
+```
+
+- **识别范围（Q131）**：方法路径**字符串字面量**直接提取；**一层赋值链**
+  常量传播（`const method = "/..."` / `method := "..."` 后传入）提取；
+  更深/动态来源不产边（盲区标注）
+- **调用形态（Q132）**：识别 `Invoke`（路径第 2 参）/ `NewStream`（路径
+  第 3 参）/ 顶层 `grpc.Invoke`（路径第 3 参）调用点本身——与 conn 来源
+  无关、与所在函数无关（自定义封装 client 方法内自动覆盖，零配置）；
+  方法名 + 路径格式 `/.../...` 双条件判定（框架无关启发式，Q87）
+- **服务标识（Q133）**：路径 `"/<proto包>.<服务名>/<方法>"` 中
+  `<proto包>.<服务名>` 为服务标识（proto 包与 go 生成包路径可能不同）；
+  grpc_service 节点 ID `symbol:proto:<proto包>:svc.<服务名>`（与一期的
+  `symbol:go:<go包>:svc.<服务名>` 区分）；**服务端匹配按服务名末段**
+  （路径末段 == RegisterXxxServer 的服务名，protoc 惯例服务名相同）
+- **落库（Q134）**：复用 grpc_call 边（kind 不变）——metadata 加
+  `method_path`（完整路径）+ `method`（末段方法名）+ line_num；
+  `module-calls` 聚合对两种形态统一按 `服务名.方法名` 展示；impl 匹配
+  子查询改为按 grpc_service 节点 name 相等（`svc.<服务名>`，跨 ID 前缀）
