@@ -582,8 +582,97 @@ radar 实测：790 元素访问节点（`data["Active"]` 等）、736 行元素�
 
 - 入口可达子图优化（§9：默认只分析入口可达，当前为全 module 构建）
 - 性能基准 benchmarks/（§11：pprof 构建时间/内存记录）
-- v2 计划：MCP serve、增量更新、泛型完整支持、channel 元素追踪
+- v2 计划：MCP serve、泛型完整支持（channel 元素追踪 4f21ef3 已实现；
+  增量更新 7dec073 已实现）
 
 ---
 
 **文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§14 为 2026-08-14 实现阶段需求增补记录。
+
+## 15. 优化路线图（设计树决策 Q84–Q102，2026-08-14）
+
+9 项优化方向经四轮设计树访谈确认（Q84–Q102，对应设计树 Round 1–4 的
+Q1–Q19）。决策编号延续 §14 的 Q 体系。实现顺序见 15.7 里程碑。
+
+### 15.1 顶层决策（Q84–Q87）
+
+- **Q84 交付范围**：三阶段——阶段 A（分析内核）：跨函数可变参数回连、
+  接口动态派发、路径条件标注、可解释不确定性；阶段 B（语义层）：持久化
+  识别、全局/DI 建模；阶段 C（表达层）：生命周期图、跨层摘要、输出降噪。
+  输出降噪（纯 CLI 基建）提前实施
+- **Q85 实现层**：混合——候选集与动态派发落库（schema v3 一次变更），
+  条件标注与持久化映射查询期计算（视图增强，不改变图结构）
+- **Q86 输出通道**：CLI 主通道（--json/--compact 全命令通用、Mermaid/DOT
+  导出子命令）；HTTP 仅透出落库的结构化数据；前端渲染留阶段 C 后评估
+- **Q87 框架绑定**：框架无关启发式识别（不绑定 GORM/langchaingo 等），
+  通用模式优先，特定框架适配器后续可加
+
+### 15.2 阶段 A 分支（Q88–Q93）
+
+- **Q88 日志文件**：日志（zap + OTel span）写入 `.codeintel/codeintel.log`
+  （与 db 同目录），stdout 只承载查询结果。机制：logging.Setup 早期调用
+  保持 stdout 兜底，新增 logging.ToFile(dir) 延迟切换（各命令解析 --repo
+  后调用）；无轮转（MVP，serve 长期运行建议定期清理）
+- **Q89 Mermaid/DOT 导出**：`export graph --type value-trace|callees
+  [--format mermaid|dot]`——value-trace 默认 mermaid（flowchart 子图表达
+  函数分组），callees 默认 dot；生命周期图（阶段 C）复用同一导出器
+- **Q90 调用点级回连**：间接写摘要/边 metadata 补充调用点行号与实参
+  变量名（`run:16 fillParam(c) → c.Key 被写`）——零 schema 变更
+  （metadata JSON 列已有）；持久化识别（Q98）复用此粒度
+- **Q91 动态派发候选集**：注册点识别（Register/Add/New 调用、全局变量
+  持有、构造器参数）优先 + 全量实现枚举兜底；dispatch_to 边落库
+- **Q92 路径条件标注**：三类条件——常量可传播分支（`if cfg.APIKey == ""`）、
+  类型断言/switch 分支、env/flag 读取；标注在数据流边上（conditions 列表），
+  查询期由 action 层计算；异常返回路径并入分支标注不单独建模
+- **Q93 置信度与缺失**：三档置信度——静态注册命中 0.9、类型匹配枚举 0.7、
+  启发式猜测 0.5；缺失信息枚举三类——dynamic_call_unresolved（动态调用
+  未解析）、config_unknown（配置值无法静态确定）、generic_uninstantiated
+  （泛型实例缺失）
+
+### 15.3 schema v3 与查询契约（Q94–Q96）
+
+- **Q94 dispatch_to 边**：source = 接口方法（与现有 calls 边链式组合：
+  调用函数 →calls→ 接口方法 →dispatch_to→ 实现方法），target = 候选实现
+  方法；metadata `{origin: register|enum|guess, confidence, register_site}`
+  （register_site 仅注册点命中时）；Expand 边白名单加 dispatch_to；候选
+  实现方法节点不存在（外部包）时跳过
+- **Q95 查询契约**：条件叠加在 trace-backward/forward、value-trace 树形
+  输出（`[条件: ...]`）与 --json 的 conditions 字段；symbol 接口方法详情
+  列出候选实现（置信度 + 注册点）；--json 输出 candidates + missing；
+  HTTP 仅 /api/expand 透出 dispatch_to 边（conditions 暂不进 HTTP）
+- **Q96 CLI 参数**：--json/--compact 为 query 全部子命令通用 flag；
+  导出为 `export graph` 子命令
+
+### 15.4 阶段 B 分支（Q97–Q98）
+
+- **Q97 持久化识别**（查询期计算）：`*sql.DB`/db.Exec/Query/Prepare 调用链
+  → 参数数据流回连字段路径（复用 Q90 调用点回连）；SQL 字面量字符串启发
+  提取表名与列名（`INSERT INTO users(key,..)`、`UPDATE users SET key=?`）；
+  事务边界（Begin/Commit/Rollback）标注 `[事务内]`；状态前置（写前 if
+  条件）复用 Q92 条件标注；不做复杂 SQL 解析（JOIN/子查询）与 ORM 反射
+  映射（GORM 标签）
+- **Q98 全局/DI 建模**：Go 原生模式——全局变量初始化点溯源（value-trace
+  已有 origin_kind=global 节点）、init()/main 构造链（NewXxx 工厂返回接口
+  与 Q91 派发候选连接）、配置驱动（os.Getenv/flag 读取影响分支，与 Q92
+  条件标注连接）；不做 DI 容器框架（wire/fx/dig）
+
+### 15.5 阶段 C 分支（Q99–Q100）
+
+- **Q99 端到端生命周期图**：聚合 value-trace 全链 + persist_to（Q97 存储
+  标注）+ conditions（Q92）→ 来源/转换/派生/存储/跨模块/外部调用一图展示；
+  派生字段用既有 data_flows_to 链标注；观测指标识别纳入 v1（Inc/Observe/
+  WithLabelValues 三模式启发）；交付 `export graph --type lifecycle --target
+  <字段>`（mermaid）
+- **Q100 跨层摘要**：`query summary <字段>`——入口 → 计算 → 写入 → 消费
+  简洁链路，每步带 file:line；--json 输出结构化 steps；mermaid 同链路由
+  图；主链算法 = value-trace 结果上的最高置信度最长链（复用 Q93 置信度），
+  分支处取最高置信度路径、其余标注分支
+
+### 15.6 里程碑（Q101）
+
+- **M1（阶段 A）**：8 输出降噪（日志文件 + --json/--compact + export graph）
+  → 2 调用点级回连 → 1+9 dispatch_to 边 + 置信度/缺失 → 3 条件标注
+- **M2（阶段 B）**：4 持久化识别 → 7 全局/DI 建模
+- **M3（阶段 C）**：5 生命周期图 → 6 跨层摘要
+- 每项独立提交（可回滚可审查）；验收 = 单元测试 + 集成测试场景 + radar
+  实测 + 测试矩阵全绿 + git push
