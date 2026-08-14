@@ -12,6 +12,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -72,12 +73,18 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, emit domai
 	// 实例路径（x.A）需从 AST 恢复源码变量名
 	idents := buildIdentIndex(pkgs, repo.Module)
 
+	// 外部函数摘要（内置 + 用户 field-summary.yaml，§7）
+	specs, warnings := loadSummaries(repo.Path)
+	for _, w := range warnings {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", w)
+	}
+
 	a.fd = map[domain.CanonicalID]*funcData{}
 	for fn := range ssautil.AllFunctions(prog) {
 		if !isModuleFunction(fn, repo.Module) {
 			continue // 外部依赖走摘要（Phase 5）
 		}
-		if err := emitFunction(repo, prog, fn, idents, a.fd, emit); err != nil {
+		if err := emitFunction(repo, prog, fn, idents, a.fd, specs, emit); err != nil {
 			return err
 		}
 	}
@@ -119,7 +126,8 @@ func isModuleFunction(fn *ssa.Function, module string) bool {
 // 仅处理有 FuncDecl 源码的顶层函数/方法——闭包（FuncLit）与合成 wrapper 跳过；
 // 闭包内字段访问在 Phase 2 归入外层函数（field_trace.md Q14 适配）。
 func emitFunction(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
-	idents map[token.Pos]string, data map[domain.CanonicalID]*funcData, emit domain.EmitFunc) error {
+	idents map[token.Pos]string, data map[domain.CanonicalID]*funcData,
+	specs map[string]summarySpec, emit domain.EmitFunc) error {
 	logger := zap.L()
 	logger.Debug("enter emitFunction")
 	defer logger.Debug("exit emitFunction")
@@ -163,7 +171,7 @@ func emitFunction(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
 		fd = &funcData{}
 		data[id] = fd
 	}
-	return emitFunctionFields(repo, prog, fn, id, idents, fd, emit)
+	return emitFunctionFields(repo, prog, fn, id, idents, fd, specs, emit)
 }
 
 // emitSignatureNodes 发射函数/方法签名的参数与返回节点（parameter / result）

@@ -19,9 +19,10 @@ import (
 
 // funcData 单个函数的摘要收集数据（构建期内存态）。
 type funcData struct {
-	directReads  []fieldEntry
-	directWrites []fieldEntry
-	calls        []callInfo
+	directReads    []fieldEntry
+	directWrites   []fieldEntry
+	calls          []callInfo
+	indirectWrites []fieldEntry // 外部摘要写（虚拟节点，emitSummaries 合并输出）
 }
 
 // fieldEntry 单个字段访问的摘要条目。
@@ -99,8 +100,13 @@ func (ext *fieldExtractor) emitCall(cc *ssa.CallCommon, callVal ssa.Value) error
 	logger.Debug("enter (fieldExtractor).emitCall")
 	defer logger.Debug("exit (fieldExtractor).emitCall")
 	callee := resolveStaticCallee(cc)
-	if callee == nil || !isModuleFunction(callee, ext.repo.Module) {
-		return nil // 外部/动态调用：摘要系统（Phase 5）处理
+	if callee == nil {
+		return nil // 动态调用（接口/函数值）：无法解析被调方
+	}
+	if !isModuleFunction(callee, ext.repo.Module) {
+		// 外部函数：应用摘要（§7.5 虚拟节点机制）
+		_, err := ext.applySummary(cc, callee)
+		return err
 	}
 	calleeID, ok := ext.funcIDOf(callee)
 	if !ok {

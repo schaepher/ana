@@ -48,6 +48,14 @@ func emitSummaries(data map[domain.CanonicalID]*funcData, emit domain.EmitFunc) 
 			return err
 		}
 		ind := indirect[fID]
+		// 合并外部摘要的间接写（虚拟节点）
+		if fd != nil {
+			for _, e := range fd.indirectWrites {
+				if _, ok := ind[e.fieldPath]; !ok {
+					ind[e.fieldPath] = e
+				}
+			}
+		}
 		if err := emitSummaryRows(fID, domain.SummaryIndirectWrite, valuesOf(ind), emit); err != nil {
 			return err
 		}

@@ -30,7 +30,7 @@ import (
 // emitFunctionFields 发射单个函数内的字段访问节点与数据流边。
 func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
 	funcID domain.CanonicalID, idents map[token.Pos]string, funcData *funcData,
-	emit domain.EmitFunc) error {
+	specs map[string]summarySpec, emit domain.EmitFunc) error {
 	logger := zap.L()
 	logger.Debug("enter emitFunctionFields")
 	defer logger.Debug("exit emitFunctionFields")
@@ -45,11 +45,13 @@ func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Func
 		idents:   idents,
 		emit:     emit,
 		funcData: funcData,
+		specs:    specs,
 		fields:   map[*ssa.FieldAddr]*fieldAccess{},
 		reads:    map[*ssa.FieldAddr]*fieldAccess{},
 		values:   map[ssa.Value]domain.CanonicalID{},
 		funcIDs:  map[*ssa.Function]domain.CanonicalID{},
 		slotsFor: map[domain.CanonicalID]map[string]bool{funcID: {}},
+		extSummaries: map[domain.CanonicalID]bool{},
 	}
 
 	// 第一遍：按使用方式判定 FieldAddr 的读写（go/ssa v0.26 表示，
@@ -570,6 +572,9 @@ type fieldExtractor struct {
 	slotsFor map[domain.CanonicalID]map[string]bool // 每函数 slot 占用（shadowing 消歧）
 	lines    map[string][]string             // 源码行缓存（filePath → 行数组）
 	funcData *funcData                       // 摘要收集（direct 读写 + 静态调用）
+	specs    map[string]summarySpec          // 外部函数摘要（内置 + 用户）
+	extSummaries map[domain.CanonicalID]bool // 已创建 external_summary 节点
+	currentFile string                       // 当前函数文件（虚拟节点用）
 }
 
 // isSSAName 判断是否为 SSA 临时名（t0、t91 等），用于决定展示名回退。

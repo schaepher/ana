@@ -483,6 +483,24 @@ SSA 语义与映射类决策全部保留：Q1（SSA_VALUE 统一建模）、Q2�
 - `field_access` 酸橙 `#7cb305`、`ssa_value` 浅灰 `#bfbfbf`、`parameter` 金 `#d48806`、`result` 粉 `#f759ab`；argument/returns/phi_operand/alias 线型与信息栏分组。
 - 数据流边归三行布局 mid 类（layout.js default 分支，无需改行分类）。
 
+### 14.7 摘要系统实现（Phase 5，Q79）
+
+- 内置摘要：`encoding/json.Unmarshal`（写 v 全部字段，递归展开深度 ≤4）、
+  `fmt.Printf`（从参数 1 起读全部实参字段）、`database/sql.(Rows).Scan`
+  （写 dest 指向值）、`net/http.(Request).ParseForm`（写 Form）、
+  `FormValue`（读 Form）；`context.Context` 透明无条目。
+- 用户摘要：`field-summary.yaml`（模块根目录），解析失败/重复定义警告降级，
+  **用户条目可覆盖同名内置**。
+- 应用机制：外部调用点生成虚拟 `field_access`（`is_external=1`，func_id=调用者，
+  ID `#ext.<path>.<access>@<line>`）+ `external_summary` 节点 +
+  `summary_io` 边；写摘要另加 `INDIRECT_WRITE`（调用者→虚拟节点）、
+  `data_flows_to`（实参→虚拟节点），并进入调用者的间接写摘要表；
+  读摘要加 `data_flows_to`（虚拟节点→实参）。
+- **SSA 表示坑**：`any` 形参实参被 `MakeInterface` 装箱（Type()=any）、
+  `...any` 变参被包装成 `[]any` 的 Slice 指令（alloc→IndexAddr→Store 链）——
+  应用前须解包取真实值/真实元素。
+- 依赖：`gopkg.in/yaml.v3`（纯 Go，无 CGO）。
+
 ### 14.6 测试与验证（Q78）
 
 - 单元：ssa 适配器（映射/跨过程/签名/摘要）、sqlite（递归 CTE、expand 顺序、参数代理桥边）。
