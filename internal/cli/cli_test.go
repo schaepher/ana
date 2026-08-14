@@ -377,3 +377,37 @@ func TestInitGoWorkReject(t *testing.T) {
 		t.Errorf("init module dir under go.work = %d, want 0", code)
 	}
 }
+
+// TestQuerySummary：跨层摘要（Q100）——主链提取 + 步骤类型标注。
+func TestQuerySummary(t *testing.T) {
+	dir := seedFieldTrace(t)
+	writeNode := "symbol:go:example.com/m:main#t.A.write@5"
+	out := captureStdout(func() {
+		if code := cmdQuery([]string{"summary", writeNode, "--repo", dir}); code != 0 {
+			t.Errorf("query summary exit = %d", code)
+		}
+	})
+	for _, want := range []string{"生命周期", "t.A", "[write]"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("query summary 输出缺 %q:\n%s", want, out)
+		}
+	}
+	// --json：steps 数组
+	out = captureStdout(func() {
+		if code := cmdQuery([]string{"summary", writeNode, "--repo", dir, "--json"}); code != 0 {
+			t.Errorf("query summary --json exit = %d", code)
+		}
+	})
+	if !strings.Contains(out, `"steps"`) {
+		t.Errorf("summary --json 应含 steps:\n%s", out)
+	}
+	// --format mermaid
+	out = captureStdout(func() {
+		if code := cmdQuery([]string{"summary", writeNode, "--repo", dir, "--format", "mermaid"}); code != 0 {
+			t.Errorf("query summary mermaid exit = %d", code)
+		}
+	})
+	if !strings.Contains(out, "flowchart") {
+		t.Errorf("summary mermaid 应输出 flowchart:\n%s", out)
+	}
+}

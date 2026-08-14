@@ -75,6 +75,8 @@ func cmdQuery(args []string) int {
 		return queryTraceDir(acts, target, f.funcPath, f.maxDepth, sub == "trace-forward", opts)
 	case "value-trace":
 		return queryValueTrace(acts, target, f.maxDepth, opts)
+	case "summary":
+		return querySummary(acts, target, opts, f.format)
 	case "callers", "callees", "impact":
 		d := f.depth
 		if d <= 0 {
@@ -101,6 +103,7 @@ type queryFlags struct {
 	positional []string
 	json       bool
 	compact    bool
+	format     string // summary 的 mermaid 输出（Q100）
 }
 
 // parseQueryFlags 手动解析 query 子命令的参数，支持 flags 与位置参数任意顺序。
@@ -136,6 +139,11 @@ func parseQueryFlags(args []string) queryFlags {
 			f.json = true
 		case a == "--compact":
 			f.compact = true
+		case a == "--format" && i+1 < len(args):
+			f.format = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--format="):
+			f.format = strings.TrimPrefix(a, "--format=")
 		case strings.HasPrefix(a, "-"):
 			// 未知 flag：忽略
 		default:
@@ -641,4 +649,60 @@ func shortFuncName(id string) string {
 		return id[i+1:]
 	}
 	return id
+}
+
+// querySummary 跨层摘要（Q100）：字段生命周期主链
+// （入口 → 计算 → 写入 → 消费），每步带 file:line。
+func querySummary(acts *action.Actions, input string, opts outputOpts, format string) int {
+	logger := zap.L()
+	logger.Debug("enter querySummary")
+	defer logger.Debug("exit querySummary")
+	// 锚点：节点 ID 直连，否则按字段路径查第一个匹配读节点
+	var anchor domain.CanonicalID
+	if strings.HasPrefix(input, "symbol:") || strings.HasPrefix(input, "file:") || strings.HasPrefix(input, "commit:") {
+		anchor = domain.CanonicalID(input)
+	} else if n, err := acts.ResolveSymbol(input); err == nil {
+		anchor = n.ID
+	} else {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+	steps, err := acts.SummaryChain(anchor)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+	if len(steps) == 0 {
+		fmt.Println("无生命周期链路（节点不存在或无数据流边）")
+		return 0
+	}
+	if opts.json {
+		encodeJSON(map[string]any{"steps": steps})
+		return 0
+	}
+	if format == "mermaid" {
+		var sb strings.Builder
+		sb.WriteString("flowchart LR\n")
+		for _, st := range steps {
+			label := st.Name
+			if st.Line > 0 {
+				label += fmt.Sprintf(":%d", st.Line)
+			}
+			sb.WriteString(fmt.Sprintf("    %q --> %q\n", st.Func+"|"+label, st.Kind+"|"+st.Name))
+		}
+		fmt.Println(sb.String())
+		return 0
+	}
+	fmt.Printf("字段生命周期: %s（%d 步）\n", steps[0].Name, len(steps))
+	for _, st := range steps {
+		loc := ""
+		if st.File != "" {
+			loc = st.File
+			if st.Line > 0 {
+				loc += fmt.Sprintf(":%d", st.Line)
+			}
+		}
+		fmt.Printf("  %-8s %-40s %s %s\n", "["+st.Kind+"]", st.Name, loc, st.Func)
+	}
+	return 0
 }

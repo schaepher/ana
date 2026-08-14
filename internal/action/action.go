@@ -261,3 +261,85 @@ func (a *Actions) ExportIndex() (map[string]*ExportField, error) {
 	}
 	return index, nil
 }
+
+// SummaryStep 跨层摘要的一步（Q100）。
+type SummaryStep struct {
+	Kind string `json:"kind"` // entry / compute / write / consume
+	Name string `json:"name"`
+	File string `json:"file"`
+	Line int    `json:"line"`
+	Func string `json:"func"`
+}
+
+// SummaryChain 提取字段生命周期主链（Q100）：从锚点双向取最长路径
+// （产生链到源头 + 使用链到消费），每 depth 层取首个节点（value-trace
+// 结果按 dir/depth/id 有序）。步骤类型标注：源头=entry、sql/metric/
+// 字段写=write、末端=consume、其余=compute。
+func (a *Actions) SummaryChain(anchor domain.CanonicalID) ([]SummaryStep, error) {
+	rows, err := a.repo.GetValueTrace(anchor, 8)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	// 每 dir 按 depth 分层取首个（主路径）
+	pick := func(dir int) []*domain.TraceRow {
+		var out []*domain.TraceRow
+		maxDepth := -1
+		for _, r := range rows {
+			if r.Dir != dir {
+				continue
+			}
+			if r.Depth > maxDepth {
+				maxDepth = r.Depth
+				out = append(out, r)
+			}
+		}
+		return out
+	}
+	producers := pick(0) // depth 递增：锚点 → ... → 源头
+	consumers := pick(1) // depth 递增：锚点 → ... → 消费
+
+	// 主链（正向）：源头 → ... → 锚点 → ... → 消费
+	var chain []*domain.TraceRow
+	for i := len(producers) - 1; i >= 0; i-- {
+		chain = append(chain, producers[i])
+	}
+	chain = append(chain, consumers...)
+
+	steps := make([]SummaryStep, 0, len(chain))
+	fileOf := map[string]string{}
+	for i, r := range chain {
+		fp, ok := fileOf[string(r.ID)]
+		if !ok {
+			if n, err := a.repo.GetSymbol(r.ID); err == nil {
+				fp = n.FilePath
+			}
+			fileOf[string(r.ID)] = fp
+		}
+		kind := "compute"
+		switch {
+		case i == 0:
+			kind = "entry" // 源头（入口/产生点）
+		case strings.HasPrefix(r.Name, "sql.") || strings.HasPrefix(r.Name, "metric"):
+			kind = "write"
+		case r.Kind == domain.KindFieldAccess && r.Access == "write":
+			kind = "write"
+		case i == len(chain)-1:
+			kind = "consume" // 末端（消费/使用点）
+		}
+		steps = append(steps, SummaryStep{
+			Kind: kind, Name: r.Name, File: fp, Line: r.Line, Func: shortFuncNameX(r.FuncID),
+		})
+	}
+	return steps, nil
+}
+
+// shortFuncNameX 从 canonical ID 取函数短名（action 层展示用）。
+func shortFuncNameX(id string) string {
+	if i := strings.LastIndex(id, ":"); i >= 0 {
+		return id[i+1:]
+	}
+	return id
+}
