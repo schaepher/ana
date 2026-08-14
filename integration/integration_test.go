@@ -1206,6 +1206,11 @@ func (s *Svc) Run() {
 	fill(&s.cfg)
 }
 
+// D. 字面量传参（调用方直接构造对象传入）
+func runLiteral() {
+	fill(&Cfg{Key: "x"})
+}
+
 func main() {}
 `)
 	if code := runCLI(t, "init", "--repo", dir); code != 0 {
@@ -1235,6 +1240,15 @@ func main() {}
 	check(t, "symbol:go:example.com/xfn:runLocal", field, "c.Key")
 	// C. 字段读传参：Run → fill → c.Key 写入
 	check(t, "symbol:go:example.com/xfn:(Svc).Run", field, "c.Key")
+	// D. 字面量传参：runLiteral → fill → c.Key 写入
+	code, out := runCLIOut(t, "query", "trace-forward", field,
+		"--func", "symbol:go:example.com/xfn:runLiteral", "--repo", dir)
+	if code != 0 {
+		t.Fatalf("trace-forward runLiteral exit = %d", code)
+	}
+	if !strings.Contains(out, "c.Key") {
+		t.Errorf("字面量传参未连到 c.Key 写入，output=%q", out[:min(len(out), 400)])
+	}
 }
 
 // TestORMChainFormsSelfContained：⑪ ORM 链式形态覆盖——结构体 Updates
