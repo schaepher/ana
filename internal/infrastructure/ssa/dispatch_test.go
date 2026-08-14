@@ -173,3 +173,46 @@ func main() {
 	}
 	_ = strings.TrimSpace // keep import
 }
+
+// TestDispatchValueReceiverAndSelfExclusion：⑬ 猎 bug——值接收者实现
+// （候选集含 (Eng).Hello）且接口自身不进入候选集（self 排除）。
+func TestDispatchValueReceiverAndSelfExclusion(t *testing.T) {
+	_, facts, _ := indexFixtureFull(t, map[string]string{
+		"go.mod": moduleGoMod,
+		"main.go": `package m
+
+type Greeter interface {
+	Hello() string
+}
+
+// 值接收者实现（pointer method set 也覆盖）
+type Eng struct{}
+
+func (e Eng) Hello() string { return "hi" }
+
+// 接口 self 排除：接口类型自身不得作为候选
+type Greeter2 interface {
+	Hello() string
+}
+
+func use(g Greeter) string {
+	return g.Hello()
+}
+
+func main() {
+	use(&Eng{})
+}
+`,
+	})
+	ifaceID := "symbol:go:example.com/mtest:Greeter"
+	edge := findDispatch(t, facts, ifaceID, "symbol:go:example.com/mtest:(Eng).Hello")
+	if edge == nil {
+		t.Fatalf("值接收者实现应入候选集")
+	}
+	// self 排除：Greeter2（无实现者、非候选源）不应产生 dispatch_to 指向自身
+	for _, f := range facts {
+		if f.Kind == domain.FactDispatchTo && string(f.SourceID) == string(f.TargetID) {
+			t.Errorf("dispatch_to 自环不应存在: %s", f.SourceID)
+		}
+	}
+}

@@ -278,3 +278,40 @@ func TestSnakeCase(t *testing.T) {
 		}
 	}
 }
+
+// TestParseSQLStmt：⑬ 猎 bug——SQL 语句启发式解析形态矩阵
+// （parseSQLStmt 此前无直接单测；曾有切片 panic 历史）。
+func TestParseSQLStmt(t *testing.T) {
+	cases := []struct {
+		sql      string
+		table    string
+		cols     []string
+	}{
+		{"INSERT INTO users(name, email) VALUES(?, ?)", "users", []string{"name", "email"}},
+		{"INSERT INTO users VALUES(?, ?)", "users", nil}, // 无列名
+		{"INSERT INTO `users`(`name`) VALUES(?)", "users", []string{"name"}},
+		{"insert into users (name) values (?)", "users", []string{"name"}}, // 小写
+		{"UPDATE users SET name=?, email=? WHERE id = ?", "users", []string{"name", "email"}},
+		{"UPDATE users SET name = ?", "users", []string{"name"}}, // 无 WHERE
+		{"DELETE FROM users WHERE id = ?", "users", nil},
+		{"SELECT name FROM users WHERE id = ?", "users", nil},
+		{"SELECT u.name FROM users u JOIN orders o ON u.id = o.uid", "users", nil},
+		{"not sql at all", "", nil},
+		{"", "", nil},
+	}
+	for _, c := range cases {
+		table, cols := parseSQLStmt(c.sql)
+		if table != c.table {
+			t.Errorf("parseSQLStmt(%q) table = %q, want %q", c.sql, table, c.table)
+		}
+		if len(cols) != len(c.cols) {
+			t.Errorf("parseSQLStmt(%q) cols = %v, want %v", c.sql, cols, c.cols)
+			continue
+		}
+		for i := range cols {
+			if cols[i] != c.cols[i] {
+				t.Errorf("parseSQLStmt(%q) cols[%d] = %q, want %q", c.sql, i, cols[i], c.cols[i])
+			}
+		}
+	}
+}
