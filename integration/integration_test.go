@@ -1577,3 +1577,127 @@ func main() {}
 		t.Errorf("接口调用传参未连到实现 (FileWriter).Write 的写入，output=%q", out[:min(len(out), 400)])
 	}
 }
+
+// TestGlobalObjectTraceSelfContained：举一反三 A1——全局变量对象传参
+// （var g Record; helper(&g)）trace-forward 起点（global 值来源格）。
+func TestGlobalObjectTraceSelfContained(t *testing.T) {
+	if !scipGoAvailable() {
+		t.Skip("scip-go not found")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/glb\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "main.go"), `package glb
+
+type Record struct {
+	FinalFee float64
+}
+
+var g Record
+
+func helper2(r *Record) {
+	r.FinalFee = 300
+}
+
+func run3() {
+	helper2(&g)
+}
+
+func main() {}
+`)
+	if code := runCLI(t, "init", "--repo", dir); code != 0 {
+		t.Fatalf("init exit = %d", code)
+	}
+	code, out := runCLIOut(t, "query", "trace-forward", "example.com/glb.Record.FinalFee",
+		"--func", "symbol:go:example.com/glb:run3", "--repo", dir)
+	if code != 0 {
+		t.Fatalf("trace-forward exit = %d", code)
+	}
+	if !strings.Contains(out, "r.FinalFee") {
+		t.Errorf("全局对象传参未连到 helper2 写入，output=%q", out[:min(len(out), 400)])
+	}
+}
+
+// TestPhiObjectTraceSelfContained：举一反三 A2——phi 值传参
+// （if 分支各自赋值后传 helper）。
+func TestPhiObjectTraceSelfContained(t *testing.T) {
+	if !scipGoAvailable() {
+		t.Skip("scip-go not found")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/phi\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "main.go"), `package phi
+
+type Record struct {
+	FinalFee float64
+}
+
+func helper3(r *Record) {
+	r.FinalFee = 400
+}
+
+func run4(cond bool) {
+	var obj *Record
+	if cond {
+		obj = &Record{}
+	} else {
+		obj = &Record{}
+	}
+	helper3(obj)
+}
+
+func main() {}
+`)
+	if code := runCLI(t, "init", "--repo", dir); code != 0 {
+		t.Fatalf("init exit = %d", code)
+	}
+	code, out := runCLIOut(t, "query", "trace-forward", "example.com/phi.Record.FinalFee",
+		"--func", "symbol:go:example.com/phi:run4", "--repo", dir)
+	if code != 0 {
+		t.Fatalf("trace-forward exit = %d", code)
+	}
+	if !strings.Contains(out, "r.FinalFee") {
+		t.Errorf("phi 值传参未连到 helper3 写入，output=%q", out[:min(len(out), 400)])
+	}
+}
+
+// TestFuncValueCallTraceSelfContained：举一反三 B4——函数值调用
+// （f := getHandler(); f(record)——f 来自返回值，调用点无静态 callee）。
+func TestFuncValueCallTraceSelfContained(t *testing.T) {
+	if !scipGoAvailable() {
+		t.Skip("scip-go not found")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/fv\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "main.go"), `package fv
+
+type Record struct {
+	FinalFee float64
+}
+
+func handler(r *Record) {
+	r.FinalFee = 500
+}
+
+func getHandler() func(*Record) {
+	return handler
+}
+
+func run5() {
+	f := getHandler()
+	f(&Record{})
+}
+
+func main() {}
+`)
+	if code := runCLI(t, "init", "--repo", dir); code != 0 {
+		t.Fatalf("init exit = %d", code)
+	}
+	code, out := runCLIOut(t, "query", "trace-forward", "example.com/fv.Record.FinalFee",
+		"--func", "symbol:go:example.com/fv:run5", "--repo", dir)
+	if code != 0 {
+		t.Fatalf("trace-forward exit = %d", code)
+	}
+	if !strings.Contains(out, "r.FinalFee") {
+		t.Errorf("函数值调用未连到 handler 写入，output=%q", out[:min(len(out), 400)])
+	}
+}

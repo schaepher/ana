@@ -220,6 +220,14 @@ check('动态派发：接口 expand 返回 dispatch_to 候选边',
   (ifaceExp.edges || []).some((e) => e.kind === 'dispatch_to'),
   'edges=' + (ifaceExp.edges || []).map((e) => e.kind).join(','));
 
+// 13e. 前端候选实现展示：单击接口节点 → 信息栏"候选实现（N）"分组
+await page.evaluate((id) => window.__codeintelGraph.emit('node:click', { target: { id } }), IFACE_ID);
+await page.waitForTimeout(800);
+const ifacePanel = await page.evaluate(() => document.getElementById('panel-body').textContent);
+check('信息栏接口节点显示"候选实现"分组（Q95 前端展示）',
+  ifacePanel.indexOf('候选实现（') >= 0,
+  'panel=' + ifacePanel.slice(0, 100).replace(/\n/g, ' '));
+
 // 13. map/slice 元素访问（Q83）：/api/flows 返回元素路径（data["Active"] 等）
 const TRAIN_ID = 'symbol:go:github.com/schaepher/radar/internal/handler:(Handler).PageTrain';
 const trainFlows = await api('/api/flows?id=' + encodeURIComponent(TRAIN_ID));

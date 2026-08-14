@@ -49,6 +49,7 @@ export const EDGE_KIND_LABEL = {
   has_method: '拥有方法',
   has_param: '参数',
   has_result: '返回',
+  dispatch_to: '动态派发',
   argument: '参数传递',
   returns: '返回值',
   phi_operand: '分支输入',

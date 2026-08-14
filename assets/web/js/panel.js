@@ -119,6 +119,14 @@ export function renderNodePanel(data) {
       if (params.length) { state.panelGroupNodes[gi] = params.map(function (g) { return g.id; }); html.push(relGroupHtml('参数（' + params.length + '）', params, gi++)); }
       return;
     }
+    if (kind === 'dispatch_to') {
+      // 动态派发候选（Q95）：接口视角=候选实现（出边）、实现视角=被派发（入边）
+      var dout = items.filter(function (g) { return g.dir === '出'; });
+      var din = items.filter(function (g) { return g.dir === '入'; });
+      if (dout.length) { state.panelGroupNodes[gi] = dout.map(function (g) { return g.id; }); html.push(relGroupHtml('候选实现（' + dout.length + '）', dout, gi++)); }
+      if (din.length) { state.panelGroupNodes[gi] = din.map(function (g) { return g.id; }); html.push(relGroupHtml('被派发（' + din.length + '）', din, gi++)); }
+      return;
+    }
     if (kind === 'implements') {
       // 实现线（接口 → 实现者）按视角分组：接口节点视角=出边（实现者们），
       // 实现者节点视角=入边（它实现的接口）

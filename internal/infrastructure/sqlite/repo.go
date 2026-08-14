@@ -870,8 +870,9 @@ SELECT id, depth, name, edge_kinds, line FROM def_trace ORDER BY depth, id`
     SELECT n.id, 0, n.name, '', n.line_start, 0, n.kind
     FROM nodes n
     WHERE n.kind = 'ssa_value'
-      AND json_extract(n.properties, '$.func_id') = ?
-      AND (json_extract(n.properties, '$.origin_kind') IN ('param','receiver','alloc')
+      AND (json_extract(n.properties, '$.func_id') = ?
+           OR json_extract(n.properties, '$.origin_kind') = 'global')
+      AND (json_extract(n.properties, '$.origin_kind') IN ('param','receiver','alloc','global')
            OR json_extract(n.properties, '$.type_string') = ?
            OR json_extract(n.properties, '$.type_string') = ?)
     UNION

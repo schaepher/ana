@@ -279,6 +279,21 @@ func resolveFuncValue(v ssa.Value, depth int) *ssa.Function {
 			}
 		}
 	}
+	// 函数值由被调函数返回（f := getHandler(); f(x)）：追踪被调函数的
+	// Return 操作数（举一反三 B4——此前仅直接函数值/phi 链可解析）
+	if call, ok := v.(*ssa.Call); ok {
+		callee := resolveStaticCallee(&call.Call)
+		if callee == nil {
+			return nil
+		}
+		for _, ret := range returnOperands(callee) {
+			for _, rv := range ret {
+				if fn := resolveFuncValue(rv, depth+1); fn != nil {
+					return fn
+				}
+			}
+		}
+	}
 	return nil
 }
 
