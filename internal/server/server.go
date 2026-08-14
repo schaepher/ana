@@ -5,31 +5,33 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
 	"strings"
 
+	"github.com/schaepher/codeintel/internal/action"
 	"github.com/schaepher/codeintel/internal/domain"
-	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
 	"github.com/schaepher/codeintel/internal/logging"
 	"go.uber.org/zap"
 )
 
-// Server 承载图查询 HTTP 接口。
+// Server 承载图查询 HTTP 接口。全部查询经 action 层调用仓储
+// （CLI/HTTP 只做参数解析与结果 JSON 化）。
 type Server struct {
 	ctx  context.Context // 携带 root span，handler 日志由此取带链路信息的 logger
-	repo *sqlite.Repo
+	acts *action.Actions
 	web  fs.FS // 前端静态资源
 	root string // 仓库根目录（/api/source 读源码用）
 }
 
 // New 创建 Server。
-func New(ctx context.Context, repo *sqlite.Repo, webFS fs.FS, repoRoot string) *Server {
+func New(ctx context.Context, acts *action.Actions, webFS fs.FS, repoRoot string) *Server {
 	logger := logging.FromContext(ctx)
 	logger.Debug("enter New")
 	defer logger.Debug("exit New")
-	return &Server{ctx: ctx, repo: repo, web: webFS, root: repoRoot}
+	return &Server{ctx: ctx, acts: acts, web: webFS, root: repoRoot}
 }
 
 // Handler 返回 HTTP 处理器。
@@ -55,7 +57,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "missing q")
 		return
 	}
-	found, err := s.repo.GetSymbolByName(q)
+	found, err := s.acts.Search(q)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -124,7 +126,7 @@ func (s *Server) handleRoots(w http.ResponseWriter, r *http.Request) {
 	logger := logging.FromContext(s.ctx)
 	logger.Debug("enter (Server).handleRoots")
 	defer logger.Debug("exit (Server).handleRoots")
-	roots, err := s.repo.GetRoots()
+	roots, err := s.acts.Roots()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -146,14 +148,13 @@ func (s *Server) handleExpand(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "missing id")
 		return
 	}
-	cur, err := s.repo.GetSymbol(domain.CanonicalID(id))
+	cur, facts, neighbors, err := s.acts.Expand(domain.CanonicalID(id))
 	if err != nil {
-		writeErr(w, http.StatusNotFound, "symbol not found: "+id)
-		return
-	}
-	facts, neighbors, err := s.repo.Expand(domain.CanonicalID(id))
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		if errors.Is(err, domain.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, "symbol not found: "+id)
+		} else {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+		}
 		return
 	}
 
@@ -257,7 +258,7 @@ func (s *Server) handleValueTrace(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "missing id")
 		return
 	}
-	rows, err := s.repo.GetValueTrace(domain.CanonicalID(id), 8)
+	rows, err := s.acts.ValueTrace(domain.CanonicalID(id), 8)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -296,7 +297,7 @@ func (s *Server) handleFlows(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "missing id")
 		return
 	}
-	rows, err := s.repo.GetFunctionFlows(domain.CanonicalID(id), 8)
+	rows, err := s.acts.Flows(domain.CanonicalID(id), 8)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return

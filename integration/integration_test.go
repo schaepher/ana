@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/schaepher/codeintel/assets"
+	"github.com/schaepher/codeintel/internal/action"
 	"github.com/schaepher/codeintel/internal/cli"
 	"github.com/schaepher/codeintel/internal/domain"
 	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
@@ -375,7 +376,7 @@ func TestServerEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fs.Sub: %v", err)
 	}
-	srv := server.New(context.Background(), sqlite.NewRepo(db), webFS, dir)
+	srv := server.New(context.Background(), action.New(sqlite.NewRepo(db)), webFS, dir)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 

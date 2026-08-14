@@ -26,7 +26,7 @@ func (s *Server) handleSource(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "missing id")
 		return
 	}
-	n, err := s.repo.GetSymbol(domain.CanonicalID(id))
+	n, err := s.acts.Symbol(domain.CanonicalID(id))
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "symbol not found: "+id)
 		return

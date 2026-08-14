@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/schaepher/codeintel/assets"
+	"github.com/schaepher/codeintel/internal/action"
 	"github.com/schaepher/codeintel/internal/domain"
 	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
 	"github.com/schaepher/codeintel/internal/server"
@@ -41,12 +42,12 @@ func cmdServe(ctx context.Context, args []string) int {
 	defer db.Close()
 
 	// 校验已构建（nodes 非空），否则提示先 init
-	repo := sqlite.NewRepo(db)
-	if _, _, err := repo.Counts(); err != nil {
+	acts := action.New(sqlite.NewRepo(db))
+	if _, _, err := acts.Counts(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
-	_, err = repo.GetLatest()
+	_, err = acts.Latest()
 	if errors.Is(err, domain.ErrNotFound) {
 		fmt.Fprintf(os.Stderr, "error: %s 尚未构建索引，请先运行: codeintel init --repo %s\n", abs, abs)
 		return 1
@@ -65,7 +66,7 @@ func cmdServe(ctx context.Context, args []string) int {
 
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           server.New(ctx, repo, webFS, abs).Handler(),
+		Handler:           server.New(ctx, acts, webFS, abs).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	fmt.Printf("codeintel serve 已启动: http://localhost%s  （仓库: %s）\n", *addr, abs)

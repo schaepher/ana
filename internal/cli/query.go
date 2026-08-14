@@ -1,22 +1,17 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/schaepher/codeintel/internal/action"
 	"github.com/schaepher/codeintel/internal/domain"
 	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
 	"go.uber.org/zap"
 )
-
-// MinConfidence 调用关系查询默认置信度阈值。
-// 说明：CALLS 边来自 CodeGraph 角色（TD.md 5.1 表：置信度 0.8），
-// 阈值取 0.8 才能覆盖调用边；TD.md 决策 10 的 0.85 会过滤掉全部调用边。
-const MinConfidence = 0.8
 
 // cmdQuery 实现 `codeintel query ...`。
 func cmdQuery(args []string) int {
@@ -49,17 +44,17 @@ func cmdQuery(args []string) int {
 		return 1
 	}
 	defer db.Close()
-	repo := sqlite.NewRepo(db)
+	acts := action.New(sqlite.NewRepo(db))
 
 	switch sub {
 	case "symbol":
-		return querySymbol(repo, target)
+		return querySymbol(acts, target)
 	case "fields":
-		return queryFields(repo, target)
+		return queryFields(acts, target)
 	case "trace-backward", "trace-forward":
-		return queryTraceDir(repo, target, f.funcPath, f.maxDepth, sub == "trace-forward")
+		return queryTraceDir(acts, target, f.funcPath, f.maxDepth, sub == "trace-forward")
 	case "value-trace":
-		return queryValueTrace(repo, target, f.maxDepth)
+		return queryValueTrace(acts, target, f.maxDepth)
 	case "callers", "callees", "impact":
 		d := f.depth
 		if d <= 0 {
@@ -70,7 +65,7 @@ func cmdQuery(args []string) int {
 				d = 1
 			}
 		}
-		return queryGraph(repo, sub, target, d)
+		return queryGraph(acts, sub, target, d)
 	default:
 		fmt.Fprintf(os.Stderr, "error: unknown query subcommand %q\n", sub)
 		return 2
@@ -126,16 +121,11 @@ func parseQueryFlags(args []string) queryFlags {
 
 // queryFields 输出函数的字段读写摘要（S1，field_trace.md §6.2），
 // 按 direct_read / direct_write / indirect_write 分组。
-func queryFields(repo *sqlite.Repo, input string) int {
+func queryFields(acts *action.Actions, input string) int {
 	logger := zap.L()
 	logger.Debug("enter queryFields")
 	defer logger.Debug("exit queryFields")
-	n, err := resolveSymbol(repo, input)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		return 1
-	}
-	rows, err := repo.GetFunctionFields(n.ID)
+	n, rows, err := acts.FunctionFields(input)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
@@ -173,7 +163,7 @@ func queryFields(repo *sqlite.Repo, input string) int {
 
 // queryTraceDir 输出字段追溯路径（S2/S3，field_trace.md §6.3/6.4）。
 // 树形渲染：缩进 + 边类型 + 节点名 + (行号)（Q28）。
-func queryTraceDir(repo *sqlite.Repo, field, funcPath string, maxDepth int, forward bool) int {
+func queryTraceDir(acts *action.Actions, field, funcPath string, maxDepth int, forward bool) int {
 	logger := zap.L()
 	logger.Debug("enter queryTraceDir")
 	defer logger.Debug("exit queryTraceDir")
@@ -181,17 +171,7 @@ func queryTraceDir(repo *sqlite.Repo, field, funcPath string, maxDepth int, forw
 		fmt.Fprintln(os.Stderr, "error: trace 需要 --func <函数>（canonical ID 或名称）")
 		return 2
 	}
-	n, err := resolveSymbol(repo, funcPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		return 1
-	}
-	var rows []*domain.TraceRow
-	if forward {
-		rows, err = repo.TraceForward(field, n.ID, maxDepth)
-	} else {
-		rows, err = repo.TraceBackward(field, n.ID, maxDepth)
-	}
+	n, rows, err := acts.Trace(action.TraceParams{Field: field, Func: funcPath, MaxDepth: maxDepth, Forward: forward})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
@@ -231,56 +211,17 @@ func lastEdgeKind(kinds string) string {
 	return kinds
 }
 
-
-// resolveSymbol 将用户输入解析为符号：canonical ID 直接命中，否则按名称查找。
-func resolveSymbol(repo *sqlite.Repo, input string) (*domain.CodeEntity, error) {
-	logger := zap.L()
-	logger.Debug("enter resolveSymbol")
-	defer logger.Debug("exit resolveSymbol")
-	if strings.HasPrefix(input, "symbol:") || strings.HasPrefix(input, "file:") || strings.HasPrefix(input, "commit:") {
-		n, err := repo.GetSymbol(domain.CanonicalID(input))
-		if err == nil {
-			return n, nil
-		}
-		if !errors.Is(err, domain.ErrNotFound) {
-			return nil, err
-		}
-	}
-	matches, err := repo.GetSymbolByName(input)
-	if err != nil {
-		return nil, err
-	}
-	if len(matches) == 0 {
-		return nil, fmt.Errorf("符号 %q 不存在", input)
-	}
-	if len(matches) > 1 {
-		return nil, fmt.Errorf("符号 %q 有 %d 个匹配，请使用 canonical ID:\n  %s",
-			input, len(matches), joinIDs(matches))
-	}
-	return matches[0], nil
-}
-
-func joinIDs(nodes []*domain.CodeEntity) string {
-	logger := zap.L()
-	logger.Debug("enter joinIDs")
-	defer logger.Debug("exit joinIDs")
-	ids := make([]string, 0, len(nodes))
-	for _, n := range nodes {
-		ids = append(ids, string(n.ID))
-	}
-	return strings.Join(ids, "\n  ")
-}
-
 // querySymbol 输出符号摘要（对齐 TD.md 7.1 explore_symbol 摘要层）。
-func querySymbol(repo *sqlite.Repo, input string) int {
+func querySymbol(acts *action.Actions, input string) int {
 	logger := zap.L()
 	logger.Debug("enter querySymbol")
 	defer logger.Debug("exit querySymbol")
-	n, err := resolveSymbol(repo, input)
+	d, err := acts.SymbolDetail(input)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
+	n := d.Node
 	fmt.Printf("ID:         %s\n", n.ID)
 	fmt.Printf("名称:       %s\n", n.Name)
 	fmt.Printf("种类:       %s\n", n.Kind)
@@ -297,29 +238,27 @@ func querySymbol(repo *sqlite.Repo, input string) int {
 	if doc := n.DocComment(); doc != "" {
 		fmt.Printf("文档:       %s\n", strings.Split(doc, "\n")[0])
 	}
-	callers, _ := repo.GetCallers(n.ID, 1, MinConfidence)
-	callees, _ := repo.GetCallees(n.ID, 1, MinConfidence)
-	fmt.Printf("调用者数:   %d\n", len(callers))
-	fmt.Printf("被调用数:   %d\n", len(callees))
+	fmt.Printf("调用者数:   %d\n", len(d.Callers))
+	fmt.Printf("被调用数:   %d\n", len(d.Callees))
 
 	// 详情层：列出调用者与被调用者（上限 50，TD.md 7.1）
-	if len(callers) > 0 {
+	if len(d.Callers) > 0 {
 		fmt.Println("调用者:")
-		printFacts(callers, "source", 50)
+		printFacts(d.Callers, "source", 50)
 	}
-	if len(callees) > 0 {
+	if len(d.Callees) > 0 {
 		fmt.Println("被调用者:")
-		printFacts(callees, "target", 50)
+		printFacts(d.Callees, "target", 50)
 	}
 	return 0
 }
 
 // queryGraph 输出 callers/callees/impact 查询结果。
-func queryGraph(repo *sqlite.Repo, sub, input string, depth int) int {
+func queryGraph(acts *action.Actions, sub, input string, depth int) int {
 	logger := zap.L()
 	logger.Debug("enter queryGraph")
 	defer logger.Debug("exit queryGraph")
-	n, err := resolveSymbol(repo, input)
+	n, err := acts.ResolveSymbol(input)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
@@ -327,23 +266,23 @@ func queryGraph(repo *sqlite.Repo, sub, input string, depth int) int {
 
 	switch sub {
 	case "callers":
-		facts, err := repo.GetCallers(n.ID, depth, MinConfidence)
+		facts, err := acts.Callers(n.ID, depth)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			return 1
 		}
-		fmt.Printf("调用者（深度 %d，置信度 ≥%.2f）: %d 个\n", depth, MinConfidence, len(facts))
+		fmt.Printf("调用者（深度 %d，置信度 ≥%.2f）: %d 个\n", depth, action.MinConfidence, len(facts))
 		printFacts(facts, "source", 100)
 	case "callees":
-		facts, err := repo.GetCallees(n.ID, depth, MinConfidence)
+		facts, err := acts.Callees(n.ID, depth)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			return 1
 		}
-		fmt.Printf("被调用者（深度 %d，置信度 ≥%.2f）: %d 个\n", depth, MinConfidence, len(facts))
+		fmt.Printf("被调用者（深度 %d，置信度 ≥%.2f）: %d 个\n", depth, action.MinConfidence, len(facts))
 		printFacts(facts, "target", 100)
 	case "impact":
-		nodes, err := repo.GetImpact(n.ID, depth)
+		nodes, err := acts.Impact(n.ID, depth)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			return 1
@@ -425,11 +364,11 @@ func printNodes(nodes []*domain.CodeEntity) {
 
 // queryValueTrace 输出数据值在整条链路上的处理过程，按函数上下文分组
 // （field_trace.md §14.2 数据值全链追踪）。
-func queryValueTrace(repo *sqlite.Repo, nodeID string, maxDepth int) int {
+func queryValueTrace(acts *action.Actions, nodeID string, maxDepth int) int {
 	logger := zap.L()
 	logger.Debug("enter queryValueTrace")
 	defer logger.Debug("exit queryValueTrace")
-	rows, err := repo.GetValueTrace(domain.CanonicalID(nodeID), maxDepth)
+	rows, err := acts.ValueTrace(domain.CanonicalID(nodeID), maxDepth)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1

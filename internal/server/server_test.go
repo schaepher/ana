@@ -13,6 +13,7 @@ import (
 	"testing/fstest"
 
 	"github.com/schaepher/codeintel/internal/domain"
+	"github.com/schaepher/codeintel/internal/action"
 	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
 )
 
@@ -81,7 +82,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 	web := fstest.MapFS{
 		"index.html": &fstest.MapFile{Data: []byte("<html>codeintel</html>")},
 	}
-	srv := New(context.Background(), r, web, repoDir)
+	srv := New(context.Background(), action.New(r), web, repoDir)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	return ts
@@ -274,7 +275,7 @@ func TestFlowsEndpoint(t *testing.T) {
 		t.Fatalf("save: %v", err)
 	}
 	web := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<html>x</html>")}}
-	ts := httptest.NewServer(New(context.Background(), r, web, repoDir).Handler())
+	ts := httptest.NewServer(New(context.Background(), action.New(r), web, repoDir).Handler())
 	t.Cleanup(ts.Close)
 
 	resp, body := get(t, ts, "/api/flows?id="+url.QueryEscape(funcID))

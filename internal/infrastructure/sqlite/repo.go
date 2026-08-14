@@ -760,6 +760,20 @@ func (r *Repo) GetLatest() (*domain.BuildMeta, error) {
 	return m, nil
 }
 
+// AllSummaries 返回全部函数字段摘要行（S4 导出用，field_trace.md §2），
+// 按 field_path, access_kind 排序。
+func (r *Repo) AllSummaries() ([]*domain.FunctionFieldSummary, error) {
+	logger := zap.L()
+	logger.Debug("enter (Repo).AllSummaries")
+	defer logger.Debug("exit (Repo).AllSummaries")
+	rows, err := r.Query(`SELECT function_id, access_kind, field_path, instance_path, line_start, code_snippet
+		FROM function_field_summary ORDER BY field_path, access_kind`)
+	if err != nil {
+		return nil, err
+	}
+	return scanSummaries(rows)
+}
+
 // GetFunctionFields 查询函数的字段读写摘要（S1，field_trace.md §6.2）。
 // 直接查构建期预计算的 function_field_summary 表，无需动态遍历调用图。
 func (r *Repo) GetFunctionFields(funcID domain.CanonicalID) ([]*domain.FunctionFieldSummary, error) {
@@ -772,6 +786,11 @@ func (r *Repo) GetFunctionFields(funcID domain.CanonicalID) ([]*domain.FunctionF
 	if err != nil {
 		return nil, err
 	}
+	return scanSummaries(rows)
+}
+
+// scanSummaries 扫描摘要查询行（GetFunctionFields/AllSummaries 共用）。
+func scanSummaries(rows *sql.Rows) ([]*domain.FunctionFieldSummary, error) {
 	defer rows.Close()
 	var out []*domain.FunctionFieldSummary
 	for rows.Next() {
