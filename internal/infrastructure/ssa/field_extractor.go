@@ -509,11 +509,8 @@ func (ext *fieldExtractor) fieldInfo(baseType types.Type, fieldIdx int, pos toke
 		typeString: field.Type().String(),
 		fieldName:  field.Name(),
 	}
-	if named == nil {
-		// 匿名结构体等无稳定类型身份：full_path 留空，调用方回退源码字面量路径
-		return fi, true
-	}
-	fi.fullPath = named.Obj().Pkg().Path() + "." + named.Obj().Name() + "." + field.Name()
+	// 位置信息无论类型是否具名都要填充（B3：匿名分支曾提前 return，
+	// 匿名 struct 字段访问 line_start=0、file 空——CLI 无定位前端无锚点）
 	p := ext.prog.Fset.PositionFor(pos, false)
 	fi.filePath = relPath(ext.repo.Path, p.Filename)
 	fi.line = p.Line
@@ -524,6 +521,11 @@ func (ext *fieldExtractor) fieldInfo(baseType types.Type, fieldIdx int, pos toke
 		}
 		fi.snippet = snippet
 	}
+	if named == nil {
+		// 匿名结构体等无稳定类型身份：full_path 留空，调用方回退源码字面量路径
+		return fi, true
+	}
+	fi.fullPath = named.Obj().Pkg().Path() + "." + named.Obj().Name() + "." + field.Name()
 	return fi, true
 }
 
