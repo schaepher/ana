@@ -501,6 +501,38 @@ SSA 语义与映射类决策全部保留：Q1（SSA_VALUE 统一建模）、Q2�
   应用前须解包取真实值/真实元素。
 - 依赖：`gopkg.in/yaml.v3`（纯 Go，无 CGO）。
 
+### 14.8 轻量别名分析（Q80，2026-08-14 设计树确认）
+
+替代已移除的 go/pointer（x/tools v0.26 无此包），目标为**间接写精度**。
+设计树 12 项决策（用户确认）：
+
+| 决策 | 选择 |
+| :--- | :--- |
+| Q1 动机 | 间接写精度：修类型级误报（被调写自己内部对象却被算作调用者间接写） |
+| Q2 范围 | 过程内 must + 跨函数参数/返回直通 |
+| Q3 产出 | 落库 ALIAS 边（may，conf 0.8），仅 expand 可见（不进 value-trace/S3） |
+| Q4 语义 | 分离：间接写判定用 must（消除误报）；落库边用 may（文档契约） |
+| Q5 间接写 | 别名优先 + 类型级 fallback（分析不出时兜底，宁多不漏） |
+| Q6 形态 | 锚点式：变量 → alloc 节点（非变量对 O(N²)，跨函数天然收敛） |
+| Q7 锚点标识 | 复用 ssa_value（origin_kind=alloc），发射条件扩展为"参与字段访问或被别名引用" |
+| Q8 must 粒度 | 按调用点实例化（funcData.calls 现成数据） |
+| Q9 可见范围 | alias 仅 expand 白名单（已加入），前端图上按需展开 |
+| Q10 上限 | 每函数 200 alloc，超限跳过该函数（fallback 类型级） |
+| Q11 传播方向 | 参数 + 返回值双向（工厂函数返回对象被内部初始化算间接写） |
+| Q12 置信度 | 不区分（function_field_summary 表结构不动） |
+
+**算法概要**：
+1. 过程内：变量（ssa.Value）→ 指向的 alloc 集合；must = 值传递链
+   （Phi/UnOp/FieldAddr 无分叉汇聚单一 alloc），may = 可达性。
+2. 跨函数：实参→形参、返回值→调用者，沿调用图传播（visited 去重防环）。
+3. 间接写判定（emitSummaries 闭包迭代内）：调用点 f→g，g 写字段的
+   base 变量 must 集 ∩ 该调用点实参 must 集 ≠ ∅ → 计入；空 → 类型级 fallback。
+4. ALIAS 边：may 别名（变量→alloc）落库（conf 0.8，UNIQUE 去重）。
+
+**构建流程**：emitFunction 单遍发射后，Index 末尾新增别名 pass
+（computeAliases，产出 must 集 + may 边），emitSummaries 消费 must 集
+并发射 alias 边——避免改动单遍流式结构。
+
 ### 14.6 测试与验证（Q78）
 
 - 单元：ssa 适配器（映射/跨过程/签名/摘要）、sqlite（递归 CTE、expand 顺序、参数代理桥边）。
