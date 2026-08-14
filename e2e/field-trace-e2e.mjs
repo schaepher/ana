@@ -192,6 +192,14 @@ if (hasVtBtn) {
     'vt=' + vtText.slice(0, 120).replace(/\n/g, ' '));
 }
 
+// 13. map/slice 元素访问（Q83）：/api/flows 返回元素路径（data["Active"] 等）
+const TRAIN_ID = 'symbol:go:github.com/schaepher/radar/internal/handler:(Handler).PageTrain';
+const trainFlows = await api('/api/flows?id=' + encodeURIComponent(TRAIN_ID));
+const elem = (trainFlows.flows || []).find((f) => f.kind === 'field_access' && f.name.indexOf('["') >= 0);
+check('元素访问节点出现在 flows（map 常量 key 路径）',
+  elem !== undefined && elem.access === 'write' && elem.name.indexOf('data["') >= 0,
+  'elem=' + (elem ? elem.name : 'none'));
+
 console.log('\n===== 字段追溯 e2e: ' + passed + ' passed, ' + failed + ' failed =====');
 await browser.close();
 process.exit(failed ? 1 : 0);

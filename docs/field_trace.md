@@ -406,7 +406,7 @@ codeintel/
 - **集成测试**：integration 套件扩展——init 构建后执行 `query fields` / `trace-backward` / `trace-forward` / `export` 端到端断言（对齐现有 TestCLIFullFlow 模式）。
 - **SQL 查询测试**：单独测试递归 CTE 在 go-sqlite3 上的正确性（深度、去重、环、深度上限）。
 - **性能基准**：入口可达子图模式下的构建时间与 DB 大小记录于 TD.md §12 补充记录。
-- **前端 e2e（playwright）**：`make e2e E2E_REPO=<仓库>`（默认 ../radar）——参数/返回展开、节点配色、字段数据流文本树、定义顺序、所属函数显示、桥边跳转等 21 项断言（e2e/field-trace-e2e.mjs）。
+- **前端 e2e（playwright）**：`make e2e E2E_REPO=<仓库>`（默认 ../radar）——参数/返回展开、节点配色、字段数据流文本树、定义顺序、所属函数显示、桥边跳转等 22 项断言（e2e/field-trace-e2e.mjs）。
 
 ---
 

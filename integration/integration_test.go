@@ -121,6 +121,20 @@ func aliasLocal() {
 	b := a
 	b.Key = "y"
 }
+
+// map/slice 元素场景（Q83）：fillM 写实参容器元素 → useMap 间接写
+type M map[string]int
+
+func fillM(m M) {
+	m["a"] = 1
+}
+
+func useMap() {
+	m := M{}
+	fillM(m)
+	s := make([]int, 3)
+	s[0] = 2
+}
 `)
 	return dir
 }
@@ -296,6 +310,24 @@ func TestCLIFullFlow(t *testing.T) {
 	}
 	if strings.Contains(out, "svc.Cfg.Local") {
 		t.Errorf("run 间接写不应含 Cfg.Local（fillLocal 写内部对象，无别名），output=%q", out)
+	}
+	//    map/slice 元素追踪（Q83）：fillM 直接写元素；useMap 经 fillM 间接写
+	code, out = runCLIOut(t, "query", "fields", "symbol:go:example.com/app/svc:fillM", "--repo", dir)
+	if code != 0 {
+		t.Errorf("query fields fillM exit = %d", code)
+	}
+	if !strings.Contains(out, `svc.M["a"]`) {
+		t.Errorf("fillM direct_write 应含元素路径 svc.M[\"a\"]，output=%q", out)
+	}
+	code, out = runCLIOut(t, "query", "fields", "symbol:go:example.com/app/svc:useMap", "--repo", dir)
+	if code != 0 {
+		t.Errorf("query fields useMap exit = %d", code)
+	}
+	if !strings.Contains(out, `svc.M["a"]`) {
+		t.Errorf("useMap 间接写应含元素路径 svc.M[\"a\"]，output=%q", out)
+	}
+	if !strings.Contains(out, `s[0]`) {
+		t.Errorf("useMap direct_write 应含 slice 元素 s[0]，output=%q", out)
 	}
 	//    aliasLocal 内 b := a 别名同一 alloc → expand 返回 alias 边
 	aliasFacts, _, err := repo.Expand("symbol:go:example.com/app/svc:aliasLocal")
