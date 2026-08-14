@@ -1071,7 +1071,7 @@ func valueTraceFilter(anchorCtx, anchorInst string, reverse bool, tbl string) st
 	return fp + ` = ` + q(anchorCtx) + `
 OR (` + q(anchorCtx) + ` != '' AND (instr(` + q(anchorInst) + `, ` + inst + `) = 1 OR instr(` + inst + `, ` + q(anchorInst) + `) = 1))
 OR json_extract(` + tbl + `.properties, '$.is_external') = 'true'
-OR (d.kind != 'field_access' AND json_extract(` + tbl + `.properties, '$.access_kind') = ` + dirAccess + `)`
+OR (d.kind != 'field_access' AND (` + q(anchorCtx) + ` = '' OR json_extract(` + tbl + `.properties, '$.access_kind') = ` + dirAccess + `))`
 }
 
 func q(s string) string { return "'" + s + "'" }

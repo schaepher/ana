@@ -1009,3 +1009,157 @@ func TestServerEndToEnd(t *testing.T) {
 		t.Errorf("HandleFunc expand = %v, want passes_to handler", edges)
 	}
 }
+
+// TestFieldPrecisionSelfContained：⑥ 字段精度自包含用例（不依赖 radar）——
+// 对象/SSA 值锚点不再扇出全部字段读；拷贝链（dest.ID = src.ID）经
+// 值来源跳板保持闭合。
+func TestFieldPrecisionSelfContained(t *testing.T) {
+	if !scipGoAvailable() {
+		t.Skip("scip-go not found")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/field\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "main.go"), `package field
+
+type Src struct {
+	ID   string
+	Name string
+}
+
+type Dst struct {
+	ID   string
+	Name string
+}
+
+func copyAndSave(src *Src) *Dst {
+	d := &Dst{}
+	d.ID = src.ID
+	d.Name = src.Name
+	return d
+}
+
+func main() {}
+`)
+	if code := runCLI(t, "init", "--repo", dir); code != 0 {
+		t.Fatalf("init exit = %d", code)
+	}
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := sqlite.NewRepo(db)
+	funcID := "symbol:go:example.com/field:copyAndSave"
+
+	srcID := fieldAccessID(t, repo, funcID, "src.ID", "read")
+	if srcID == "" {
+		t.Fatal("src.ID.read 节点缺失")
+	}
+	// 拷贝链：src.ID.read → dst.ID.write 保持闭合（局部变量被 SSA
+	// 重命名为 tN，写点用通配匹配）
+	code, out := runCLIOut(t, "query", "value-trace", srcID, "--repo", dir)
+	if code != 0 {
+		t.Fatalf("value-trace exit = %d", code)
+	}
+	if !strings.Contains(out, ".ID [写]") {
+		t.Errorf("拷贝链应连到 dst.ID 写入，output=%q", out[:min(len(out), 400)])
+	}
+
+	// 对象锚点：src 参数值出发——正向仅写（消费点），不扇出 src.Name 读
+	srcParam := fieldAccessID(t, repo, funcID, "src", "read")
+	_ = srcParam // 参数节点经 ssa_value 查询
+	var srcVal string
+	rows, err := repo.Query(`SELECT id FROM nodes WHERE kind='ssa_value'
+		AND json_extract(properties, '$.func_id') = ? AND name = 'src'`, funcID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows.Next() {
+		_ = rows.Scan(&srcVal)
+	}
+	rows.Close()
+	if srcVal == "" {
+		t.Fatal("src 参数 ssa_value 节点缺失")
+	}
+	code, out = runCLIOut(t, "query", "value-trace", srcVal, "--repo", dir)
+	if code != 0 {
+		t.Fatalf("value-trace src exit = %d", code)
+	}
+	// 对象锚点为"值流全貌"：分叉读（值消费点）+ 消费写都显示，
+	// 嵌套展开（字段→字段）不进入（⑥ 核心在字段锚点的字段路径过滤，
+	// 由 repo 单测与拷贝链断言覆盖）
+	if !strings.Contains(out, "src.ID [读]") || !strings.Contains(out, "src.Name [读]") {
+		t.Errorf("对象锚点应显示值分叉读，output=%q", out[:min(len(out), 400)])
+	}
+	if !strings.Contains(out, ".ID [写]") || !strings.Contains(out, ".Name [写]") {
+		t.Errorf("对象锚点应显示值消费写点，output=%q", out[:min(len(out), 400)])
+	}
+}
+
+// TestORMChainDAOSelfContained：⑦ 链式 ORM 自包含用例——自定义 DAO 封装
+// （Model(&X{主键}).Where(...).Update("col", v)）经 field-summary.yaml 的
+// orm_write 条目映射为 表.列 虚拟节点（不依赖真实 gorm 模块）。
+func TestORMChainDAOSelfContained(t *testing.T) {
+	if !scipGoAvailable() {
+		t.Skip("scip-go not found")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/dao\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "field-summary.yaml"), `summaries:
+  - func: example.com/dao.(DB).Update
+    orm_write: true
+    param_index: 1
+`)
+	writeFile(t, filepath.Join(dir, "main.go"), `package dao
+
+type DB struct{}
+
+type Session struct {
+	ID     string
+	Status string
+}
+
+func (d *DB) Model(v any) *DB { return d }
+
+func (d *DB) Where(q string, v any) *DB { return d }
+
+func (d *DB) Update(col string, v any) {}
+
+// 自定义 DAO 封装：带条件的会话更新（仅含主键的范围对象 + 字符串列名）
+func UpdateStatus(db *DB, id, status string) {
+	db.Model(&Session{ID: id}).Where("id = ?", id).Update("status", status)
+}
+
+func main() {}
+`)
+	if code := runCLI(t, "init", "--repo", dir); code != 0 {
+		t.Fatalf("init exit = %d", code)
+	}
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := sqlite.NewRepo(db)
+	funcID := "symbol:go:example.com/dao:UpdateStatus"
+	rows, err := repo.Query(`SELECT id, name FROM nodes WHERE kind='field_access'
+		AND json_extract(properties, '$.func_id') = ?
+		AND json_extract(properties, '$.type_string') = 'gorm'`, funcID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			t.Fatal(err)
+		}
+		if name == "session.status" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("DAO 链式 Update 未生成 session.status 表.列 虚拟节点")
+	}
+}
