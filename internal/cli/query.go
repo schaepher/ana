@@ -657,13 +657,10 @@ func querySummary(acts *action.Actions, input string, opts outputOpts, format st
 	logger := zap.L()
 	logger.Debug("enter querySummary")
 	defer logger.Debug("exit querySummary")
-	// 锚点：节点 ID 直连，否则按字段路径查第一个匹配读节点
-	var anchor domain.CanonicalID
-	if strings.HasPrefix(input, "symbol:") || strings.HasPrefix(input, "file:") || strings.HasPrefix(input, "commit:") {
-		anchor = domain.CanonicalID(input)
-	} else if n, err := acts.ResolveSymbol(input); err == nil {
-		anchor = n.ID
-	} else {
+	// 锚点：节点 ID 直连、符号名称解析、类型限定字段路径回退到
+	// 同字段读节点（③：字段路径不再误报"不存在的符号"）
+	anchor, err := acts.ResolveAnchor(input)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}

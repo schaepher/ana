@@ -83,6 +83,93 @@ func joinIDs(nodes []*domain.CodeEntity) string {
 	return strings.Join(ids, "\n  ")
 }
 
+// ResolveAnchor 解析摘要/生命周期锚点（③⑤）：canonical ID 直连、符号
+// 名称解析，类型限定字段路径（example.com/m.T.A）回退到同字段读节点
+// （FindFieldReads 首个）——此前字段路径被误报"不存在的符号"。
+func (a *Actions) ResolveAnchor(input string) (domain.CanonicalID, error) {
+	if strings.HasPrefix(input, "symbol:") || strings.HasPrefix(input, "file:") || strings.HasPrefix(input, "commit:") {
+		if _, err := a.repo.GetSymbol(domain.CanonicalID(input)); err == nil {
+			return domain.CanonicalID(input), nil
+		}
+	}
+	if n, err := a.ResolveSymbol(input); err == nil {
+		return n.ID, nil
+	}
+	if reads, err := a.repo.FindFieldReads(input); err == nil && len(reads) > 0 {
+		return reads[0].ID, nil
+	}
+	return "", fmt.Errorf("符号或字段路径 %q 不存在", input)
+}
+
+// 写锚点跳板限界（④ 超时防护）：读节点数上限 + 子追溯深度——避免
+// 同字段大量读节点各自跑一遍深度 8 双向全链。
+const (
+	trampolineMaxReads = 8
+	trampolineDepth    = 4
+)
+
+// downstreamTrampoline 写锚点下游跳板（③⑤）：写节点无出边——经同
+// full_path 读节点接入使用链（读节点行 + dir=1 子链行）；非写锚点返回 nil。
+func (a *Actions) downstreamTrampoline(anchor domain.CanonicalID) ([]*domain.TraceRow, error) {
+	n, err := a.repo.GetSymbol(anchor)
+	if err != nil || n.Kind != domain.KindFieldAccess || n.Property("access_kind") != "write" {
+		return nil, nil
+	}
+	fullPath := n.Property("full_path")
+	if fullPath == "" {
+		return nil, nil
+	}
+	reads, err := a.repo.FindFieldReads(fullPath)
+	if err != nil {
+		return nil, nil
+	}
+	var out []*domain.TraceRow
+	for i, rn := range reads {
+		if i >= trampolineMaxReads {
+			break
+		}
+		if rn.ID == anchor {
+			continue // 同节点跳过
+		}
+		// 读节点本身（⑤：生命周期图展示读取点）
+		out = append(out, &domain.TraceRow{
+			ID: rn.ID, Name: rn.Name, Kind: rn.Kind, Access: "read",
+			Line: rn.LineStart, Dir: 1,
+			FuncID: rn.Property("func_id"),
+		})
+		sub, err := a.repo.GetValueTrace(rn.ID, trampolineDepth)
+		if err != nil {
+			continue
+		}
+		out = append(out, pickSub(1, sub)...)
+	}
+	return out, nil
+}
+
+// Lifecycle 生命周期图行（⑤）：value-trace 全链 + 写锚点的下游跳板
+// （同字段读节点的使用链），行按 ID 去重（首个保留）。供
+// export graph --type lifecycle 与前端展示使用。
+func (a *Actions) Lifecycle(id domain.CanonicalID) ([]*domain.TraceRow, error) {
+	rows, err := a.repo.GetValueTrace(id, 8)
+	if err != nil {
+		return nil, err
+	}
+	extra, err := a.downstreamTrampoline(id)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[domain.CanonicalID]bool{}
+	out := make([]*domain.TraceRow, 0, len(rows)+len(extra))
+	for _, r := range append(rows, extra...) {
+		if seen[r.ID] {
+			continue
+		}
+		seen[r.ID] = true
+		out = append(out, r)
+	}
+	return out, nil
+}
+
 // Symbol 按 canonical ID 查询符号（HTTP expand 的存在性检查用）。
 func (a *Actions) Symbol(id domain.CanonicalID) (*domain.CodeEntity, error) {
 	return a.repo.GetSymbol(id)
@@ -305,22 +392,10 @@ func (a *Actions) SummaryChain(anchor domain.CanonicalID) ([]SummaryStep, error)
 	consumers := pick(1) // depth 递增：锚点 → ... → 消费
 
 	// 写锚点：下游经同字段读节点跳板（③）——读节点的使用链并入
+	// （限界：最多 8 个读节点 × 深度 4，④ 超时防护）
 	if len(consumers) <= 1 {
-		if n, err := a.repo.GetSymbol(anchor); err == nil && n.Kind == domain.KindFieldAccess &&
-			n.Property("access_kind") == "write" {
-			fullPath := n.Property("full_path")
-			if fullPath != "" {
-				if reads, rerr := a.repo.FindFieldReads(fullPath); rerr == nil {
-					for _, rn := range reads {
-						if rn.ID == anchor {
-							continue // 同节点跳过
-						}
-						if sub, serr := a.repo.GetValueTrace(rn.ID, 8); serr == nil {
-							consumers = append(consumers, pickSub(1, sub)...)
-						}
-					}
-				}
-			}
+		if extra, err := a.downstreamTrampoline(anchor); err == nil {
+			consumers = append(consumers, extra...)
 		}
 	}
 
@@ -359,7 +434,23 @@ func (a *Actions) SummaryChain(anchor domain.CanonicalID) ([]SummaryStep, error)
 			Kind: kind, Name: r.Name, File: fp, Line: r.Line, Func: shortFuncNameX(r.FuncID),
 		})
 	}
-	return steps, nil
+	// 步骤去重（④）：多读节点共享同一下游时，同 Name/File/Line/Func
+	// （同一节点）只保留一个——避免 N×跳板的重复噪音。同一节点出现
+	// consume/write 与 compute 双分类时，保留语义更强的 consume/write。
+	idx := map[string]int{}
+	dedup := make([]SummaryStep, 0, len(steps))
+	for _, st := range steps {
+		k := st.Name + "|" + st.File + "|" + fmt.Sprint(st.Line) + "|" + st.Func
+		if i, ok := idx[k]; ok {
+			if (st.Kind == "consume" || st.Kind == "write") && dedup[i].Kind == "compute" {
+				dedup[i] = st
+			}
+			continue
+		}
+		idx[k] = len(dedup)
+		dedup = append(dedup, st)
+	}
+	return dedup, nil
 }
 
 // pickSub 从子追溯结果按 depth 分层取首个（dir 指定）。

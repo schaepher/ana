@@ -412,6 +412,24 @@ func TestQuerySummary(t *testing.T) {
 	}
 }
 
+// TestQuerySummaryFieldPath：③ 回归——类型限定字段路径（非符号）作为
+// 锚点输入可解析（此前被识别为"不存在的符号"）。
+func TestQuerySummaryFieldPath(t *testing.T) {
+	dir := seedFieldTrace(t)
+	out := captureStdout(func() {
+		if code := cmdQuery([]string{"summary", "example.com/m.T.A", "--repo", dir}); code != 0 {
+			t.Errorf("query summary 字段路径 exit = %d", code)
+		}
+	})
+	if !strings.Contains(out, "生命周期") {
+		t.Errorf("字段路径摘要应输出生命周期链:\n%s", out)
+	}
+	// 未知字段路径 → 报错（非 0）
+	if code := cmdQuery([]string{"summary", "example.com/m.Nope.X", "--repo", dir}); code == 0 {
+		t.Error("未知字段路径应失败")
+	}
+}
+
 // TestVersionNoOTLNoise：④ 回归——version 命令 stdout 不含 OTel JSON。
 func TestVersionNoOTLNoise(t *testing.T) {
 	out := captureStdout(func() {

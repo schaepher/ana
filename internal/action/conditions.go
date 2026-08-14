@@ -32,7 +32,9 @@ func ExtractCondition(filePath string, line int) string {
 	ast.Inspect(f, func(n ast.Node) bool {
 		switch st := n.(type) {
 		case *ast.IfStmt:
-			if st.Cond != nil && nodeContainsLine(fset, st, line) {
+			// 行须落在 if 体（Body）内：else 分支行的条件是否定，标注
+			// if 条件文本会误导；else-if 链的内层 if 自会匹配其体。
+			if st.Cond != nil && nodeContainsLine(fset, st, line) && bodyContainsLine(fset, st.Body, line) {
 				cond = exprText(fset, st.Cond)
 			}
 		case *ast.TypeSwitchStmt:
@@ -53,6 +55,17 @@ func ExtractCondition(filePath string, line int) string {
 		return true
 	})
 	return cond
+}
+
+// bodyContainsLine 判断行是否落在块内（不含闭合大括号行：`}` 行不属于
+// 分支体，Rbrace 为块结束位置）。
+func bodyContainsLine(fset *token.FileSet, b *ast.BlockStmt, line int) bool {
+	if b == nil || b.Pos() == token.NoPos || b.Rbrace == token.NoPos {
+		return false
+	}
+	start := fset.Position(b.Pos()).Line
+	end := fset.Position(b.Rbrace).Line
+	return line >= start && line < end
 }
 
 // nodeContainsLine 判断节点位置区间（起止行）是否包含目标行。

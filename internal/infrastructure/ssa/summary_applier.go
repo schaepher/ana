@@ -50,6 +50,7 @@ type userSummaryFile struct {
 		Reads      []string `yaml:"reads"`
 		Writes     []string `yaml:"writes"`
 		ParamIndex int      `yaml:"param_index"`
+		ORMWrite   bool     `yaml:"orm_write"` // ②：对象实参 → 表.列 映射（同内置 GORM 摘要）
 	} `yaml:"summaries"`
 }
 
@@ -91,6 +92,7 @@ func loadSummaries(repoPath string) (map[string]summarySpec, []string) {
 			Reads:      s.Reads,
 			Writes:     s.Writes,
 			ParamIndex: s.ParamIndex,
+			ORMWrite:   s.ORMWrite,
 		}
 	}
 	return specs, warnings
@@ -628,6 +630,9 @@ func parseSQLStmt(sql string) (table string, cols []string) {
 // applyORMWrite 处理 ORM 写调用（②：GORM Create/Save/Updates/Delete/Update）：
 // 实参对象类型 → 表名（snake_case）+ 字段 → 列名 → 虚拟节点 表.列 +
 // summary_io 边（字段值 → 虚拟节点）。
+// 字段值不可定位时（变量/调用结果/空字面量实参——调用点无字段级 Store，
+// 如 Create(row)、Delete(&SQLiteKnowledgeGraph{})）不跳过该列：仍按类型
+// 展开生成 表.列 虚拟节点，连对象值兜底（② 修复：此前整列缺失）。
 func (ext *fieldExtractor) applyORMWrite(cc *ssa.CallCommon, calleeID domain.CanonicalID) error {
 	logger := zap.L()
 	logger.Debug("enter (fieldExtractor).applyORMWrite")
@@ -651,6 +656,11 @@ func (ext *fieldExtractor) applyORMWrite(cc *ssa.CallCommon, calleeID domain.Can
 	}
 	table := snakeCase(named.Obj().Name())
 	line := ext.prog.Fset.PositionFor(cc.Pos(), false).Line
+	// 对象值节点（兜底连边用；emitValue 幂等去重）
+	objID, err := ext.emitValue(realArg)
+	if err != nil {
+		return err
+	}
 	for i := 0; i < st.NumFields(); i++ {
 		field := st.Field(i)
 		if !field.Exported() {
@@ -658,14 +668,15 @@ func (ext *fieldExtractor) applyORMWrite(cc *ssa.CallCommon, calleeID domain.Can
 		}
 		col := snakeCase(field.Name())
 		name := table + "." + col
-		// 字段值 → 虚拟节点（summary_io）
+		// 字段值 → 虚拟节点（summary_io）；字段值不可定位时连对象值
 		fieldVal := fieldValueOf(realArg, i)
-		if fieldVal == nil {
-			continue
-		}
-		argID, err := ext.emitValue(fieldVal)
-		if err != nil || argID == "" {
-			continue
+		srcID := ""
+		if fieldVal != nil {
+			if id, err := ext.emitValue(fieldVal); err == nil {
+				srcID = string(id)
+			}
+		} else if objID != "" {
+			srcID = string(objID)
 		}
 		id := domain.CanonicalID(string(ext.funcID) + "#ext.gorm." + name + ".write@" + fmt.Sprintf("%d", line))
 		if err := ext.emit(domain.Item{Node: &domain.CodeEntity{
@@ -685,8 +696,10 @@ func (ext *fieldExtractor) applyORMWrite(cc *ssa.CallCommon, calleeID domain.Can
 		}}); err != nil {
 			return err
 		}
-		if err := ext.emitEdgeKind(argID, id, domain.FactSummaryIO); err != nil {
-			return err
+		if srcID != "" {
+			if err := ext.emitEdgeKind(domain.CanonicalID(srcID), id, domain.FactSummaryIO); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -732,27 +745,54 @@ func derefType(t types.Type) types.Type {
 	return t
 }
 
-// snakeCase 类型/字段名 → 表/列名（UserProfile → user_profile，
-// HTTPServer → http_server，APIKey → api_key，ID → id）。
-// 词边界：大写前插下划线（前一字符小写，或后一字符小写时——连续大写
-// 视为一个词，仅最后一个大写前插）。
+// commonInitialisms 常见缩写表（golang/lint 同款，GORM 默认命名用）——
+// 先 Title 化再转小写，保证 SessionID → session_id、SourceURL → source_url。
+var commonInitialisms = []string{"API", "ASCII", "CPU", "CSS", "DNS", "EOF", "GUID", "HTML", "HTTP", "HTTPS", "ID", "IP", "JSON", "LHS", "QPS", "RAM", "RHS", "RPC", "SLA", "SMTP", "SSH", "TLS", "TTL", "UID", "UI", "UUID", "URI", "URL", "UTF8", "VM", "XML", "XSRF", "XSS"}
+
+// snakeCase 类型/字段名 → 表/列名，与 GORM 默认命名完全一致（移植
+// gorm NamingStrategy.toDBName：常见缩写 Title 化 + 大小写扫描——连续
+// 大写不拆，转小写前插线）。UserProfile → user_profile、SessionID →
+// session_id、SourceURL → source_url、APIKey → apikey、
+// SQLiteKnowledgeGraph → sq_lite_knowledge_graph（SQL 不在缩写表，
+// 与 GORM 默认一致；radar 用 TableName() 定制表名时无法静态推导）。
 func snakeCase(s string) string {
+	value := s
+	for _, in := range commonInitialisms {
+		value = strings.ReplaceAll(value, in, in[:1]+strings.ToLower(in[1:]))
+	}
+	if value == "" {
+		return ""
+	}
 	var sb strings.Builder
-	runes := []rune(s)
-	for i, r := range runes {
-		if r >= 'A' && r <= 'Z' {
-			if i > 0 && (isLowerRune(runes[i-1]) ||
-				(i+1 < len(runes) && isLowerRune(runes[i+1]))) {
-				sb.WriteByte('_')
+	lastCase := false
+	curCase := value[0] >= 'A' && value[0] <= 'Z'
+	for i := 0; i < len(value)-1; i++ {
+		v := value[i]
+		nextCase := value[i+1] >= 'A' && value[i+1] <= 'Z'
+		nextNumber := value[i+1] >= '0' && value[i+1] <= '9'
+		if curCase {
+			if lastCase && (nextCase || nextNumber) {
+				// 连续大写（缩写中间）：不插线
+				sb.WriteByte(v + ('a' - 'A'))
+			} else {
+				if i > 0 && value[i-1] != '_' && value[i+1] != '_' {
+					sb.WriteByte('_')
+				}
+				sb.WriteByte(v + ('a' - 'A'))
 			}
-			sb.WriteRune(r + ('a' - 'A'))
 		} else {
-			sb.WriteRune(r)
+			sb.WriteByte(v)
 		}
+		lastCase = curCase
+		curCase = nextCase
+	}
+	if curCase {
+		if !lastCase && len(value) > 1 {
+			sb.WriteByte('_')
+		}
+		sb.WriteByte(value[len(value)-1] + ('a' - 'A'))
+	} else {
+		sb.WriteByte(value[len(value)-1])
 	}
 	return sb.String()
-}
-
-func isLowerRune(r rune) bool {
-	return r >= 'a' && r <= 'z'
 }

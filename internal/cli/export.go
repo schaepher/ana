@@ -165,15 +165,21 @@ func cmdExportGraph(args []string) int {
 	acts := action.New(sqlite.NewRepo(db))
 
 	var output string
+	anchor := domain.CanonicalID(target)
 	switch {
 	case graphType == "callees":
-		output, err = renderCalleesDot(acts, domain.CanonicalID(target))
+		output, err = renderCalleesDot(acts, anchor)
 	case graphType == "lifecycle":
-		output, err = renderLifecycleMermaid(acts, domain.CanonicalID(target))
+		// ⑤：字段路径输入解析为锚点（此前传字段路径 → 无行 → 空图）
+		if anchor, err = acts.ResolveAnchor(target); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 1
+		}
+		output, err = renderLifecycleMermaid(acts, anchor)
 	case format == "mermaid":
-		output, err = renderValueTraceMermaid(acts, domain.CanonicalID(target))
+		output, err = renderValueTraceMermaid(acts, anchor)
 	default:
-		output, err = renderValueTraceDot(acts, domain.CanonicalID(target))
+		output, err = renderValueTraceDot(acts, anchor)
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -269,11 +275,11 @@ func renderValueTraceDot(acts *action.Actions, id domain.CanonicalID) (string, e
 	return sb.String(), nil
 }
 
-// renderLifecycleMermaid 端到端生命周期图（Q99）：value-trace 全链聚合，
-// 节点类型标注（来源/读写/存储/观测）+ 路径条件（Q92），mermaid flowchart
-// 输出。复用 TraceConditions（查询期条件标注）。
+// renderLifecycleMermaid 端到端生命周期图（Q99）：value-trace 全链聚合
+// （含写锚点的下游跳板，⑤），节点类型标注（来源/读写/存储/观测）+
+// 路径条件（Q92），mermaid flowchart 输出。复用 TraceConditions。
 func renderLifecycleMermaid(acts *action.Actions, id domain.CanonicalID) (string, error) {
-	rows, err := acts.ValueTrace(id, 8)
+	rows, err := acts.Lifecycle(id)
 	if err != nil {
 		return "", err
 	}

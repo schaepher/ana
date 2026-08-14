@@ -107,10 +107,18 @@ func (ext *fieldExtractor) emitCall(cc *ssa.CallCommon, callVal ssa.Value) error
 	if callee == nil {
 		return nil // 动态调用（接口/函数值）：无法解析被调方
 	}
-	if !isModuleFunction(callee, ext.repo.Module) {
-		// 外部函数：应用摘要（§7.5 虚拟节点机制）
-		_, err := ext.applySummary(cc, callee)
+	// 摘要优先：外部函数走内置/用户摘要；本地函数经 field-summary.yaml
+	// 自定义条目（如 orm_write 的本地 ORM 层）。无匹配 spec 时 applySummary
+	// 快速返回 false，本地函数继续走 argument/returns 边。
+	handled, err := ext.applySummary(cc, callee)
+	if err != nil {
 		return err
+	}
+	if handled {
+		return nil
+	}
+	if !isModuleFunction(callee, ext.repo.Module) {
+		return nil // 外部函数无摘要：不产调用边
 	}
 	calleeID, ok := ext.funcIDOf(callee)
 	if !ok {

@@ -856,8 +856,8 @@ func (r *Repo) trace(field string, funcID domain.CanonicalID, maxDepth int, forw
 )
 SELECT id, depth, name, edge_kinds, line FROM def_trace ORDER BY depth, id`
 	} else {
-		query = `WITH RECURSIVE fwd_trace(id, depth, name, edge_kinds, line, is_usage) AS (
-    SELECT n.id, 0, n.name, '', n.line_start, 1
+		query = `WITH RECURSIVE fwd_trace(id, depth, name, edge_kinds, line, is_usage, kind) AS (
+    SELECT n.id, 0, n.name, '', n.line_start, 1, n.kind
     FROM nodes n
     WHERE n.kind = 'field_access'
       AND json_extract(n.properties, '$.full_path') = ?
@@ -865,7 +865,7 @@ SELECT id, depth, name, edge_kinds, line FROM def_trace ORDER BY depth, id`
     UNION
     -- 起点：函数参数（调用方经 argument 进入 callee 对该字段的实际写入，
     -- 问题①：调用方函数内无该字段直接访问时仍能正向追踪）
-    SELECT n.id, 0, n.name, '', n.line_start, 0
+    SELECT n.id, 0, n.name, '', n.line_start, 0, n.kind
     FROM nodes n
     WHERE n.kind = 'ssa_value'
       AND json_extract(n.properties, '$.func_id') = ?
@@ -875,14 +875,19 @@ SELECT id, depth, name, edge_kinds, line FROM def_trace ORDER BY depth, id`
            CASE WHEN d.edge_kinds = '' THEN e.kind
                  ELSE d.edge_kinds || ',' || e.kind END, n_next.line_start,
            CASE WHEN n_next.kind = 'field_access'
-                     AND json_extract(n_next.properties, '$.full_path') = ? THEN 1 ELSE 0 END
+                     AND json_extract(n_next.properties, '$.full_path') = ? THEN 1 ELSE 0 END,
+           n_next.kind
     FROM edges e
     JOIN fwd_trace d ON e.source_id = d.id
     JOIN nodes n_next ON e.target_id = n_next.id
     WHERE e.kind IN ('data_flows_to','argument','returns','phi_operand','alias')
-      -- 数据流步不限字段；字段访问步须匹配目标字段（避免参数全部使用入链）
+      -- 字段访问步：目标字段任意读写放行；参数/值 → 其他字段读 放行
+      -- （① 跳板入口：dest.Field = src.Field 拷贝链经中间读连到目标写入）；
+      -- 字段访问 → 字段访问 仅限目标字段（切断嵌套展开与参数全部
+      -- 字段入链的指数噪音，④ 超时防护）
       AND (n_next.kind != 'field_access'
-           OR json_extract(n_next.properties, '$.full_path') = ?)
+           OR json_extract(n_next.properties, '$.full_path') = ?
+           OR (d.kind != 'field_access' AND json_extract(n_next.properties, '$.access_kind') = 'read'))
       AND d.depth < ?
 )
 SELECT id, depth, name, edge_kinds, line, is_usage FROM fwd_trace ORDER BY depth, id`

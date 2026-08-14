@@ -877,3 +877,71 @@ func TestTraceForwardParamStart(t *testing.T) {
 		t.Errorf("TraceForward 应从 run 参数经 argument 进入 callee 的 c.Key 写入: %+v", rows)
 	}
 }
+
+// TestTraceForwardIntermediateReads：① 跨函数闭环——目标字段的写入经
+// "其他字段的读"（如 dest.Field = src.Field 的 struct 拷贝）为中间跳板时，
+// 前向追踪须穿过中间读，连到目标字段的写入；其他字段的写入仍被过滤
+// （避免参数全部使用入链的噪音）。
+func TestTraceForwardIntermediateReads(t *testing.T) {
+	r := newTestRepo(t)
+	runID := "symbol:go:example.com/m:run"
+	fillID := "symbol:go:example.com/m:fill"
+	nodes := []*domain.CodeEntity{
+		{ID: domain.CanonicalID(runID), Kind: domain.KindFunction, Name: "run"},
+		{ID: domain.CanonicalID(fillID), Kind: domain.KindFunction, Name: "fill"},
+		{ID: domain.CanonicalID(runID + "#c"), Kind: domain.KindSSAValue, Name: "c",
+			Properties: map[string]any{"func_id": runID, "origin_kind": "param"}},
+		{ID: domain.CanonicalID(fillID + "#c"), Kind: domain.KindSSAValue, Name: "c",
+			Properties: map[string]any{"func_id": fillID, "origin_kind": "param"}},
+		// 中间跳板：c.Src.Key 读（其他字段，dest.Key = src.Key 的拷贝路径）
+		{ID: domain.CanonicalID(fillID + "#c.Src.Key.read@8"), Kind: domain.KindFieldAccess, Name: "c.Src.Key",
+			Properties: map[string]any{"func_id": fillID, "full_path": "example.com/m.Src.Key",
+				"access_kind": "read"}},
+		// 目标字段写入
+		{ID: domain.CanonicalID(fillID + "#c.Dst.Key.write@9"), Kind: domain.KindFieldAccess, Name: "c.Dst.Key",
+			Properties: map[string]any{"func_id": fillID, "full_path": "example.com/m.Dst.Key",
+				"access_kind": "write"}},
+		// 其他字段的写入（应被过滤）
+		{ID: domain.CanonicalID(fillID + "#c.Dst.Title.write@10"), Kind: domain.KindFieldAccess, Name: "c.Dst.Title",
+			Properties: map[string]any{"func_id": fillID, "full_path": "example.com/m.Dst.Title",
+				"access_kind": "write"}},
+	}
+	edges := []*domain.Fact{
+		{SourceID: domain.CanonicalID(runID + "#c"), TargetID: domain.CanonicalID(fillID + "#c"),
+			Kind: domain.FactArgument, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: domain.CanonicalID(fillID + "#c"), TargetID: domain.CanonicalID(fillID + "#c.Src.Key.read@8"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: domain.CanonicalID(fillID + "#c.Src.Key.read@8"), TargetID: domain.CanonicalID(fillID + "#c.Dst.Key.write@9"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+		// 其他字段的写入链（噪音候选）
+		{SourceID: domain.CanonicalID(fillID + "#c"), TargetID: domain.CanonicalID(fillID + "#c.Dst.Title.write@10"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+	}
+	save(t, r, nodes, edges)
+
+	rows, err := r.TraceForward("example.com/m.Dst.Key", domain.CanonicalID(runID), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hasWrite, hasHop bool
+	for _, row := range rows {
+		if string(row.ID) == fillID+"#c.Dst.Key.write@9" {
+			hasWrite = true
+		}
+		if string(row.ID) == fillID+"#c.Src.Key.read@8" {
+			hasHop = true
+			if row.IsUsage {
+				t.Error("中间读节点不应标记为使用点")
+			}
+		}
+		if string(row.ID) == fillID+"#c.Dst.Title.write@10" {
+			t.Errorf("其他字段的写入不应入链: %s", row.ID)
+		}
+	}
+	if !hasWrite {
+		t.Errorf("TraceForward 未连到目标字段写入（中间读被拦）: %+v", rows)
+	}
+	if !hasHop {
+		t.Errorf("TraceForward 应含中间读跳板节点: %+v", rows)
+	}
+}
