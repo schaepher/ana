@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/schaepher/codeintel/internal/action"
 	"github.com/schaepher/codeintel/internal/domain"
@@ -24,6 +25,19 @@ type Server struct {
 	acts *action.Actions
 	web  fs.FS // 前端静态资源
 	root string // 仓库根目录（/api/source 读源码用）
+
+	// 增量构建（field_trace.md §20.1）：POST /incremental 异步触发；
+	// buildFn 由 cli serve 组装（orchestrator.IncrementalBuild）
+	buildFn  func() (string, error)
+	buildMu  sync.Mutex
+	building bool
+}
+
+// SetBuildFunc 配置增量构建函数（未配置时 /incremental 返回 404）。
+func (s *Server) SetBuildFunc(fn func() (string, error)) {
+	s.buildMu.Lock()
+	defer s.buildMu.Unlock()
+	s.buildFn = fn
 }
 
 // New 创建 Server。
@@ -46,6 +60,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/flows", s.handleFlows)
 	mux.HandleFunc("/api/value-trace", s.handleValueTrace)
 	mux.HandleFunc("/api/source", s.handleSource)
+	mux.HandleFunc("/incremental", s.handleIncremental)
 	mux.Handle("/", http.FileServer(http.FS(s.web)))
 	return mux
 }
@@ -100,6 +115,47 @@ type EdgeJSON struct {
 	Kind      string `json:"kind"`
 	Direction string `json:"direction"`
 	Line      int    `json:"line,omitempty"`
+}
+
+// handleIncremental 增量构建自动触发（field_trace.md §20.1）：
+// POST /incremental（无负载，serve 已绑定 repo）→ 202 + 异步执行；
+// 执行中再请求 → 409（单写者）；未配置 buildFn → 404（提示先 init）。
+func (s *Server) handleIncremental(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErr(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+	s.buildMu.Lock()
+	if s.buildFn == nil {
+		s.buildMu.Unlock()
+		writeErr(w, http.StatusNotFound, "serve 未配置增量构建（先 codeintel init 构建索引）")
+		return
+	}
+	if s.building {
+		s.buildMu.Unlock()
+		writeErr(w, http.StatusConflict, "增量构建进行中")
+		return
+	}
+	s.building = true
+	s.buildMu.Unlock()
+	buildFn := s.buildFn
+	go func() {
+		defer func() {
+			s.buildMu.Lock()
+			s.building = false
+			s.buildMu.Unlock()
+		}()
+		buildID, err := buildFn()
+		logger := logging.FromContext(s.ctx)
+		if err != nil {
+			logger.Error("增量构建失败", zap.String("build_id", buildID), zap.Error(err))
+			return
+		}
+		logger.Info("增量构建完成", zap.String("build_id", buildID))
+	}()
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]any{"status": "accepted"})
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

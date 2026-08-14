@@ -952,3 +952,36 @@ grpc.Invoke(ctx, target, "/example.com.pb.Greeter/SayHello", ...) // 旧版顶�
 - **入口可达子图优化降为最低优先级**：构建性能优化待性能基准
   （benchmarks/）数据支撑后再评估；`query unused`（§16）已提供死代码
   量化手段，可作为是否值得裁剪的预判依据
+
+---
+
+## 20. 增量自动触发与性能基准（Q136–Q137，2026-08-15）
+
+### 20.1 增量构建自动触发（Q136）
+
+CLI `update`（全量分析+增量写入）已有；补**自动触发闭环**（TD.md
+§5.2/6.2 降级项推进）：
+
+- `serve` 新增 `POST /incremental`：无负载（serve 已绑定 repo）→
+  **202 Accepted** + 异步执行 IncrementalBuild（goroutine，变更检测
+  复用 `update` 的 git 逻辑）；执行中再请求返回 409（busy）——
+  单写者（SQLite）
+- 构建结果：写 build_metadata（tool_name=incremental，已有 Save）+
+  日志文件（.codeintel/codeintel.log）；不中断 serve
+- **Git hook**：`scripts/install-git-hook.sh` 安装 **post-commit**
+  hook（本地开发写完即更新索引——post-receive 是推送语义，本地
+  主场景 post-commit 更实用）——`curl -s -X POST
+  http://localhost:<addr>/incremental` 触发；serve 需先启动
+- 索引未构建时（serve 启动校验）不响应 /incremental（404 提示先 init）
+
+### 20.2 性能基准 benchmarks/（Q137）
+
+- `benchmarks/bench_test.go`：对指定仓库（`-bench-repo`，默认 radar）
+  跑**进程内** orchestrator.FullBuild，记录：
+  - 各适配器耗时（AdapterResult.Duration）+ 总耗时
+  - 峰值内存（runtime.MemStats，构建前/后采样）
+  - DB 大小（.codeintel/codeintel.db 字节）
+- 输出：表格 + `-bench-json` 结构化（供入口可达优化等后续决策的
+  基线数据）
+- 与验证矩阵分离（`make bench`）；构建目标仓库索引为副作用
+  （允许——基准即重建）

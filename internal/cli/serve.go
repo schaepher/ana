@@ -15,6 +15,7 @@ import (
 	"github.com/schaepher/codeintel/internal/domain"
 	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
 	"github.com/schaepher/codeintel/internal/logging"
+	"github.com/schaepher/codeintel/internal/orchestrator"
 	"github.com/schaepher/codeintel/internal/server"
 	"go.uber.org/zap"
 )
@@ -69,14 +70,33 @@ func cmdServe(ctx context.Context, args []string) int {
 		return 1
 	}
 
-	srv := &http.Server{
+	srv := server.New(ctx, acts, webFS, abs)
+	// 增量构建自动触发（field_trace.md §20.1）：POST /incremental →
+	// 变更检测（复用 update 的 git 逻辑）+ IncrementalBuild 异步执行
+	orch := orchestrator.New(&domain.Repository{Path: abs, Module: ""}, db)
+	srv.SetBuildFunc(func() (string, error) {
+		changed, err := detectChangedGoFiles(abs)
+		if err != nil {
+			return "", err
+		}
+		if len(changed) == 0 {
+			return "", fmt.Errorf("无变更的 Go 文件")
+		}
+		res, err := orch.IncrementalBuild(ctx, changed)
+		if err != nil {
+			return "", err
+		}
+		return res.Status, nil
+	})
+	httpSrv := &http.Server{
 		Addr:              *addr,
-		Handler:           server.New(ctx, acts, webFS, abs).Handler(),
+		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	fmt.Printf("codeintel serve 已启动: http://localhost%s  （仓库: %s）\n", *addr, abs)
 	fmt.Println("提示: 浏览器打开后展示顶层入口（main / HTTP / gRPC 服务），点击节点展开依赖。Ctrl+C 退出。")
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	fmt.Println("增量构建: POST /incremental 自动更新索引（可用 scripts/install-git-hook.sh 装 post-commit hook）")
+	if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fmt.Fprintf(os.Stderr, "serve error: %v\n", err)
 		return 1
 	}

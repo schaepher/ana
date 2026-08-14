@@ -26,6 +26,10 @@ test:
 it:
 	go test -count=1 -tags integration ./integration/
 
+## bench: 性能基准（构建时间/内存/DB 大小；默认 radar，-bench-repo 指定仓库）
+bench:
+	go test -count=1 ./benchmarks/ -bench-repo "$(BENCH_REPO)" $(BENCH_FLAGS)
+
 ## e2e: 前端回归（playwright）。serve 指定仓库（E2E_REPO，默认 ../radar，
 ##      须已构建索引）后运行 e2e/field-trace-e2e.mjs 全量断言。
 e2e:

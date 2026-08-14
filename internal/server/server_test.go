@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/schaepher/codeintel/internal/domain"
 	"github.com/schaepher/codeintel/internal/action"
@@ -412,4 +413,81 @@ func Greet(s *T) {
 		}
 	}
 	t.Errorf("value-trace 输出缺写节点: %v", body)
+}
+
+// TestHandleIncremental：POST /incremental（field_trace.md §20.1）——
+// 未配置 buildFn → 404；配置后 → 202 + 异步执行；执行中 → 409。
+func TestHandleIncremental(t *testing.T) {
+	dir := t.TempDir()
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	r := sqlite.NewRepo(db)
+	web := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("x")}}
+	srv := New(context.Background(), action.New(r), web, dir)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	// 1. 未配置 buildFn → 404
+	resp, err := http.Post(ts.URL+"/incremental", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("未配置 buildFn 应 404，got %d", resp.StatusCode)
+	}
+
+	// 2. 配置后 → 202 + buildFn 异步执行
+	executed := make(chan string, 1)
+	srv.SetBuildFunc(func() (string, error) {
+		executed <- "ok"
+		return "build-1", nil
+	})
+	resp, err = http.Post(ts.URL+"/incremental", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Errorf("应 202，got %d", resp.StatusCode)
+	}
+	select {
+	case <-executed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("buildFn 未异步执行")
+	}
+
+	// 3. 执行中 → 409
+	block := make(chan struct{})
+	srv.SetBuildFunc(func() (string, error) { <-block; return "", nil })
+	// 触发第一个请求（进入 building 状态）
+	go func() {
+		http.Post(ts.URL+"/incremental", "application/json", nil)
+	}()
+	// 等待 building 置位
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		srv.buildMu.Lock()
+		b := srv.building
+		srv.buildMu.Unlock()
+		if b {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("building 未置位")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	resp, err = http.Post(ts.URL+"/incremental", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Errorf("执行中应 409，got %d", resp.StatusCode)
+	}
+	close(block)
 }
