@@ -1029,3 +1029,35 @@ CLI `update`（全量分析+增量写入）已有；补**自动触发闭环**（
   标 `[外部服务]`（与 gRPC 对称）
 - **module-calls 扩展**：查询合并 grpc_call + http_call，输出带
   transport 字段（grpc / http）
+
+---
+
+## 21. P2：跨函数客户端、ServiceDesc、模块图前端（Q144–Q147，2026-08-15）
+
+**包级循环依赖检测不做**（Q147：其他工具职责，如 go list 自带）
+
+### 21.1 跨函数 gRPC 客户端传递（Q144）
+
+一期（§18.2）grpcClients 为函数内局部 map——`handle(c)` 内 `c.Method()`
+不归属。扩展为**形参类型识别**（比值流简单可靠）：
+- 函数形参类型是模块内 pb 包的 `XxxClient` 接口（类型名匹配
+  `New<Xxx>Client` 同款服务名提取）→ 函数内该形参名记入
+  grpcClients（服务 Xxx）→ 函数内 `c.Method()` 归属服务
+- 实参侧（NewXxxClient 返回值）已有一期覆盖；两条路径合并
+
+### 21.2 ServiceDesc 动态注册（Q145）
+
+`grpc.RegisterService(s, &grpc.ServiceDesc{ServiceName: "pb.Greeter", ...})`
+（反射服务/动态注册）不经过 RegisterXxxServer：
+- 识别 `grpc.ServiceDesc{ServiceName: "..."}` 复合字面量（ServiceName
+  为字符串字面量）→ 发射 grpc_service 节点——标识与手写 client
+  合并（symbol:proto:<proto包>:svc.<服务名>，ServiceName 即 proto
+  全名）
+- module-calls 中该服务 impl 缺失 → 标 `[动态注册]`（与 `[外部服务]`
+  区分——服务在本仓库声明但实现未静态识别）
+
+### 21.3 模块图前端展示（Q146）
+
+- serve 新增 `/api/module-calls`（HTTP JSON 透出 action.ModuleCalls）
+- 前端新增**模块视图**（assets/web/modules.html + 轻量 G6 渲染：
+  模块节点 + grpc/http 边，边标注服务.方法）；serve 首页导航进入
