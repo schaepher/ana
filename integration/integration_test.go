@@ -2271,3 +2271,131 @@ func main() {}
 		t.Errorf("匿名 struct 字段访问 line_start = %d, want > 0", line)
 	}
 }
+
+// TestQueryUnusedSelfContained：query unused 全量报告（field_trace.md §16）——
+// 死代码/孤立链/var 初始化调用/回调注册/main 的判定。
+func TestQueryUnusedSelfContained(t *testing.T) {
+	if !scipGoAvailable() {
+		t.Skip("scip-go not found")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/unused\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "main.go"), `package unused
+
+type T struct{ A int }
+
+// dead：无调用无引用 → 报告
+func dead() {}
+
+// chainA → chainB：孤立链
+func chainA() { chainB() }
+func chainB() {}
+
+// ctor：var 初始化调用（Q108）→ 不算未调用
+func ctor() *T { return &T{} }
+
+var G = ctor()
+
+// hook：作为回调注册（passes_to）→ 无调用但有引用
+func hook() {}
+
+func use(f func()) { f() }
+
+func main() {
+	_ = G
+	use(hook)
+}
+`)
+	if code := runCLI(t, "init", "--repo", dir); code != 0 {
+		t.Fatalf("init exit = %d", code)
+	}
+	code, out := runCLIOut(t, "query", "unused", "--repo", dir)
+	if code != 0 {
+		t.Fatalf("query unused exit = %d", code)
+	}
+	// dead 报告（无调用无引用）
+	if !strings.Contains(out, "dead") {
+		t.Errorf("dead 应报告为未调用，output=%q", out)
+	}
+	// chainA→chainB 孤立链
+	if !strings.Contains(out, "chainA → chainB") {
+		t.Errorf("孤立链 chainA → chainB 缺失，output=%q", out)
+	}
+	// ctor 不算未调用（var 初始化调用边）
+	if strings.Contains(out, "ctor") {
+		t.Errorf("ctor 不应报告（var G = ctor() 是初始化调用），output=%q", out)
+	}
+	// main 永不报告（注意 main.go 文件名含 main，检查函数名列）
+	if strings.Contains(out, "  main ") {
+		t.Errorf("main 不应报告，output=%q", out)
+	}
+	// hook：无调用但有引用（非孤立）
+	if !strings.Contains(out, "hook") {
+		t.Errorf("hook 应报告为无调用（有引用），output=%q", out)
+	}
+	if strings.Contains(out, "hook →") {
+		t.Errorf("hook 有引用不应为孤立链，output=%q", out)
+	}
+	// --fail-on unused：存在未调用 → 退出码 1
+	code, _ = runCLIOut(t, "query", "unused", "--fail-on", "unused", "--repo", dir)
+	if code != 1 {
+		t.Errorf("--fail-on unused 应退出码 1（存在未调用函数），got %d", code)
+	}
+}
+
+// TestQueryUnusedSinceSelfContained：--since <ref>——git diff 区间内新增
+// 函数标 [new] 并只报告本次改动（field_trace.md §16.5）。
+func TestQueryUnusedSinceSelfContained(t *testing.T) {
+	if !scipGoAvailable() {
+		t.Skip("scip-go not found")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/since\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "main.go"), `package since
+
+func oldUnused() {}
+
+func main() {}
+`)
+	// git init + 首次提交（--since 的基线；-C 须在子命令前）
+	gitArgs := [][]string{
+		{"init", "-q"},
+		{"add", "-A"},
+		{"-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base"},
+	}
+	for _, args := range gitArgs {
+		full := append([]string{"-C", dir}, args...)
+		if out, err := exec.Command("git", full...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v (%s)", args, err, out)
+		}
+	}
+	// 本次需求：新增 newFunc（未接线）+ 修改 main 调用它
+	writeFile(t, filepath.Join(dir, "main.go"), `package since
+
+func oldUnused() {}
+
+// 本次需求新增：流程未衔接（main 未调用）
+func newFunc() {}
+
+func main() {}
+`)
+	if code := runCLI(t, "init", "--repo", dir); code != 0 {
+		t.Fatalf("init exit = %d", code)
+	}
+	code, out := runCLIOut(t, "query", "unused", "--since", "HEAD", "--repo", dir)
+	if code != 0 {
+		t.Fatalf("query unused --since exit = %d", code)
+	}
+	// 本次改动（main.go 新增 newFunc）→ newFunc 报告（无调用，标 [new]）
+	if !strings.Contains(out, "newFunc") || !strings.Contains(out, "new") {
+		t.Errorf("newFunc 应报告且标 [new]，output=%q", out)
+	}
+	// oldUnused 不在本次改动内 → 全量模式报告、--since 模式不报告
+	if strings.Contains(out, "oldUnused") {
+		t.Errorf("--since 模式不应报告本次未改动的 oldUnused，output=%q", out)
+	}
+	// main 永不报告（注意 main.go 文件名含 main，检查函数名列）
+	if strings.Contains(out, "  main ") {
+		t.Errorf("main 不应报告，output=%q", out)
+	}
+}

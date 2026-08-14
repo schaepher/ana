@@ -180,6 +180,26 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 				if !isVS || len(vs.Names) != 1 || len(vs.Values) != 1 {
 					continue
 				}
+				// Q108：包级 var 初始化调用（var x = NewFoo()）建 calls 边——
+				// 此前跳过（callerDecl==nil），构造函数被误报"未调用"。
+				// source = 包节点（保证端点存在；语义：包级初始化调用）
+				if call, isCall := vs.Values[0].(*ast.CallExpr); isCall {
+					if callee, ok2 := resolveCallee(pkg.TypesInfo, call.Fun); ok2 &&
+						callee.Pkg() != nil && isInModule(callee.Pkg().Path(), repo.Module) {
+						calleeID, calleeKind := fnID(callee)
+						if calleeID != "" {
+							_ = emit(domain.Item{Node: nodeFor(repo, pkg, callee, calleeID, calleeKind, nil)})
+							_ = emit(domain.Item{Fact: &domain.Fact{
+								SourceID:   packageID(pkg.PkgPath),
+								TargetID:   calleeID,
+								Kind:       domain.FactCalls,
+								ToolSource: domain.ToolCodeGraph,
+								Confidence: 0.8,
+								Metadata:   map[string]any{"line_num": pkg.Fset.PositionFor(call.Pos(), false).Line},
+							}})
+						}
+					}
+				}
 				if objID, ok := a.createObject(pkg, vs.Values[0], stack, emit, repo, objCache); ok {
 					objVars[vs.Names[0].Name] = objID
 				}

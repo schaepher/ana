@@ -718,3 +718,68 @@ Q1–Q19）。决策编号延续 §14 的 Q 体系。实现顺序见 15.7 里程
 radar 实测 → e2e 22/22 → push）；集成 fixture 覆盖全部场景
 （TestCLIFullFlow 含派发/持久化/元素/别名/嵌套读链，TestIncrementalUpdate、
 TestOutputNoiseFree、TestServerEndToEnd）。
+
+---
+
+## 16. 未调用函数与孤立链分析（Q104–Q113，2026-08-14）
+
+### 16.1 需求与形态（Q104–Q105）
+
+需求驱动（用户场景）：一次需求开发完后的两项检查——
+① **流程衔接**：本次新增的函数是否都被调用（避免流程没衔接上）；
+② **冗余代码**：是否写了没人用的代码（占用代码库空间）。
+
+形态：**CLI 查询命令 `query unused`**（查询期计算，基于现有 DB 边，
+零构建改动）。不裁剪不可达代码（裁剪会破坏现有查询语义，且收益需先
+经分析确认——后续可独立立项）。
+
+### 16.2 判定语义：两档报告（Q106–Q108）
+
+| 档位 | 判定（入边为空即命中） | 对应需求 |
+| :--- | :--- | :--- |
+| `无调用` | calls ∪ passes_result 入边为空 | ① 流程衔接 |
+| `无任何引用` | + passes_to（回调参数）+ dispatch_to（接口实现被派发）+ initializes（被 &T{} 实例化）+ var 初始化引用（data_flows_to → var.Global）入边为空 | ② 冗余代码 |
+
+- **永不报告**：main() / init()（运行时入口）
+- **exported 函数**（首字母大写）：报告但标注 `[exported]`（单模块分析看不到外部 caller，用户自行判断）
+- **盲区标注**：函数值赋值（`f := g; f()`）无边——命中时报告中标注"函数值引用未追踪"；
+  外部调用实参中的嵌套调用（`fmt.Errorf("%v", joinIDs(x))`——外层 callee 非模块内
+  时不建 passes_result）、嵌入提升方法（`db.Exec` → `(DB).Exec` 声明无调用者）——
+  同类误报，报告中不特别标注（实测 codeintel 自身：joinIDs/version 属此盲区）
+- **嵌套调用**（`A(B(C()))`）：B/C 无 calls 边但有 passes_result 入边 → 不误报（纳入"被调用"）
+- **接口实现**：实现方法无 calls 入边但有 dispatch_to 入边 → 不算孤立（有引用）
+- **构建改动（Q108）**：AST 适配器补**包级 var 初始化调用边**——`var x = NewFoo()` 的 rhs 为模块内函数调用时建 calls 边（消除构造函数"写了没人调"的最大误报源；此前 AGENTS.md 已知限制"包级初始化中的调用不建 CALLS 边"）
+
+### 16.3 孤立链（Q109–Q110）
+
+- 链头：无 caller 的函数（calls ∪ passes_result 入边为空）
+- 沿 callee 递归；遇**有链外 caller 的节点**在该节点断开（该节点及下游正常）
+- 互调环（A→B→A 无外部 caller）整环孤立
+- 无调用但有引用（回调/接口实现/被实例化）不视为孤立链，标"有引用"
+- 输出：按链头分组，链内节点带行号
+
+### 16.4 命令契约（Q111–Q112）
+
+```
+codeintel query unused [--since <ref>] [--json|--compact] [--fail-on unused|isolated] --repo <path>
+```
+
+- 默认表格：函数 / 包 / 文件:行 / 状态（无调用 / 无引用 / [exported] / [new] / [mod]）
+- 孤立链单独分组（链头在最前，⚠ 标注新增函数在孤立链中——流程可能未衔接）
+- `--json`：`{unused: [...], isolated_chains: [...], since: {ref, files, new_functions}}`
+- `--fail-on <unused|isolated>`：存在未调用函数/孤立链时退出码 1（CI 拦截"需求没衔接"）；默认退出码 0
+
+### 16.5 `--since` 函数级 [new]/[mod] 判定（Q113）
+
+- 范围：`git diff --unified=0 <ref>`（ref 到当前工作区，含未提交；非 git 仓库报错）
+- 解析：`new file mode` → 新增文件；`@@ -a,b +c,d @@` 累加 + 侧新增行号集合；rename 按修改处理
+- 判定（对 DB 中 file_path ∈ 变更文件的 function/method 节点）：
+  - 新增文件：全部函数 → `[new]`
+  - 修改文件：函数**声明行**（LineStart）∈ 新增行号 → `[new]`；声明行不在但**行号区间**（LineStart..LineEnd）∩ 新增行 → `[mod]`；两者不中 → 不标注
+- 行号一致性：diff 与索引都基于当前文件，直接对齐
+- 无 --since：全量报告（冗余检查）；有 --since：报告只含 [new]/[mod] 函数（流程衔接检查）
+
+### 16.6 报告对象（Q114）
+
+function + method 参与报告；interface 方法不单独报（接口是契约不是实现）；
+struct/package/file 节点不参与。

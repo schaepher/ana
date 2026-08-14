@@ -369,3 +369,30 @@ func RegisterFooServer(s any, impl any) {}
 		t.Errorf("嵌入字段名 = %v, want Base", fields[0]["name"])
 	}
 }
+
+// TestVarInitCallEdge：Q108——包级 var 初始化中的函数调用（var x = NewFoo()）
+// 须建 calls 边（此前不建，构造函数被误报"未调用"）。
+func TestVarInitCallEdge(t *testing.T) {
+	_, facts := indexFixture(t, map[string]string{
+		"go.mod": "module example.com/mtest\n\ngo 1.21\n",
+		"main.go": `package m
+
+type Foo struct{ A int }
+
+func NewFoo() *Foo { return &Foo{} }
+
+var G = NewFoo()
+
+func main() { _ = G }
+`,
+	})
+	hit := false
+	for _, f := range facts {
+		if f.Kind == domain.FactCalls && string(f.TargetID) == "symbol:go:example.com/mtest:NewFoo" {
+			hit = true
+		}
+	}
+	if !hit {
+		t.Error("var x = NewFoo() 未建 calls 边（构造函数会被误报未调用）")
+	}
+}

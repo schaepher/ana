@@ -42,11 +42,14 @@ func cmdQuery(args []string) int {
 
 	// 手动解析 flags（flag 包遇到位置参数即停止，无法支持 "query symbol X --repo Y" 形式）
 	f := parseQueryFlags(rest)
-	if len(f.positional) < 1 {
-		fmt.Fprintf(os.Stderr, "error: 缺少符号参数\n")
-		return 2
+	target := ""
+	if sub != "unused" {
+		if len(f.positional) < 1 {
+			fmt.Fprintf(os.Stderr, "error: 缺少符号参数\n")
+			return 2
+		}
+		target = f.positional[0]
 	}
-	target := f.positional[0]
 
 	abs, _, err := resolveRepo(f.repoPath)
 	if err != nil {
@@ -77,6 +80,8 @@ func cmdQuery(args []string) int {
 		return queryValueTrace(acts, target, f.maxDepth, opts)
 	case "summary":
 		return querySummary(acts, target, opts, f.format)
+	case "unused":
+		return queryUnused(acts, abs, f)
 	case "callers", "callees", "impact":
 		d := f.depth
 		if d <= 0 {
@@ -104,6 +109,8 @@ type queryFlags struct {
 	json       bool
 	compact    bool
 	format     string // summary 的 mermaid 输出（Q100）
+	since      string // unused 的 --since <ref>（git diff 区间）
+	failOn     string // unused 的 --fail-on unused|isolated（CI 退出码）
 }
 
 // parseQueryFlags 手动解析 query 子命令的参数，支持 flags 与位置参数任意顺序。
@@ -135,6 +142,16 @@ func parseQueryFlags(args []string) queryFlags {
 			i++
 		case strings.HasPrefix(a, "--func="):
 			f.funcPath = strings.TrimPrefix(a, "--func=")
+		case a == "--since" && i+1 < len(args):
+			f.since = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--since="):
+			f.since = strings.TrimPrefix(a, "--since=")
+		case a == "--fail-on" && i+1 < len(args):
+			f.failOn = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--fail-on="):
+			f.failOn = strings.TrimPrefix(a, "--fail-on=")
 		case a == "--json":
 			f.json = true
 		case a == "--compact":

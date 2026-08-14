@@ -47,6 +47,27 @@ type TraceRow struct {
 	Conditions []string // 路径条件标注（Q92 查询期计算，不落库）
 }
 
+// UnusedFunc 未调用分析中的一个函数（field_trace.md §16）。
+type UnusedFunc struct {
+	ID         CanonicalID
+	Kind       EntityKind
+	Name       string
+	FilePath   string
+	LineStart  int
+	LineEnd    int
+	Exported   bool   // 首字母大写（可能被外部模块调用）
+	Called     bool   // 有 calls / passes_result 入边
+	Referenced bool   // 有 passes_to / dispatch_to / initializes / var 初始化引用
+	SinceMark  string // --since 标注："" / "new"（声明行新增）/ "mod"（行号区间新增）
+}
+
+// SinceInfo --since <ref> 的 diff 解析结果（field_trace.md §16.5）。
+type SinceInfo struct {
+	Ref        string             // git ref（--since 参数）
+	NewFiles   map[string]bool    // 新增文件（文件内全部函数标 [new]）
+	AddedLines map[string]map[int]bool // 每文件新增行号集合（+ 侧）
+}
+
 // EmitFunc 将适配器产出的数据流式交给 Canonicalizer 消费。
 // 返回错误时适配器应停止产出。
 type EmitFunc func(Item) error

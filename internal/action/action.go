@@ -34,6 +34,8 @@ type Reader interface {
 	GetIndirectWriteEdges(funcID domain.CanonicalID) ([]*domain.Fact, error)
 	GetDispatchEdges(ifaceID domain.CanonicalID) ([]*domain.Fact, error)
 	FindFieldReads(fullPath string) ([]*domain.CodeEntity, error)
+	GetUncalledFunctions() ([]*domain.UnusedFunc, error)
+	GetIsolatedChains() ([][]*domain.UnusedFunc, error)
 	Counts() (nodes int, edges int, err error)
 	GetLatest() (*domain.BuildMeta, error)
 	RepoPath() string
@@ -464,4 +466,82 @@ func shortFuncNameX(id string) string {
 		return id[i+1:]
 	}
 	return id
+}
+
+// UnusedReport 未调用分析报告（field_trace.md §16.4）。
+type UnusedReport struct {
+	Unused []*domain.UnusedFunc   // 未调用函数（--since 时只含 [new]/[mod]）
+	Chains [][]*domain.UnusedFunc // 孤立调用链（按链头分组）
+	Since  *domain.SinceInfo
+}
+
+// Unused 未调用函数与孤立链分析（field_trace.md §16）：
+//   - 未调用 = 无 calls/passes_result 入边（Called=false）
+//   - 无引用 = 且无 passes_to/dispatch_to/initializes/var 初始化引用
+//   - 孤立链：链头无 caller，链内 caller ⊆ 链，有链外 caller 断开，环整环孤立
+//   - --since：标注 [new]（声明行在新增行）/ [mod]（行号区间命中新增行）
+//     并只保留标注过的函数（流程衔接检查）；since 为 nil 时全量报告
+func (a *Actions) Unused(since *domain.SinceInfo) (*UnusedReport, error) {
+	all, err := a.repo.GetUncalledFunctions()
+	if err != nil {
+		return nil, err
+	}
+	chains, err := a.repo.GetIsolatedChains()
+	if err != nil {
+		return nil, err
+	}
+	rep := &UnusedReport{Since: since}
+	for _, u := range all {
+		if u.Called {
+			continue // 只报未调用（两档：无调用 / 无任何引用）
+		}
+		if since != nil {
+			u.SinceMark = sinceMark(u, since)
+			if u.SinceMark == "" {
+				continue // --since 模式：只保留本次改动的函数
+			}
+		}
+		rep.Unused = append(rep.Unused, u)
+	}
+	// 孤立链：--since 模式只保留含本次改动成员的链（成员标注 since）
+	for _, ch := range chains {
+		if since != nil {
+			keep := false
+			for _, u := range ch {
+				u.SinceMark = sinceMark(u, since)
+				if u.SinceMark != "" {
+					keep = true
+				}
+			}
+			if !keep {
+				continue
+			}
+		}
+		rep.Chains = append(rep.Chains, ch)
+	}
+	return rep, nil
+}
+
+// sinceMark 标注函数在 --since 中的状态：new（声明行新增）/
+// mod（行号区间命中新增行）/ ""（未改动）。新增文件内全部函数标 new。
+func sinceMark(u *domain.UnusedFunc, since *domain.SinceInfo) string {
+	if since.NewFiles[u.FilePath] {
+		return "new"
+	}
+	added := since.AddedLines[u.FilePath]
+	if len(added) == 0 {
+		return ""
+	}
+	if added[u.LineStart] {
+		return "new"
+	}
+	if u.LineEnd < u.LineStart {
+		u.LineEnd = u.LineStart
+	}
+	for l := u.LineStart; l <= u.LineEnd; l++ {
+		if added[l] {
+			return "mod"
+		}
+	}
+	return ""
 }
