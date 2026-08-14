@@ -641,7 +641,7 @@ func (r *Repo) Expand(id domain.CanonicalID) (facts []*domain.Fact, nodes []*dom
 SELECT e.source_id, e.target_id, e.kind, e.tool_source, e.confidence, e.metadata
 FROM edges e
 LEFT JOIN nodes n ON n.id = CASE WHEN e.source_id = ? THEN e.target_id ELSE e.source_id END
-WHERE (e.source_id = ? OR e.target_id = ?) AND e.kind IN ('calls', 'implements', 'imports', 'initializes', 'uses', 'passes_to', 'passes_result', 'of_type', 'has_method', 'has_param', 'has_result', 'data_flows_to', 'argument', 'returns', 'phi_operand', 'alias')
+WHERE (e.source_id = ? OR e.target_id = ?) AND e.kind IN ('calls', 'implements', 'imports', 'initializes', 'uses', 'passes_to', 'passes_result', 'of_type', 'has_method', 'has_param', 'has_result', 'data_flows_to', 'argument', 'returns', 'phi_operand', 'alias', 'dispatch_to')
 ORDER BY CASE WHEN e.kind = 'has_param' THEN 0
               WHEN e.kind = 'has_result' THEN 1
               ELSE 2 END,
@@ -1114,6 +1114,20 @@ func (r *Repo) GetIndirectWriteEdges(funcID domain.CanonicalID) ([]*domain.Fact,
 	defer logger.Debug("exit (Repo).GetIndirectWriteEdges")
 	rows, err := r.Query(`SELECT source_id, target_id, kind, tool_source, confidence, metadata
 		FROM edges WHERE source_id = ? AND kind = 'indirect_write'`, string(funcID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanFacts(rows)
+}
+
+// GetDispatchEdges 返回接口类型的 dispatch_to 边（Q95：symbol 详情候选集）。
+func (r *Repo) GetDispatchEdges(ifaceID domain.CanonicalID) ([]*domain.Fact, error) {
+	logger := zap.L()
+	logger.Debug("enter (Repo).GetDispatchEdges")
+	defer logger.Debug("exit (Repo).GetDispatchEdges")
+	rows, err := r.Query(`SELECT source_id, target_id, kind, tool_source, confidence, metadata
+		FROM edges WHERE source_id = ? AND kind = 'dispatch_to'`, string(ifaceID))
 	if err != nil {
 		return nil, err
 	}

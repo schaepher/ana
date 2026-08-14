@@ -102,7 +102,17 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, emit domai
 		return fmt.Errorf("alias analysis: %w", err)
 	}
 	// function_field_summary 预计算 + INDIRECT_WRITE 边（间接写闭包，消费排除集）
-	return emitSummaries(a.fd, aliasRes, emit)
+	if err := emitSummaries(a.fd, aliasRes, emit); err != nil {
+		return err
+	}
+	// 接口动态派发（Q91/Q93/Q94）：dispatch_to 边（接口类型 → 候选实现方法）
+	var typePkgs []*types.Package
+	for _, p := range pkgs {
+		if p.Types != nil {
+			typePkgs = append(typePkgs, p.Types)
+		}
+	}
+	return emitDispatches(repo, prog, typePkgs, emit)
 }
 
 // buildIdentIndex 收集项目内文件的所有标识符（位置 → 名字），供 Alloc 反查源码变量名。

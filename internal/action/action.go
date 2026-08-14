@@ -31,6 +31,7 @@ type Reader interface {
 	Expand(id domain.CanonicalID) (facts []*domain.Fact, nodes []*domain.CodeEntity, err error)
 	AllSummaries() ([]*domain.FunctionFieldSummary, error)
 	GetIndirectWriteEdges(funcID domain.CanonicalID) ([]*domain.Fact, error)
+	GetDispatchEdges(ifaceID domain.CanonicalID) ([]*domain.Fact, error)
 	Counts() (nodes int, edges int, err error)
 	GetLatest() (*domain.BuildMeta, error)
 }
@@ -222,6 +223,11 @@ func (a *Actions) Latest() (*domain.BuildMeta, error) {
 // metadata 含 call_line / call_args，fields 展示用）。
 func (a *Actions) IndirectWriteSites(funcID domain.CanonicalID) ([]*domain.Fact, error) {
 	return a.repo.GetIndirectWriteEdges(funcID)
+}
+
+// DispatchCandidates 返回接口类型的候选实现（Q95：symbol 详情展示）。
+func (a *Actions) DispatchCandidates(ifaceID domain.CanonicalID) ([]*domain.Fact, error) {
+	return a.repo.GetDispatchEdges(ifaceID)
 }
 
 // ExportIndex 生成 字段 → 产生者/消费者 的双层索引（S4）。

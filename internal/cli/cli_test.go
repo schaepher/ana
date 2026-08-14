@@ -183,6 +183,49 @@ func TestQueryFields(t *testing.T) {
 	}
 }
 
+// TestQuerySymbolCandidates：接口类型 symbol 详情展示候选实现
+// （Q95：candidates + 置信度 + 注册点）。
+func TestQuerySymbolCandidates(t *testing.T) {
+	dir := seedRepo(t)
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	r := sqlite.NewRepo(db)
+	// 接口类型节点 + dispatch_to 边（注册点 0.9；target 须为已存在节点）
+	ifaceID := "symbol:go:example.com/m/svc:Handler"
+	implID := "symbol:go:example.com/m/svc:(Svc).Run"
+	r.SaveBatchStats([]*domain.CodeEntity{
+		{ID: domain.CanonicalID(ifaceID), Kind: domain.KindInterface, Name: "Handler", FilePath: "svc/svc.go", LineStart: 3},
+	}, []*domain.Fact{{
+		SourceID: domain.CanonicalID(ifaceID), TargetID: domain.CanonicalID(implID),
+		Kind: domain.FactDispatchTo, ToolSource: domain.ToolSSA, Confidence: 0.9,
+		Metadata: map[string]any{"origin": "register", "interface_method": "Handle",
+			"register_site": float64(5), "confidence": 0.9},
+	}}, nil)
+
+	out := captureStdout(func() {
+		if code := cmdQuery([]string{"symbol", ifaceID, "--repo", dir}); code != 0 {
+			t.Errorf("query symbol iface exit = %d", code)
+		}
+	})
+	for _, want := range []string{"候选实现", "(Svc).Run", "0.9"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("symbol 候选实现输出缺 %q:\n%s", want, out)
+		}
+	}
+	// --json：candidates 数组
+	out = captureStdout(func() {
+		if code := cmdQuery([]string{"symbol", ifaceID, "--repo", dir, "--json"}); code != 0 {
+			t.Errorf("query symbol iface --json exit = %d", code)
+		}
+	})
+	if !strings.Contains(out, `"candidates"`) {
+		t.Errorf("symbol --json 应含 candidates:\n%s", out)
+	}
+}
+
 // TestQueryFieldsCallSite：indirect_write 摘要展示调用点（Q90 调用点级回连）：
 // INDIRECT_WRITE 边 metadata 的调用点行号与实参变量名出现在 fields 输出。
 func TestQueryFieldsCallSite(t *testing.T) {

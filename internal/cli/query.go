@@ -294,8 +294,13 @@ func querySymbol(acts *action.Actions, input string, opts outputOpts) int {
 		return 1
 	}
 	n := d.Node
+	// 动态派发候选（Q95）：接口类型 → 候选实现（置信度/注册点）
+	var dispatch []*domain.Fact
+	if n.Kind == domain.KindInterface {
+		dispatch, _ = acts.DispatchCandidates(n.ID)
+	}
 	if opts.json {
-		encodeJSON(map[string]any{
+		out := map[string]any{
 			"id":      string(n.ID),
 			"name":    n.Name,
 			"kind":    string(n.Kind),
@@ -305,7 +310,21 @@ func querySymbol(acts *action.Actions, input string, opts outputOpts) int {
 			"doc":     n.DocComment(),
 			"callers": factIDs(d.Callers, "source"),
 			"callees": factIDs(d.Callees, "target"),
-		})
+		}
+		if len(dispatch) > 0 {
+			cands := make([]map[string]any, 0, len(dispatch))
+			for _, f := range dispatch {
+				cands = append(cands, map[string]any{
+					"id":               string(f.TargetID),
+					"method":           f.Metadata["interface_method"],
+					"origin":           f.Metadata["origin"],
+					"confidence":       f.Metadata["confidence"],
+					"register_site":    f.Metadata["register_site"],
+				})
+			}
+			out["candidates"] = cands
+		}
+		encodeJSON(out)
 		return 0
 	}
 	fmt.Printf("ID:         %s\n", n.ID)
@@ -335,6 +354,22 @@ func querySymbol(acts *action.Actions, input string, opts outputOpts) int {
 	if len(d.Callees) > 0 {
 		fmt.Println("被调用者:")
 		printFacts(d.Callees, "target", 50)
+	}
+	// 动态派发候选（Q95）：接口类型的候选实现 + 置信度 + 注册点
+	if len(dispatch) > 0 {
+		fmt.Printf("候选实现:   %d 个\n", len(dispatch))
+		for _, f := range dispatch {
+			conf, _ := f.Metadata["confidence"].(float64)
+			origin, _ := f.Metadata["origin"].(string)
+			method, _ := f.Metadata["interface_method"].(string)
+			site, _ := f.Metadata["register_site"].(float64)
+			line := ""
+			if int(site) > 0 {
+				line = fmt.Sprintf(" 注册点:%d", int(site))
+			}
+			fmt.Printf("    %-40s %s.%s [%s %.1f]%s\n",
+				shortID(f.TargetID), shortFuncName(string(f.SourceID)), method, origin, conf, line)
+		}
 	}
 	return 0
 }

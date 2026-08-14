@@ -58,6 +58,7 @@ const (
 	FactAlias         FactKind = "alias"          // 指针别名（may_alias，conf 0.8）
 	FactPhiOperand    FactKind = "phi_operand"    // Phi 节点 → 前驱值
 	FactIndirectWrite FactKind = "indirect_write" // 调用者函数 → 被调函数/虚拟字段节点
+	FactDispatchTo    FactKind = "dispatch_to"    // 接口类型 → 候选实现方法（动态派发，Q91）
 	FactSummaryIO     FactKind = "summary_io"     // 外部摘要函数 → 字段路径
 	FactHasParam      FactKind = "has_param"      // 函数 → 签名参数节点
 	FactHasResult     FactKind = "has_result"     // 函数 → 返回值节点

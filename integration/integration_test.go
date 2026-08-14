@@ -86,7 +86,7 @@ type Service struct {
 }
 
 type Handler interface {
-	Handle()
+	Handle() string
 }
 
 func (s *Service) Handle() string {
@@ -96,6 +96,15 @@ func (s *Service) Handle() string {
 }
 
 func (s *Service) helper() {}
+
+// 动态派发场景（Q91）：接口值调用 + 注册点（&Service{} 经 MakeInterface 传入）
+func invoke(h Handler) {
+	h.Handle()
+}
+
+func dispatchMain() {
+	invoke(&Service{})
+}
 
 // 别名分析场景（Q80）：fillParam 写实参；fillLocal 写自己创建的对象
 type Cfg struct {
@@ -285,6 +294,21 @@ func TestCLIFullFlow(t *testing.T) {
 	// 方法线：Service → Handle
 	if _, _, err := repo.Expand("symbol:go:example.com/app/svc:Service"); err != nil {
 		t.Errorf("expand Service: %v", err)
+	}
+	// 动态派发（Q91）：fixture 的 Handler 接口 → (Service).Handle 实现——
+	// dispatch_to 边存在且 expand 返回（白名单）
+	dispatchFacts, _, err := repo.Expand("symbol:go:example.com/app/svc:Handler")
+	if err != nil {
+		t.Fatalf("expand Handler: %v", err)
+	}
+	dispatchHit := false
+	for _, f := range dispatchFacts {
+		if f.Kind == domain.FactDispatchTo && string(f.TargetID) == "symbol:go:example.com/app/svc:(Service).Handle" {
+			dispatchHit = true
+		}
+	}
+	if !dispatchHit {
+		t.Errorf("expand Handler 应返回 dispatch_to 边（Handler → (Service).Handle）: %+v", dispatchFacts)
 	}
 	// 外部包层：setup → net/http:HandleFunc → handler（持有参数）
 	extFacts, _, err := repo.Expand("symbol:go:example.com/app:setup")
