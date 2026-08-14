@@ -352,6 +352,27 @@ func TestValueTraceEndpoint(t *testing.T) {
 	}
 }
 
+// TestValueTraceMissingID：P0 补全——/api/value-trace 缺 id 参数 → 400。
+func TestValueTraceMissingID(t *testing.T) {
+	repoDir := t.TempDir()
+	db, err := sqlite.Open(repoDir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	web := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<html>x</html>")}}
+	ts := httptest.NewServer(New(context.Background(), action.New(sqlite.NewRepo(db)), web, repoDir).Handler())
+	t.Cleanup(ts.Close)
+
+	resp, body := get(t, ts, "/api/value-trace")
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("missing id status = %d, want 400 (body=%v)", resp.StatusCode, body)
+	}
+	if msg, _ := body["error"].(string); !strings.Contains(msg, "id") {
+		t.Errorf("missing id body = %v, want error 提示缺 id", body)
+	}
+}
+
 // TestValueTraceConditionsEndpoint：⑬ 猎 bug 回归——/api/value-trace
 // 返回 conditions 字段（Q92 条件标注此前前端缺失，CLI 有 HTTP 无）。
 func TestValueTraceConditionsEndpoint(t *testing.T) {

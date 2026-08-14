@@ -60,6 +60,51 @@ func TestDetectChangedGoFiles(t *testing.T) {
 	}
 }
 
+// TestCmdUpdateNoChanges：update 成功路径的轻量分支——git 仓库无变更
+// .go 文件时直接提示已最新（exit 0），不触发索引构建（无 scip-go 依赖）。
+func TestCmdUpdateNoChanges(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "go.mod"), "module example.com/m\n\ngo 1.21\n")
+	writeTestFile(t, filepath.Join(dir, "a.go"), "package a\n")
+	gitRun(t, dir, "init", "-q")
+	gitRun(t, dir, "add", "-A")
+	gitRun(t, dir, "commit", "-q", "-m", "init")
+
+	out := captureStdout(func() {
+		if code := cmdUpdate(nil, []string{"--repo", dir}); code != 0 {
+			t.Errorf("update no-change exit = %d", code)
+		}
+	})
+	if !strings.Contains(out, "无变更") {
+		t.Errorf("no-change stdout = %q, want 无变更提示", out)
+	}
+}
+
+// TestCmdUpdateGoModChanged：go.mod 变更影响 module 范围——提示全量 init
+// 而非增量（exit 1）。
+func TestCmdUpdateGoModChanged(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "go.mod"), "module example.com/m\n\ngo 1.21\n")
+	gitRun(t, dir, "init", "-q")
+	gitRun(t, dir, "add", "-A")
+	gitRun(t, dir, "commit", "-q", "-m", "init")
+	writeTestFile(t, filepath.Join(dir, "go.mod"), "module example.com/m\n\ngo 1.21\n\n// bump\n")
+
+	old := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+	code := cmdUpdate(nil, []string{"--repo", dir})
+	w.Close()
+	os.Stderr = old
+	var buf strings.Builder
+	if _, err := io.Copy(&buf, r); err != nil {
+		t.Fatal(err)
+	}
+	if code != 1 || !strings.Contains(buf.String(), "codeintel init") {
+		t.Errorf("go.mod changed = %d, stderr=%q（应提示全量 init）", code, buf.String())
+	}
+}
+
 func TestCmdUpdateNoGit(t *testing.T) {
 	// 非 git 仓库：增量更新报错提示
 	dir := t.TempDir()

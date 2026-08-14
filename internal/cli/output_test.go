@@ -101,3 +101,17 @@ func TestExportGraph(t *testing.T) {
 		t.Error("export graph 非法 --type 应失败")
 	}
 }
+
+// TestExportGraphModules：--type modules（§21.3）——模块调用图无需 target
+// 锚点（此前 target required 会误拒，已修复）；输出 mermaid flowchart。
+func TestExportGraphModules(t *testing.T) {
+	dir := seedFieldTrace(t)
+	out := captureStdout(func() {
+		if code := cmdExport([]string{"graph", "--type", "modules", "--repo", dir}); code != 0 {
+			t.Errorf("export graph modules exit = %d", code)
+		}
+	})
+	if !strings.Contains(out, "flowchart") {
+		t.Errorf("modules 输出应含 flowchart: %s", out)
+	}
+}
