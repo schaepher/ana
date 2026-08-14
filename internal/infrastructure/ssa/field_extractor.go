@@ -30,7 +30,7 @@ import (
 // emitFunctionFields 发射单个函数内的字段访问节点与数据流边。
 func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
 	funcID domain.CanonicalID, idents map[token.Pos]string, funcData *funcData,
-	specs map[string]summarySpec, emit domain.EmitFunc) error {
+	specs map[string]summarySpec, fallbackTotal *int, emit domain.EmitFunc) error {
 	logger := zap.L()
 	logger.Debug("enter emitFunctionFields")
 	defer logger.Debug("exit emitFunctionFields")
@@ -144,7 +144,11 @@ func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Func
 		}
 	}
 	// 第三遍：跨过程边（argument/returns/phi_operand）
-	return ext.emitCrossFlow()
+	err := ext.emitCrossFlow()
+	if fallbackTotal != nil {
+		*fallbackTotal += ext.fallbackCount
+	}
+	return err
 }
 
 // faUses 扫描 FieldAddr 的使用方式：是否被 Store 写入、是否被 UnOp(MUL) 解引用读。
@@ -221,6 +225,11 @@ func (ext *fieldExtractor) newFieldAccess(fa *ssa.FieldAddr, access string) *fie
 		return nil
 	}
 	instance := ext.instancePath(fa.X) + "." + info.fieldName
+	if info.fullPath == "" {
+		// 静态类型解析失败：回退源码字面量路径（field_trace.md §6.1）
+		info.fullPath = instance
+		ext.fallbackCount++
+	}
 	ext.recordEntry(access, info, instance)
 	return &fieldAccess{
 		id:       ext.accessID(instance, access, fa.Pos()),
@@ -260,6 +269,10 @@ func (ext *fieldExtractor) newFieldAccessValue(f *ssa.Field) *fieldAccess {
 		return nil
 	}
 	instance := ext.instancePath(f.X) + "." + info.fieldName
+	if info.fullPath == "" {
+		info.fullPath = instance
+		ext.fallbackCount++
+	}
 	ext.recordEntry("read", info, instance)
 	return &fieldAccess{
 		id:       ext.accessID(instance, "read", f.Pos()),
@@ -277,15 +290,19 @@ func (ext *fieldExtractor) fieldInfo(baseType types.Type, fieldIdx int, pos toke
 	logger.Debug("enter (fieldExtractor).fieldInfo")
 	defer logger.Debug("exit (fieldExtractor).fieldInfo")
 	named, st := derefStruct(baseType)
-	if named == nil {
-		return fieldInfo{}, false // 匿名结构体等无稳定类型身份，跳过
+	if st == nil {
+		return fieldInfo{}, false // 非结构体类型
 	}
 	field := st.Field(fieldIdx)
 	fi := fieldInfo{
-		fullPath:   named.Obj().Pkg().Path() + "." + named.Obj().Name() + "." + field.Name(),
 		typeString: field.Type().String(),
 		fieldName:  field.Name(),
 	}
+	if named == nil {
+		// 匿名结构体等无稳定类型身份：full_path 留空，调用方回退源码字面量路径
+		return fi, true
+	}
+	fi.fullPath = named.Obj().Pkg().Path() + "." + named.Obj().Name() + "." + field.Name()
 	p := ext.prog.Fset.PositionFor(pos, false)
 	fi.filePath = relPath(ext.repo.Path, p.Filename)
 	fi.line = p.Line
@@ -506,19 +523,21 @@ func fieldNameOf(t types.Type, idx int) string {
 }
 
 // derefStruct 解指针/取底层结构体；返回具名类型（可空）与结构体（可空）。
+// 匿名 struct 类型：named 为 nil、st 可用（full_path 回退场景，§6.1）。
 func derefStruct(t types.Type) (*types.Named, *types.Struct) {
 	if p, ok := t.(*types.Pointer); ok {
 		t = p.Elem()
 	}
-	named, ok := t.(*types.Named)
-	if !ok {
+	if named, ok := t.(*types.Named); ok {
+		if st, ok2 := named.Underlying().(*types.Struct); ok2 {
+			return named, st
+		}
 		return nil, nil
 	}
-	st, ok := named.Underlying().(*types.Struct)
-	if !ok {
-		return nil, nil
+	if st, ok := t.(*types.Struct); ok {
+		return nil, st // 匿名 struct：无类型身份，字段列表可用
 	}
-	return named, st
+	return nil, nil
 }
 
 // originKind 区分 SSA 值来源（field_trace.md §4.1）。
@@ -575,6 +594,7 @@ type fieldExtractor struct {
 	specs    map[string]summarySpec          // 外部函数摘要（内置 + 用户）
 	extSummaries map[domain.CanonicalID]bool // 已创建 external_summary 节点
 	currentFile string                       // 当前函数文件（虚拟节点用）
+	fallbackCount int                        // 静态类型解析失败回退数（警告汇总）
 }
 
 // isSSAName 判断是否为 SSA 临时名（t0、t91 等），用于决定展示名回退。

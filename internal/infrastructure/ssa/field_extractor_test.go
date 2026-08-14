@@ -291,3 +291,34 @@ func nodeByID(t *testing.T, nodes []*domain.CodeEntity, id string) *domain.CodeE
 	t.Fatalf("node not found: %s", id)
 	return nil
 }
+
+func TestFieldAnonymousStructFallback(t *testing.T) {
+	// 匿名 struct：静态类型无稳定身份 → full_path 回退源码字面量路径（§6.1）
+	nodes, _ := indexFixture(t, map[string]string{
+		"go.mod":  moduleGoMod,
+		"main.go": `package m
+
+func f() {
+	x := struct{ A int }{}
+	x.A = 1
+}
+`,
+	})
+	funcID := "symbol:go:example.com/mtest:f"
+	var fa *domain.CodeEntity
+	for _, n := range nodes {
+		if n.Kind == domain.KindFieldAccess && n.Property("func_id") == funcID {
+			fa = n
+		}
+	}
+	if fa == nil {
+		t.Fatal("anonymous struct field access node missing (fallback 应产出节点)")
+	}
+	if fa.Property("full_path") != fa.Property("instance_path") {
+		t.Errorf("fallback full_path = %q, want 回退为 instance_path %q",
+			fa.Property("full_path"), fa.Property("instance_path"))
+	}
+	if fa.Property("access_kind") != "write" {
+		t.Errorf("access = %q", fa.Property("access_kind"))
+	}
+}

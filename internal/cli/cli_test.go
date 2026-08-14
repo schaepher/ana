@@ -234,3 +234,36 @@ func TestExport(t *testing.T) {
 		t.Errorf("export missing field path: %s", data)
 	}
 }
+
+func TestInitGoWorkReject(t *testing.T) {
+	// go.work 在目标目录且无 go.mod → init 报错提示进入模块目录
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.work"), []byte("go 1.21\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+	code := cmdInit(context.Background(), []string{"--repo", dir})
+	w.Close()
+	os.Stderr = old
+	var buf strings.Builder
+	io.Copy(&buf, r)
+	if code != 1 {
+		t.Errorf("init with go.work = %d, want 1", code)
+	}
+	if !strings.Contains(buf.String(), "go.work") {
+		t.Errorf("stderr = %q, want go.work 提示", buf.String())
+	}
+	// 有 go.mod 的模块目录（即使上层有 go.work）不报错
+	sub := filepath.Join(dir, "m")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "go.mod"), []byte("module example.com/m\n\ngo 1.21\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := cmdInit(context.Background(), []string{"--repo", sub}); code != 0 {
+		t.Errorf("init module dir under go.work = %d, want 0", code)
+	}
+}

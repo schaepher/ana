@@ -80,13 +80,17 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, emit domai
 	}
 
 	a.fd = map[domain.CanonicalID]*funcData{}
+	fallbackTotal := 0
 	for fn := range ssautil.AllFunctions(prog) {
 		if !isModuleFunction(fn, repo.Module) {
 			continue // 外部依赖走摘要（Phase 5）
 		}
-		if err := emitFunction(repo, prog, fn, idents, a.fd, specs, emit); err != nil {
+		if err := emitFunction(repo, prog, fn, idents, a.fd, specs, &fallbackTotal, emit); err != nil {
 			return err
 		}
+	}
+	if fallbackTotal > 0 {
+		fmt.Fprintf(os.Stderr, "warning: %d 个字段访问静态类型解析失败（匿名 struct 等），已回退源码字面量路径\n", fallbackTotal)
 	}
 	// 轻量别名分析（Q80）：产出间接写排除集 + ALIAS 边（须在 emitSummaries 前）
 	aliasRes, err := computeAliases(repo, prog, idents, emit)
@@ -132,7 +136,7 @@ func isModuleFunction(fn *ssa.Function, module string) bool {
 // 闭包内字段访问在 Phase 2 归入外层函数（field_trace.md Q14 适配）。
 func emitFunction(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
 	idents map[token.Pos]string, data map[domain.CanonicalID]*funcData,
-	specs map[string]summarySpec, emit domain.EmitFunc) error {
+	specs map[string]summarySpec, fallbackTotal *int, emit domain.EmitFunc) error {
 	logger := zap.L()
 	logger.Debug("enter emitFunction")
 	defer logger.Debug("exit emitFunction")
@@ -176,7 +180,7 @@ func emitFunction(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
 		fd = &funcData{}
 		data[id] = fd
 	}
-	return emitFunctionFields(repo, prog, fn, id, idents, fd, specs, emit)
+	return emitFunctionFields(repo, prog, fn, id, idents, fd, specs, fallbackTotal, emit)
 }
 
 // emitSignatureNodes 发射函数/方法签名的参数与返回节点（parameter / result）

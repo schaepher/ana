@@ -38,6 +38,14 @@ func cmdInit(ctx context.Context, args []string) int {
 		fmt.Fprintf(os.Stderr, "error: %s is not a directory\n", abs)
 		return 1
 	}
+	// go.work 检测（field_trace.md §1.3）：workspace 根或上层目录存在 go.work
+	// 且当前目录非 module 根时，提示进入具体模块目录
+	if w := findGoWork(abs); w != "" {
+		if _, err := os.Stat(filepath.Join(abs, "go.mod")); err != nil {
+			fmt.Fprintf(os.Stderr, "error: 检测到 go.work（%s）。请进入具体模块目录后运行：codeintel init --repo <模块目录>\n", w)
+			return 1
+		}
+	}
 	module, err := readGoModule(abs)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -142,4 +150,19 @@ func ensureGoEnv() error {
 		return fmt.Errorf("go not found in PATH")
 	}
 	return nil
+}
+
+// findGoWork 从目录向上（最多 4 层）查找 go.work；未找到返回空串。
+func findGoWork(dir string) string {
+	for i := 0; i < 4 && dir != "" && dir != "/"; i++ {
+		if _, err := os.Stat(filepath.Join(dir, "go.work")); err == nil {
+			return filepath.Join(dir, "go.work")
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return ""
 }

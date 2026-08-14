@@ -95,7 +95,7 @@ codeintel 已提供符号导航（SCIP）、调用图与影响分析（AST/go/pa
 1. `go/packages` 加载 workspace（复用现有 AST 适配器的加载模式，`--skip-tests` 语义一致）。
 2. `go/ssa` + `ssautil` 构建完整 SSA IR（Program/Packages/Functions），保留源映射（行号、文件路径）。
 3. 遍历 SSA 指令提取 `Field` / `FieldAddr` / `Store`，生成 `field_access` 节点与 `data_flows_to` 边。
-4. `go/pointer` 指针分析（默认精确，`--pointer-mode=quick` 回退 RTA），生成 `alias` 边。
+4. 轻量别名分析（§14.8，Q80）：过程内 may 传播 + 跨函数参数/返回直通，生成 `alias` 边与间接写排除集。
 5. 跨过程 `argument` / `returns` 边、间接写分析与 `indirect_write` 边。
 6. 内置/用户摘要应用（外部函数），生成虚拟字段节点。
 7. 预计算 `function_field_summary` 表。
@@ -373,7 +373,7 @@ codeintel/
 
 | 问题 | 策略 |
 | :--- | :--- |
-| **指针分析成本** | 默认只分析**入口可达子图**（调用图闭包）而非全程序；`--pointer-mode=quick` 回退 RTA（牺牲精度换速度） |
+| **别名分析成本** | 轻量自研（§14.8）：每函数 200 alloc 上限，超限跳过该函数；无 pointer/RTA 选项（go/pointer 已移除） |
 | **节点数量膨胀**（SSA_VALUE 每指令一个） | 仅保留参与字段访问的 `ssa_value`（def-use 链两端），与 alias 粒度一致（Q53 同思路）；全量保留会图爆炸 |
 | **SQLite 文件过大** | `code_snippet` 限长 500 字符；表达式索引而非冗余列（摘要表冗余列除外，其为查询加速设计） |
 | **递归 CTE 深度爆炸** | 深度限制（默认 8，`--max-depth` 可调）；递归 `UNION` 去重防环 |
@@ -406,7 +406,7 @@ codeintel/
 - **集成测试**：integration 套件扩展——init 构建后执行 `query fields` / `trace-backward` / `trace-forward` / `export` 端到端断言（对齐现有 TestCLIFullFlow 模式）。
 - **SQL 查询测试**：单独测试递归 CTE 在 go-sqlite3 上的正确性（深度、去重、环、深度上限）。
 - **性能基准**：入口可达子图模式下的构建时间与 DB 大小记录于 TD.md §12 补充记录。
-- **前端 e2e（playwright）**：`make e2e E2E_REPO=<仓库>`（默认 ../radar）——参数/返回展开、节点配色、字段数据流文本树、定义顺序、所属函数显示、桥边跳转等 19 项断言（e2e/field-trace-e2e.mjs）。
+- **前端 e2e（playwright）**：`make e2e E2E_REPO=<仓库>`（默认 ../radar）——参数/返回展开、节点配色、字段数据流文本树、定义顺序、所属函数显示、桥边跳转等 21 项断言（e2e/field-trace-e2e.mjs）。
 
 ---
 
@@ -538,6 +538,27 @@ SSA 语义与映射类决策全部保留：Q1（SSA_VALUE 统一建模）、Q2�
 - 单元：ssa 适配器（映射/跨过程/签名/摘要）、sqlite（递归 CTE、expand 顺序、参数代理桥边）。
 - 集成（make it）：fixture 含字段访问，覆盖 `query fields`/`trace-backward`/`trace-forward`/`export` 与 `/api/flows`、has_param/has_result 展开。
 - 前端 e2e（make e2e，playwright，19 项断言）：见 §11。
+
+### 14.9 数据值全链追踪（Q81，2026-08-14）
+
+需求：追踪一个数据在整条链路上如何被处理（以函数为上下文）。
+
+- repo.GetValueTrace：任意数据节点（field_access/ssa_value/parameter）
+  为锚点，双向遍历 data_flows_to/argument/returns/phi_operand（跨函数
+  无界），行带 func_id 供函数上下文分组。
+- CLI：`query value-trace <节点ID>`——按【函数】分组输出（方向箭头 +
+  边类型 + 节点 + [读/写] + 行号）。
+- 前端：数据节点信息栏"追踪此数据"按钮 → 函数上下文分段文本树
+  （/api/value-trace）。
+- 展示名：ssa_value 节点 name 用 instancePath 还原源码变量链
+  （局部变量/解引用/字段链），纯临时值保留 SSA 名 tN；ID 保持稳定
+  （slot 仍为 SSA 名，展示名存 name 字段）。
+
+### 14.10 已确认 backlog（非 v1 范围）
+
+- 入口可达子图优化（§9：默认只分析入口可达，当前为全 module 构建）
+- 性能基准 benchmarks/（§11：pprof 构建时间/内存记录）
+- v2 计划：MCP serve、增量更新、map/slice 元素追踪、泛型完整支持
 
 ---
 
