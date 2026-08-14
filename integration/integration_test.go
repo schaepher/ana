@@ -81,6 +81,8 @@ func setup() {
 `)
 	writeFile(t, filepath.Join(dir, "svc", "svc.go"), `package svc
 
+import "database/sql"
+
 type Service struct {
 	Name string
 }
@@ -96,6 +98,11 @@ func (s *Service) Handle() string {
 }
 
 func (s *Service) helper() {}
+
+// 持久化场景（Q97）：SQL 写操作 → 字段→表.列 映射
+func saveService(db *sql.DB, s *Service) {
+	db.Exec("INSERT INTO services(name) VALUES(?)", s.Name)
+}
 
 // 动态派发场景（Q91）：接口值调用 + 注册点（&Service{} 经 MakeInterface 传入）
 func invoke(h Handler) {
@@ -404,6 +411,19 @@ func TestCLIFullFlow(t *testing.T) {
 	//    调用点级回连（Q90）：run 的间接写展示调用点（run 调 fillParam 的行）
 	if !strings.Contains(out, "调用点") {
 		t.Errorf("run 间接写应展示调用点信息，output=%q", out)
+	}
+	//    持久化识别（Q97）：saveService 的 SQL 写 → 字段→表.列 映射
+	saveID := "symbol:go:example.com/app/svc:saveService"
+	nameNode := fieldAccessID(t, repo, saveID, "s.Name", "read")
+	if nameNode == "" {
+		t.Fatalf("saveService s.Name read node missing")
+	}
+	code, out = runCLIOut(t, "query", "value-trace", nameNode, "--repo", dir)
+	if code != 0 {
+		t.Errorf("value-trace saveService exit = %d", code)
+	}
+	if !strings.Contains(out, "services.name") {
+		t.Errorf("value-trace 应显示持久化映射 services.name，output=%q", out)
 	}
 	//    map/slice 元素追踪（Q83）：fillM 直接写元素；useMap 经 fillM 间接写
 	code, out = runCLIOut(t, "query", "fields", "symbol:go:example.com/app/svc:fillM", "--repo", dir)

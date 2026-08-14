@@ -1049,7 +1049,7 @@ func (r *Repo) GetValueTrace(nodeID domain.CanonicalID, maxDepth int) ([]*domain
     FROM edges e
     JOIN vt d ON e.target_id = d.id
     JOIN nodes n_prev ON e.source_id = n_prev.id
-    WHERE e.kind IN ('data_flows_to','argument','returns','phi_operand')
+    WHERE e.kind IN ('data_flows_to','argument','returns','phi_operand','summary_io')
       AND (d.dir = 0 OR d.depth = 0) AND d.depth < ?
     UNION
     -- 正向：从当前节点流出（使用链）
@@ -1062,7 +1062,7 @@ func (r *Repo) GetValueTrace(nodeID domain.CanonicalID, maxDepth int) ([]*domain
     FROM edges e
     JOIN vt d ON e.source_id = d.id
     JOIN nodes n_next ON e.target_id = n_next.id
-    WHERE e.kind IN ('data_flows_to','argument','returns','phi_operand')
+    WHERE e.kind IN ('data_flows_to','argument','returns','phi_operand','summary_io')
       AND (d.dir = 1 OR d.depth = 0) AND d.depth < ?
 )
 SELECT id, depth, name, edge_kinds, line, dir, kind, access, func_id, full_path FROM vt ORDER BY dir, depth, id`,

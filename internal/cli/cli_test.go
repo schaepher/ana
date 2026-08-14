@@ -183,6 +183,36 @@ func TestQueryFields(t *testing.T) {
 	}
 }
 
+// TestValueTracePersist：value-trace 经过 SQL 持久化虚拟节点
+// （Q97：字段 → 表.列 映射可见）。
+func TestValueTracePersist(t *testing.T) {
+	dir := seedFieldTrace(t)
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	r := sqlite.NewRepo(db)
+	funcID := "symbol:go:example.com/m:main"
+	val := &domain.CodeEntity{ID: domain.CanonicalID(funcID + "#u"), Kind: domain.KindSSAValue,
+		Name: "u", Properties: map[string]any{"func_id": funcID}}
+	vnode := &domain.CodeEntity{ID: domain.CanonicalID(funcID + "#ext.sql.users.name.write@9"),
+		Kind: domain.KindFieldAccess, Name: "users.name", FilePath: "main.go", LineStart: 9,
+		Properties: map[string]any{"func_id": funcID, "instance_path": "users.name",
+			"access_kind": "write", "full_path": "example.com/m.User.Name"}}
+	r.SaveBatchStats([]*domain.CodeEntity{val, vnode}, []*domain.Fact{
+		{SourceID: val.ID, TargetID: vnode.ID, Kind: domain.FactSummaryIO, ToolSource: domain.ToolSSA, Confidence: 1},
+	}, nil)
+	out := captureStdout(func() {
+		if code := cmdQuery([]string{"value-trace", string(val.ID), "--repo", dir}); code != 0 {
+			t.Errorf("value-trace exit = %d", code)
+		}
+	})
+	if !strings.Contains(out, "users.name") {
+		t.Errorf("value-trace 应显示持久化节点 users.name:\n%s", out)
+	}
+}
+
 // TestQuerySymbolCandidates：接口类型 symbol 详情展示候选实现
 // （Q95：candidates + 置信度 + 注册点）。
 func TestQuerySymbolCandidates(t *testing.T) {

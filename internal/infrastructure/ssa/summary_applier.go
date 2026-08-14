@@ -9,6 +9,7 @@ package ssa
 
 import (
 	"fmt"
+	"go/constant"
 	"go/types"
 	"os"
 	"path/filepath"
@@ -36,6 +37,9 @@ type summarySpec struct {
 	ReadsAll    bool
 	WritesAll   bool
 	ReadArgsAll bool // fmt.Printf 风格：从 ParamIndex 起所有实参读全部字段
+	SQLStmt     bool // database/sql 语句调用：SQL 字符串在第 0 实参（Q97）
+	SQLWrite    bool // Exec 写 / Query 读
+	TxBoundary  string // 事务边界标记（begin/commit/rollback，Q97）
 }
 
 // userSummaryFile 对应 field-summary.yaml。
@@ -94,7 +98,7 @@ func loadSummaries(repoPath string) (map[string]summarySpec, []string) {
 // builtinSummaries 内置摘要（field_trace.md §7.3）。
 // context.Context 为透明传递，无条目。
 func builtinSummaries() map[string]summarySpec {
-	return map[string]summarySpec{
+	specs := map[string]summarySpec{
 		"encoding/json.Unmarshal": {
 			Func: "encoding/json.Unmarshal", ParamIndex: 1,
 			WritesAll: true, // 写入 v 的所有字段（递归）
@@ -116,6 +120,20 @@ func builtinSummaries() map[string]summarySpec {
 			Reads: []string{"Form"},
 		},
 	}
+	// database/sql 持久化（Q97）：SQL 语句调用 + 事务边界。
+	// SSA 方法 ID 统一去指针接收者（(DB).Exec），值/指针接收者同表
+	for _, fn := range []string{"Exec", "Query", "QueryRow", "Prepare"} {
+		for _, recv := range []string{"(DB)", "(Tx)"} {
+			specs["database/sql."+recv+"."+fn] = summarySpec{
+				Func: "database/sql." + recv + "." + fn, ParamIndex: 1,
+				SQLStmt: true, SQLWrite: fn == "Exec",
+			}
+		}
+	}
+	specs["database/sql.(DB).Begin"] = summarySpec{Func: "database/sql.(DB).Begin", TxBoundary: "begin"}
+	specs["database/sql.(Tx).Commit"] = summarySpec{Func: "database/sql.(Tx).Commit", TxBoundary: "commit"}
+	specs["database/sql.(Tx).Rollback"] = summarySpec{Func: "database/sql.(Tx).Rollback", TxBoundary: "rollback"}
+	return specs
 }
 
 // summaryApplier 在单个函数内应用摘要（emitCall 调用）。
@@ -161,6 +179,14 @@ func (ext *fieldExtractor) applySummary(cc *ssa.CallCommon, callee *ssa.Function
 		}}); err != nil {
 			return true, err
 		}
+	}
+	// SQL 持久化（Q97）：SQL 字符串解析表列 + 值实参映射
+	if spec.SQLStmt {
+		return true, ext.applySQLSummary(cc, calleeID, spec)
+	}
+	// 事务边界（Q97）：Begin/Commit/Rollback → 事务虚拟节点
+	if spec.TxBoundary != "" {
+		return true, ext.applyTxBoundary(cc, calleeID, spec.TxBoundary)
 	}
 	// 逐参数应用
 	start := spec.ParamIndex
@@ -405,4 +431,171 @@ func variadicElems(v ssa.Value) []ssa.Value {
 		return out
 	}
 	return []ssa.Value{v}
+}
+
+// applySQLSummary 处理 SQL 语句调用（Q97）：SQL 字符串（第 0 实参）解析
+// 表名与列名 → 虚拟节点（Name=表.列）；后续值实参按 ? 顺序映射列，
+// 发 summary_io 边（字段值 → 虚拟节点）。
+func (ext *fieldExtractor) applySQLSummary(cc *ssa.CallCommon, calleeID domain.CanonicalID, spec summarySpec) error {
+	logger := zap.L()
+	logger.Debug("enter (fieldExtractor).applySQLSummary")
+	defer logger.Debug("exit (fieldExtractor).applySQLSummary")
+	// args[0] 为接收者（db）；SQL 字符串在 args[1]，值实参（...any）在 args[2:]
+	if len(cc.Args) < 2 {
+		return nil
+	}
+	sqlStr := ""
+	if c, ok := cc.Args[1].(*ssa.Const); ok && c.Value != nil {
+		sqlStr = constant.StringVal(c.Value)
+	}
+	table, cols := parseSQLStmt(sqlStr)
+	line := ext.prog.Fset.PositionFor(cc.Pos(), false).Line
+	access := "write"
+	if !spec.SQLWrite {
+		access = "read"
+	}
+	// 虚拟节点：表.列（无列时表）；值实参（variadic 解包）按 ? 顺序映射列
+	values := []ssa.Value{}
+	for i := 2; i < len(cc.Args); i++ {
+		values = append(values, variadicElems(cc.Args[i])...)
+	}
+	for i, arg := range values {
+		col := ""
+		if i < len(cols) {
+			col = cols[i]
+		}
+		name := table
+		if col != "" {
+			name = table + "." + col
+		}
+		if name == "" {
+			continue
+		}
+		realArg := arg
+		if mi, ok := arg.(*ssa.MakeInterface); ok {
+			realArg = mi.X
+		}
+		argID, err := ext.emitValue(realArg)
+		if err != nil || argID == "" {
+			continue
+		}
+		id := domain.CanonicalID(string(ext.funcID) + "#ext.sql." + name + "." + access + "@" + fmt.Sprintf("%d", line))
+		if err := ext.emit(domain.Item{Node: &domain.CodeEntity{
+			ID:        id,
+			Kind:      domain.KindFieldAccess,
+			Name:      name,
+			FilePath:  ext.currentFile,
+			LineStart: line,
+			Properties: map[string]any{
+				"full_path":     name,
+				"instance_path": name,
+				"access_kind":   access,
+				"code_snippet":  sqlStr,
+				"type_string":   "sql",
+				"func_id":       string(ext.funcID),
+			},
+		}}); err != nil {
+			return err
+		}
+		if err := ext.emitEdgeKind(argID, id, domain.FactSummaryIO); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// applyTxBoundary 事务边界（Q97）：Begin/Commit/Rollback → 事务虚拟节点
+// （Name=sql.tx.<boundary>），标注事务边界位置。
+func (ext *fieldExtractor) applyTxBoundary(cc *ssa.CallCommon, calleeID domain.CanonicalID, boundary string) error {
+	logger := zap.L()
+	logger.Debug("enter (fieldExtractor).applyTxBoundary")
+	defer logger.Debug("exit (fieldExtractor).applyTxBoundary")
+	line := ext.prog.Fset.PositionFor(cc.Pos(), false).Line
+	name := "sql.tx." + boundary
+	id := domain.CanonicalID(string(ext.funcID) + "#ext." + name + "@" + fmt.Sprintf("%d", line))
+	return ext.emit(domain.Item{Node: &domain.CodeEntity{
+		ID:        id,
+		Kind:      domain.KindFieldAccess,
+		Name:      name,
+		FilePath:  ext.currentFile,
+		LineStart: line,
+		Properties: map[string]any{
+			"full_path":     name,
+			"instance_path": name,
+			"access_kind":   "write",
+			"type_string":   "tx",
+			"func_id":       string(ext.funcID),
+		},
+	}})
+}
+
+// parseSQLStmt 从 SQL 语句提取表名与列名（Q97 启发式，不做完整 SQL 解析）：
+//   INSERT INTO t(a, b) VALUES(?, ?)  → t, [a b]
+//   UPDATE t SET a=?, b=?             → t, [a b]
+//   DELETE FROM t / SELECT ... FROM t → t, []
+func parseSQLStmt(sql string) (table string, cols []string) {
+	upper := strings.ToUpper(sql)
+	rest := ""
+	switch {
+	case strings.Contains(upper, "INSERT INTO"):
+		rest = sql[strings.Index(upper, "INSERT INTO")+len("INSERT INTO"):]
+	case strings.Contains(upper, "UPDATE"):
+		rest = sql[strings.Index(upper, "UPDATE")+len("UPDATE"):]
+	case strings.Contains(upper, "DELETE FROM"):
+		rest = sql[strings.Index(upper, "DELETE FROM")+len("DELETE FROM"):]
+	case strings.Contains(upper, " FROM "):
+		rest = sql[strings.Index(upper, " FROM ")+len(" FROM "):]
+	default:
+		return "", nil
+	}
+	rest = strings.TrimSpace(rest)
+	// 表名：到空白 / ( / 结束
+	tableEnd := len(rest)
+	for i := 0; i < len(rest); i++ {
+		if rest[i] == '(' || rest[i] == ' ' || rest[i] == '\t' || rest[i] == '\n' || rest[i] == ';' {
+			tableEnd = i
+			break
+		}
+	}
+	table = strings.TrimSpace(rest[:tableEnd])
+	table = strings.Trim(table, "`\"[]")
+	if table == "" {
+		return "", nil
+	}
+	// 列：INSERT 的 (a, b) 或 UPDATE 的 SET a=?
+	after := strings.TrimSpace(rest[tableEnd:])
+	if strings.HasPrefix(after, "(") {
+		// INSERT INTO t(a, b)
+		inner := after[1:]
+		if i := strings.Index(inner, ")"); i >= 0 {
+			inner = inner[:i]
+		}
+		for _, c := range strings.Split(inner, ",") {
+			c = strings.TrimSpace(c)
+			c = strings.Trim(c, "`\"[]")
+			if c != "" {
+				cols = append(cols, c)
+			}
+		}
+	} else if strings.Contains(upper, " SET ") {
+		// UPDATE t SET a=?, b=?
+		up := strings.ToUpper(rest)
+		if i := strings.Index(up, " SET "); i >= 0 {
+			setPart := rest[i+len(" SET "):]
+			if j := strings.Index(setPart, " WHERE"); j >= 0 {
+				setPart = setPart[:j]
+			}
+			for _, c := range strings.Split(setPart, ",") {
+				c = strings.TrimSpace(c)
+				if k := strings.Index(c, "="); k >= 0 {
+					c = strings.TrimSpace(c[:k])
+					c = strings.Trim(c, "`\"[]")
+					if c != "" {
+						cols = append(cols, c)
+					}
+				}
+			}
+		}
+	}
+	return table, cols
 }
