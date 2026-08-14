@@ -99,15 +99,8 @@ export function renderNodePanel(data) {
   REL_ORDER.concat(restOrder).forEach(function (kind) {
     var items = byKind[kind];
     if (!items || !items.length) return;
-    if (kind === 'calls') {
-      // 调用拆分为 caller/callee 两组：出=该节点调用（callee），
-      // 入=调用该节点（caller）；caller（被调用）在上，与图布局一致
-      var out = items.filter(function (g) { return g.dir === '出'; });
-      var inn = items.filter(function (g) { return g.dir === '入'; });
-      if (inn.length) { state.panelGroupNodes[gi] = inn.map(function (g) { return g.id; }); html.push(relGroupHtml('被调用（' + inn.length + '）', inn, gi++)); }
-      if (out.length) { state.panelGroupNodes[gi] = out.map(function (g) { return g.id; }); html.push(relGroupHtml('调用（' + out.length + '）', out, gi++)); }
-      return;
-    }
+    if (kind === 'calls') return; // 调用分组最后渲染（被调用/调用置底）
+
     if (kind === 'has_method') {
       // 方法线（接收者 → 方法）按视角分组：struct 节点视角=出边
       // （它的方法们），方法节点视角=入边（指向它的接收者）
@@ -130,6 +123,15 @@ export function renderNodePanel(data) {
     state.panelGroupNodes[gi] = items.map(function (g) { return g.id; });
     html.push(relGroupHtml((EDGE_KIND_LABEL[kind] || kind) + '（' + items.length + '）', items, gi++));
   });
+  // 调用分组置底：在所有关系分组之后渲染。出=该节点调用（callee），
+  // 入=调用该节点（caller）；组内 caller（被调用）在上，与图布局一致
+  var callItems = byKind['calls'];
+  if (callItems && callItems.length) {
+    var out = callItems.filter(function (g) { return g.dir === '出'; });
+    var inn = callItems.filter(function (g) { return g.dir === '入'; });
+    if (inn.length) { state.panelGroupNodes[gi] = inn.map(function (g) { return g.id; }); html.push(relGroupHtml('被调用（' + inn.length + '）', inn, gi++)); }
+    if (out.length) { state.panelGroupNodes[gi] = out.map(function (g) { return g.id; }); html.push(relGroupHtml('调用（' + out.length + '）', out, gi++)); }
+  }
 
   state.panelBody.innerHTML = html.join('');
 }
