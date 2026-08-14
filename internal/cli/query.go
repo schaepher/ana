@@ -34,7 +34,7 @@ func cmdQuery(args []string) int {
 	logger.Debug("enter cmdQuery")
 	defer logger.Debug("exit cmdQuery")
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "error: query 需要一个子命令（symbol/fields/trace-backward/trace-forward/value-trace/callers/callees/impact）")
+		fmt.Fprintln(os.Stderr, "error: query 需要一个子命令（symbol/fields/trace-backward/trace-forward/value-trace/summary/path/unused/callers/callees/impact）")
 		return 2
 	}
 	sub := args[0]
@@ -69,11 +69,17 @@ func cmdQuery(args []string) int {
 	acts := action.New(sqlite.NewRepo(db))
 
 	opts := outputOpts{json: f.json, compact: f.compact}
+	// --since 标注（§17.2）：symbol/fields/callers/callees/impact 输出
+	// 对函数/方法节点标注 [new]/[mod]
+	var since *domain.SinceInfo
+	if f.since != "" {
+		since = runGitDiffSince(abs, f.since)
+	}
 	switch sub {
 	case "symbol":
-		return querySymbol(acts, target, opts)
+		return querySymbol(acts, target, opts, since)
 	case "fields":
-		return queryFields(acts, target, opts)
+		return queryFields(acts, target, opts, since)
 	case "trace-backward", "trace-forward":
 		return queryTraceDir(acts, target, f.funcPath, f.maxDepth, sub == "trace-forward", opts)
 	case "value-trace":
@@ -82,6 +88,8 @@ func cmdQuery(args []string) int {
 		return querySummary(acts, target, opts, f.format)
 	case "unused":
 		return queryUnused(acts, abs, f)
+	case "path":
+		return queryPath(acts, f.positional[0], f.positional[1], f)
 	case "callers", "callees", "impact":
 		d := f.depth
 		if d <= 0 {
@@ -92,7 +100,7 @@ func cmdQuery(args []string) int {
 				d = 1
 			}
 		}
-		return queryGraph(acts, sub, target, d, opts)
+		return queryGraph(acts, sub, target, d, opts, since)
 	default:
 		fmt.Fprintf(os.Stderr, "error: unknown query subcommand %q\n", sub)
 		return 2
@@ -172,7 +180,7 @@ func parseQueryFlags(args []string) queryFlags {
 
 // queryFields 输出函数的字段读写摘要（S1，field_trace.md §6.2），
 // 按 direct_read / direct_write / indirect_write 分组。
-func queryFields(acts *action.Actions, input string, opts outputOpts) int {
+func queryFields(acts *action.Actions, input string, opts outputOpts, since *domain.SinceInfo) int {
 	logger := zap.L()
 	logger.Debug("enter queryFields")
 	defer logger.Debug("exit queryFields")
@@ -196,7 +204,7 @@ func queryFields(acts *action.Actions, input string, opts outputOpts) int {
 		encodeJSON(map[string]any{"name": n.Name, "rows": jrows})
 		return 0
 	}
-	fmt.Printf("字段读写（%s）:\n", n.Name)
+	fmt.Printf("字段读写（%s%s）:\n", n.Name, sinceFlag(n, since))
 	if len(rows) == 0 {
 		fmt.Println("  无字段访问（SSA 字段追溯未产出，或该函数无字段读写）")
 		return 0
@@ -318,8 +326,37 @@ func lastEdgeKind(kinds string) string {
 	return kinds
 }
 
+// sinceFlag 函数/方法节点的 --since 标注（§17.2）：[new]/[mod]/空。
+func sinceFlag(n *domain.CodeEntity, since *domain.SinceInfo) string {
+	if since == nil || (n.Kind != domain.KindFunction && n.Kind != domain.KindMethod) {
+		return ""
+	}
+	if m := action.MarkSince(n.FilePath, n.LineStart, n.LineEnd, since); m != "" {
+		return " [" + m + "]"
+	}
+	return ""
+}
+
+// sinceMarks 对 ID 列表批量计算 --since 标注（callers/callees 邻居用）。
+func sinceMarks(acts *action.Actions, ids []domain.CanonicalID, since *domain.SinceInfo) map[string]string {
+	out := map[string]string{}
+	if since == nil {
+		return out
+	}
+	for _, id := range ids {
+		n, err := acts.Symbol(id)
+		if err != nil || (n.Kind != domain.KindFunction && n.Kind != domain.KindMethod) {
+			continue
+		}
+		if m := action.MarkSince(n.FilePath, n.LineStart, n.LineEnd, since); m != "" {
+			out[string(id)] = m
+		}
+	}
+	return out
+}
+
 // querySymbol 输出符号摘要（对齐 TD.md 7.1 explore_symbol 摘要层）。
-func querySymbol(acts *action.Actions, input string, opts outputOpts) int {
+func querySymbol(acts *action.Actions, input string, opts outputOpts, since *domain.SinceInfo) int {
 	logger := zap.L()
 	logger.Debug("enter querySymbol")
 	defer logger.Debug("exit querySymbol")
@@ -363,7 +400,7 @@ func querySymbol(acts *action.Actions, input string, opts outputOpts) int {
 		return 0
 	}
 	fmt.Printf("ID:         %s\n", n.ID)
-	fmt.Printf("名称:       %s\n", n.Name)
+	fmt.Printf("名称:       %s%s\n", n.Name, sinceFlag(n, since))
 	fmt.Printf("种类:       %s\n", n.Kind)
 	if n.FilePath != "" {
 		fmt.Printf("文件:       %s", n.FilePath)
@@ -382,13 +419,23 @@ func querySymbol(acts *action.Actions, input string, opts outputOpts) int {
 	fmt.Printf("被调用数:   %d\n", len(d.Callees))
 
 	// 详情层：列出调用者与被调用者（上限 50，TD.md 7.1）
+	callerIDs := make([]domain.CanonicalID, 0, len(d.Callers))
+	for _, f := range d.Callers {
+		callerIDs = append(callerIDs, f.SourceID)
+	}
+	calleeIDs := make([]domain.CanonicalID, 0, len(d.Callees))
+	for _, f := range d.Callees {
+		calleeIDs = append(calleeIDs, f.TargetID)
+	}
+	callerMarks := sinceMarks(acts, callerIDs, since)
+	calleeMarks := sinceMarks(acts, calleeIDs, since)
 	if len(d.Callers) > 0 {
 		fmt.Println("调用者:")
-		printFacts(d.Callers, "source", 50)
+		printFacts(d.Callers, "source", 50, callerMarks)
 	}
 	if len(d.Callees) > 0 {
 		fmt.Println("被调用者:")
-		printFacts(d.Callees, "target", 50)
+		printFacts(d.Callees, "target", 50, calleeMarks)
 	}
 	// 动态派发候选（Q95）：接口类型的候选实现 + 置信度 + 注册点
 	if len(dispatch) > 0 {
@@ -410,7 +457,7 @@ func querySymbol(acts *action.Actions, input string, opts outputOpts) int {
 }
 
 // queryGraph 输出 callers/callees/impact 查询结果。
-func queryGraph(acts *action.Actions, sub, input string, depth int, opts outputOpts) int {
+func queryGraph(acts *action.Actions, sub, input string, depth int, opts outputOpts, since *domain.SinceInfo) int {
 	logger := zap.L()
 	logger.Debug("enter queryGraph")
 	defer logger.Debug("exit queryGraph")
@@ -453,16 +500,18 @@ func queryGraph(acts *action.Actions, sub, input string, depth int, opts outputO
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			return 1
 		}
+		marks := sinceMarks(acts, factEndpointIDs(facts, "source"), since)
 		fmt.Printf("调用者（深度 %d，置信度 ≥%.2f）: %d 个\n", depth, action.MinConfidence, len(facts))
-		printFacts(facts, "source", 100)
+		printFacts(facts, "source", 100, marks)
 	case "callees":
 		facts, err := acts.Callees(n.ID, depth)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			return 1
 		}
+		marks := sinceMarks(acts, factEndpointIDs(facts, "target"), since)
 		fmt.Printf("被调用者（深度 %d，置信度 ≥%.2f）: %d 个\n", depth, action.MinConfidence, len(facts))
-		printFacts(facts, "target", 100)
+		printFacts(facts, "target", 100, marks)
 	case "impact":
 		nodes, err := acts.Impact(n.ID, depth)
 		if err != nil {
@@ -473,6 +522,19 @@ func queryGraph(acts *action.Actions, sub, input string, depth int, opts outputO
 		printNodes(nodes)
 	}
 	return 0
+}
+
+// factEndpointIDs 提取边的端点 ID 列表（--since 标注用）。
+func factEndpointIDs(facts []*domain.Fact, endpoint string) []domain.CanonicalID {
+	out := make([]domain.CanonicalID, 0, len(facts))
+	for _, f := range facts {
+		if endpoint == "target" {
+			out = append(out, f.TargetID)
+		} else {
+			out = append(out, f.SourceID)
+		}
+	}
+	return out
 }
 
 // factIDs 提取边的端点 ID 列表（endpoint=source/target，JSON 输出用）。
@@ -509,7 +571,7 @@ func nodeBriefs(nodes []*domain.CodeEntity) []map[string]any {
 
 // printFacts 打印边列表；endpoint 为 "source" 时显示边左端（调用者场景），
 // 否则显示右端（被调用者场景）。
-func printFacts(facts []*domain.Fact, endpoint string, limit int) {
+func printFacts(facts []*domain.Fact, endpoint string, limit int, marks map[string]string) {
 	logger := zap.L()
 	logger.Debug("enter printFacts")
 	defer logger.Debug("exit printFacts")
@@ -522,7 +584,11 @@ func printFacts(facts []*domain.Fact, endpoint string, limit int) {
 		if endpoint == "target" {
 			id = f.TargetID
 		}
-		fmt.Printf("  %s  (%s, conf=%.2f)\n", shortID(id), f.ToolSource, f.Confidence)
+		flag := ""
+		if m, ok := marks[string(id)]; ok {
+			flag = " [" + m + "]"
+		}
+		fmt.Printf("  %s%s  (%s, conf=%.2f)\n", shortID(id), flag, f.ToolSource, f.Confidence)
 	}
 	if truncated {
 		fmt.Printf("  ...（已截断，共 %d 条）\n", len(facts)+1)

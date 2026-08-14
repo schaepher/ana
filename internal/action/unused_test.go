@@ -108,3 +108,86 @@ func TestActionsUnused(t *testing.T) {
 		t.Errorf("hook 未改动不应出现在 --since 报告: %+v", u)
 	}
 }
+
+// TestActionsPath：query path 锚点解析与路径（field_trace.md §17.3）。
+func TestActionsPath(t *testing.T) {
+	dir := t.TempDir()
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	r := sqlite.NewRepo(db)
+
+	f := func(id, name string, line int) *domain.CodeEntity {
+		return &domain.CodeEntity{
+			ID: domain.CanonicalID(id), Kind: domain.KindFunction, Name: name,
+			FilePath: "main.go", LineStart: line,
+		}
+	}
+	nodes := []*domain.CodeEntity{
+		f("symbol:go:example.com/m:a", "a", 5),
+		f("symbol:go:example.com/m:b", "b", 10),
+		f("symbol:go:example.com/m:c", "c", 15),
+	}
+	edges := []*domain.Fact{
+		{SourceID: "symbol:go:example.com/m:a", TargetID: "symbol:go:example.com/m:b",
+			Kind: domain.FactCalls, ToolSource: domain.ToolCodeGraph, Confidence: 0.8},
+		{SourceID: "symbol:go:example.com/m:b", TargetID: "symbol:go:example.com/m:c",
+			Kind: domain.FactCalls, ToolSource: domain.ToolCodeGraph, Confidence: 0.8},
+	}
+	if _, err := r.SaveBatchStats(nodes, edges, nil); err != nil {
+		t.Fatal(err)
+	}
+	a := New(r)
+
+	// 名称解析 + calls 边集
+	path, err := a.Path("a", "c", 50, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(path) != 3 || string(path[0].ID) != "symbol:go:example.com/m:a" ||
+		string(path[2].ID) != "symbol:go:example.com/m:c" {
+		t.Errorf("path = %+v", path)
+	}
+	// 不可达（数据流边集下无路径）
+	path2, err := a.Path("a", "c", 50, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(path2) != 0 {
+		t.Errorf("数据流边集下不可达: %+v", path2)
+	}
+	// 不存在符号 → 错误
+	if _, err := a.Path("nope", "c", 50, true); err == nil {
+		t.Error("不存在符号应报错")
+	}
+}
+
+// TestMarkSince：--since 标注纯函数（new/mod/空 + 新增文件）。
+func TestMarkSince(t *testing.T) {
+	since := &domain.SinceInfo{
+		Ref: "HEAD",
+		NewFiles: map[string]bool{"new.go": true},
+		AddedLines: map[string]map[int]bool{
+			"main.go": {5: true, 11: true},
+		},
+	}
+	cases := []struct {
+		file  string
+		start int
+		end   int
+		want  string
+	}{
+		{"main.go", 5, 7, "new"},    // 声明行命中新增行
+		{"main.go", 10, 12, "mod"},  // 区间命中 11
+		{"main.go", 20, 22, ""},     // 未改动
+		{"new.go", 1, 1, "new"},     // 新增文件
+		{"other.go", 1, 1, ""},      // 未变更文件
+	}
+	for _, c := range cases {
+		if got := MarkSince(c.file, c.start, c.end, since); got != c.want {
+			t.Errorf("MarkSince(%s,%d,%d) = %q, want %q", c.file, c.start, c.end, got, c.want)
+		}
+	}
+}

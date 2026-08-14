@@ -36,6 +36,7 @@ type Reader interface {
 	FindFieldReads(fullPath string) ([]*domain.CodeEntity, error)
 	GetUncalledFunctions() ([]*domain.UnusedFunc, error)
 	GetIsolatedChains() ([][]*domain.UnusedFunc, error)
+	GetPath(from, to domain.CanonicalID, maxDepth int, viaCalls bool) ([]*domain.TraceRow, error)
 	Counts() (nodes int, edges int, err error)
 	GetLatest() (*domain.BuildMeta, error)
 	RepoPath() string
@@ -468,6 +469,21 @@ func shortFuncNameX(id string) string {
 	return id
 }
 
+// Path 节点间最短路径（field_trace.md §17.3）：两端经 ResolveAnchor
+// 解析（canonical ID / 符号名 / 字段路径）；viaCalls=true 用函数调用
+// 边集，否则数据流边集。不可达返回空切片。
+func (a *Actions) Path(from, to string, maxDepth int, viaCalls bool) ([]*domain.TraceRow, error) {
+	fID, err := a.ResolveAnchor(from)
+	if err != nil {
+		return nil, err
+	}
+	tID, err := a.ResolveAnchor(to)
+	if err != nil {
+		return nil, err
+	}
+	return a.repo.GetPath(fID, tID, maxDepth, viaCalls)
+}
+
 // UnusedReport 未调用分析报告（field_trace.md §16.4）。
 type UnusedReport struct {
 	Unused []*domain.UnusedFunc   // 未调用函数（--since 时只含 [new]/[mod]）
@@ -522,26 +538,32 @@ func (a *Actions) Unused(since *domain.SinceInfo) (*UnusedReport, error) {
 	return rep, nil
 }
 
-// sinceMark 标注函数在 --since 中的状态：new（声明行新增）/
-// mod（行号区间命中新增行）/ ""（未改动）。新增文件内全部函数标 new。
-func sinceMark(u *domain.UnusedFunc, since *domain.SinceInfo) string {
-	if since.NewFiles[u.FilePath] {
+// MarkSince 标注函数在 --since 中的状态：new（声明行命中 diff 新增行或
+// 新增文件）/ mod（行号区间命中新增行）/ ""（未改动）。纯函数，
+// UnusedFunc 与 CodeEntity（--since 标注推广，§17.2）共用。
+func MarkSince(file string, start, end int, since *domain.SinceInfo) string {
+	if since.NewFiles[file] {
 		return "new"
 	}
-	added := since.AddedLines[u.FilePath]
+	added := since.AddedLines[file]
 	if len(added) == 0 {
 		return ""
 	}
-	if added[u.LineStart] {
+	if added[start] {
 		return "new"
 	}
-	if u.LineEnd < u.LineStart {
-		u.LineEnd = u.LineStart
+	if end < start {
+		end = start
 	}
-	for l := u.LineStart; l <= u.LineEnd; l++ {
+	for l := start; l <= end; l++ {
 		if added[l] {
 			return "mod"
 		}
 	}
 	return ""
+}
+
+// sinceMark UnusedFunc 版（--since 标注）。
+func sinceMark(u *domain.UnusedFunc, since *domain.SinceInfo) string {
+	return MarkSince(u.FilePath, u.LineStart, u.LineEnd, since)
 }

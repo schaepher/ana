@@ -783,3 +783,47 @@ codeintel query unused [--since <ref>] [--json|--compact] [--fail-on unused|isol
 
 function + method 参与报告；interface 方法不单独报（接口是契约不是实现）；
 struct/package/file 节点不参与。
+
+---
+
+## 17. --since 标注推广与节点间路径查询（Q115–Q120，2026-08-14）
+
+### 17.1 背景（Q115）
+
+AGENT 检查新业务需求实现的工作流分析：`query unused --since` 已覆盖
+"本次改动的函数调用情况"；另有三个高频检查——① 需求涉及的函数在
+其他查询中无法一眼看出哪些是本次新增/修改；② "数据应从 A 到达 B"
+（需求数据流断言）需人工判读 value-trace 输出。本节省此补两项：
+**--since 标注推广** 与 **query path**。
+
+### 17.2 --since 标注推广（Q116–Q117）
+
+- `--since <ref>` 从 unused 推广到 `query symbol / fields / callers /
+  callees / impact`：**输出标注而非过滤**（不改变查询语义，追溯链不
+  因标注断链）
+- 标注对象：输出中的**函数/方法节点**（symbol 详情头部、callers/callees/
+  impact 的邻居列表、fields 的头部）——`[new]`（声明行命中 diff 新增行 /
+  新增文件）/ `[mod]`（行号区间命中新增行）
+- 实现：gitdiff 解析（§16.5）复用；标注判定 `MarkSince(file, start, end,
+  since)` 为纯函数（UnusedFunc 与 CodeEntity 共用）
+- trace/value-trace/summary（行级输出，节点是字段访问/ssa_value）不做
+  标注——函数上下文标注价值低、侵入大
+
+### 17.3 query path：节点间路径查询（Q118–Q120）
+
+```
+codeintel query path <from> <to> [--max-depth N] [--kind data|calls] [--json] --repo <path>
+```
+
+- 输入：两端节点（canonical ID / 符号名 / 字段路径——ResolveAnchor 解析）
+- 语义：BFS 最短路径（有向 from→to）；防环（visited 天然）；深度上限
+  --max-depth（默认 50）；不可达输出"无路径"（退出码 0，--json 空 paths）
+- 边集：
+  - `--kind data`（默认）：data_flows_to / argument / returns /
+    phi_operand / summary_io——字段级数据流（"值是否真的到达"）
+  - `--kind calls`：calls / passes_to / passes_result——函数调用关系
+    （"调用链是否连通"）
+- 输出：路径节点序列（节点 + 边类型 + 行号）与路径长度；--json
+  `{path: [...], length: N, reachable: bool}`
+- 用途：需求断言"X 的值应到达 Y"——AGENT 直接判定 reachable，替代
+  人工判读 value-trace

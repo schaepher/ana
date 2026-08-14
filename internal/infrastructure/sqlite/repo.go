@@ -1590,3 +1590,110 @@ func (r *Repo) GetIsolatedChains() ([][]*domain.UnusedFunc, error) {
 	}
 	return chains, nil
 }
+
+// GetPath 节点间最短路径（field_trace.md §17.3）：
+// BFS（有向 from→to，visited 防环），返回路径节点序列（TraceRow，
+// EdgeKinds = 进入该节点的边类型）。viaCalls=true 用函数调用边集
+// （calls/passes_to/passes_result），否则数据流边集（data_flows_to/
+// argument/returns/phi_operand/summary_io）。不可达返回空切片。
+func (r *Repo) GetPath(from, to domain.CanonicalID, maxDepth int, viaCalls bool) ([]*domain.TraceRow, error) {
+	logger := zap.L()
+	logger.Debug("enter (Repo).GetPath")
+	defer logger.Debug("exit (Repo).GetPath")
+	if from == to {
+		// 起终点相同：单节点路径
+		n, err := r.GetSymbol(from)
+		if err != nil {
+			return nil, err
+		}
+		return []*domain.TraceRow{{ID: from, Name: n.Name, Kind: n.Kind, Line: n.LineStart}}, nil
+	}
+	kinds := `'data_flows_to','argument','returns','phi_operand','summary_io'`
+	if viaCalls {
+		kinds = `'calls','passes_to','passes_result'`
+	}
+	rows, err := r.Query(`SELECT source_id, target_id, kind FROM edges WHERE kind IN (`+kinds+`)`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	// 邻接表 + 边类型
+	type edge struct {
+		to   domain.CanonicalID
+		kind string
+	}
+	adj := map[domain.CanonicalID][]edge{}
+	for rows.Next() {
+		var s, t, k string
+		if err := rows.Scan(&s, &t, &k); err != nil {
+			return nil, err
+		}
+		adj[domain.CanonicalID(s)] = append(adj[domain.CanonicalID(s)], edge{domain.CanonicalID(t), k})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// BFS
+	parent := map[domain.CanonicalID]struct {
+		prev domain.CanonicalID
+		kind string
+	}{}
+	queue := []domain.CanonicalID{from}
+	visited := map[domain.CanonicalID]bool{from: true}
+	found := false
+	for len(queue) > 0 && !found {
+		cur := queue[0]
+		queue = queue[1:]
+		for _, e := range adj[cur] {
+			if visited[e.to] {
+				continue
+			}
+			visited[e.to] = true
+			parent[e.to] = struct {
+				prev domain.CanonicalID
+				kind string
+			}{cur, e.kind}
+			if e.to == to {
+				found = true
+				break
+			}
+			if len(parent) <= maxDepth {
+				queue = append(queue, e.to)
+			}
+		}
+	}
+	if !found {
+		return nil, nil
+	}
+	// 回溯路径
+	var ids []domain.CanonicalID
+	var kindsPath []string
+	for cur := to; cur != from; {
+		ids = append(ids, cur)
+		p := parent[cur]
+		kindsPath = append(kindsPath, p.kind)
+		cur = p.prev
+	}
+	ids = append(ids, from)
+	// 反向（kindsPath 长度 = ids-1，须分开反转）
+	for i, j := 0, len(ids)-1; i < j; i, j = i+1, j-1 {
+		ids[i], ids[j] = ids[j], ids[i]
+	}
+	for i, j := 0, len(kindsPath)-1; i < j; i, j = i+1, j-1 {
+		kindsPath[i], kindsPath[j] = kindsPath[j], kindsPath[i]
+	}
+	// 组装（节点信息从 DB 查）
+	out := make([]*domain.TraceRow, 0, len(ids))
+	for i, id := range ids {
+		n, err := r.GetSymbol(id)
+		if err != nil {
+			continue
+		}
+		row := &domain.TraceRow{ID: id, Name: n.Name, Kind: n.Kind, Line: n.LineStart}
+		if i > 0 {
+			row.EdgeKinds = kindsPath[i-1]
+		}
+		out = append(out, row)
+	}
+	return out, nil
+}
