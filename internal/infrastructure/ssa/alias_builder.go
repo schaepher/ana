@@ -422,6 +422,11 @@ func (p *aliasPass) writeInfoOf(fn *ssa.Function) *calleeWritesInfo {
 				if !isSliceLike(v.X.Type()) || v.Referrers() == nil {
 					continue
 				}
+				// lifting 数组字面量（[]T{...}）无源码位置：字面量初始化不是
+				// 元素访问，跳过（与 fieldExtractor 第一遍一致）
+				if p.prog.Fset.PositionFor(v.Pos(), false).Line == 0 {
+					continue
+				}
 				for _, ref := range *v.Referrers() {
 					if st, ok2 := ref.(*ssa.Store); ok2 && st.Addr == v {
 						if path, ok3 := p.elementWritePath(v.X, v.Index); ok3 {

@@ -292,6 +292,107 @@ func nodeByID(t *testing.T, nodes []*domain.CodeEntity, id string) *domain.CodeE
 	return nil
 }
 
+func TestFieldNestedReadPropagates(t *testing.T) {
+	// 嵌套字段链 m.cfg.APIKey 读：内层 m.cfg 的用途从外层传播——
+	// 读链上的中间层是 read，不是"无用途默认 write"（误报写会污染
+	// 间接写摘要：newLLM 只读 cfg 却出现 direct_write Manager.cfg）
+	nodes, facts := indexFixture(t, map[string]string{
+		"go.mod":  moduleGoMod,
+		"main.go": `package m
+
+type Config struct {
+	APIKey string
+}
+
+type Manager struct {
+	cfg Config
+}
+
+func newLLM(m *Manager) {
+	if m.cfg.APIKey == "" {
+		return
+	}
+	_ = m.cfg.APIKey
+}
+`,
+	})
+	funcID := "symbol:go:example.com/mtest:newLLM"
+	// 内层 m.cfg：read 节点（跟随外层读），不产生 write 节点
+	findFieldAccess(t, nodes, funcID, "m.cfg", "read")
+	ids := []string{}
+	for _, n := range nodes {
+		if n.Kind == domain.KindFieldAccess && n.Property("func_id") == funcID &&
+			n.Property("instance_path") == "m.cfg" && n.Property("access_kind") == "write" {
+			ids = append(ids, string(n.ID))
+		}
+	}
+	if len(ids) != 0 {
+		t.Errorf("m.cfg write nodes = %v, want none（读链中间层不应标写）", ids)
+	}
+	// 最外层 m.cfg.APIKey：read
+	findFieldAccess(t, nodes, funcID, "m.cfg.APIKey", "read")
+	// 数据流链完整（基值 → 内层字段节点 → 外层字段节点）：
+	// 内层 m.cfg 节点的入边来自参数 m，出边指向外层 m.cfg.APIKey
+	inner := findFieldAccess(t, nodes, funcID, "m.cfg", "read")
+	outer := findFieldAccess(t, nodes, funcID, "m.cfg.APIKey", "read")
+	paramM := findSSAValue(t, nodes, funcID, "m")
+	for _, f := range factsFrom(facts, string(paramM.ID)) {
+		if f.TargetID == inner.ID {
+			goto innerLinked
+		}
+	}
+	t.Error("参数 m → 内层 m.cfg 边缺失")
+innerLinked:
+	for _, f := range factsFrom(facts, string(inner.ID)) {
+		if f.TargetID == outer.ID {
+			return
+		}
+	}
+	t.Error("内层 m.cfg → 外层 m.cfg.APIKey 边缺失（平行 ssa_value 链应已合并）")
+}
+
+func TestElementLiteralInitFiltered(t *testing.T) {
+	// []T{...} 字面量 lifting（*[N]T 数组，无源码位置）：字面量初始化
+	// 不是元素访问，不产节点（opts[0] 噪音）
+	nodes, _ := indexFixture(t, map[string]string{
+		"go.mod":  moduleGoMod,
+		"main.go": `package m
+
+type Option struct{ V int }
+
+func f() {
+	opts := []Option{{V: 1}, {V: 2}}
+	_ = opts
+}
+`,
+	})
+	funcID := "symbol:go:example.com/mtest:f"
+	for _, n := range nodes {
+		if n.Kind == domain.KindFieldAccess && n.Property("func_id") == funcID &&
+			strings.Contains(n.Property("instance_path"), "[") {
+			t.Errorf("字面量初始化不应产元素节点: %v", n.Property("instance_path"))
+		}
+	}
+}
+
+func TestElementArrayVarKept(t *testing.T) {
+	// 真数组变量 a[0] = 1（有源码位置）：保留元素访问
+	nodes, _ := indexFixture(t, map[string]string{
+		"go.mod":  moduleGoMod,
+		"main.go": `package m
+
+func f() {
+	var a [3]int
+	a[0] = 1
+	_ = a[0]
+}
+`,
+	})
+	funcID := "symbol:go:example.com/mtest:f"
+	findFieldByPath(t, nodes, funcID, `a[0]`) // write
+	findFieldAccess(t, nodes, funcID, `a[0]`, "read")
+}
+
 func TestFieldAnonymousStructFallback(t *testing.T) {
 	// 匿名 struct：静态类型无稳定身份 → full_path 回退源码字面量路径（§6.1）
 	nodes, _ := indexFixture(t, map[string]string{

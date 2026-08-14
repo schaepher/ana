@@ -73,6 +73,11 @@ func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Func
 				if !isSliceLike(ia.X.Type()) {
 					continue
 				}
+				// lifting 数组字面量（[]T{...} 内联 Alloc *[N]T）的 IndexAddr
+				// 无源码位置（line=0）：字面量初始化不是元素访问，跳过
+				if ext.prog.Fset.PositionFor(ia.Pos(), false).Line == 0 {
+					continue
+				}
 				hasStore, hasDeref := faUses(ia)
 				if hasStore || !hasDeref {
 					if f := ext.newElementAccess(ia.X, ia.Index, ia.Pos(), "write", ""); f != nil {
@@ -86,7 +91,8 @@ func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Func
 				}
 				continue
 			}
-			hasStore, hasDeref := faUses(fa)
+			// 嵌套字段链（m.cfg.APIKey）内层 FieldAddr 的用途从外层传播
+			hasStore, hasDeref := fieldAddrUse(fa)
 			if hasStore || !hasDeref {
 				// 写（或仅取址传参，按文档默认 write）
 				if f := ext.newFieldAccess(fa, "write"); f != nil {
@@ -308,6 +314,36 @@ func faUses(addr ssa.Value) (hasStore, hasDeref bool) {
 		}
 		if un, ok := u.(*ssa.UnOp); ok && un.Op == token.MUL && un.X == addr {
 			hasDeref = true
+		}
+	}
+	return hasStore, hasDeref
+}
+
+// fieldAddrUse 判定 FieldAddr 的最终读写用途，内层 FieldAddr（仅被其他
+// FieldAddr 作为取址中间层引用）的用途从外层递归传播：
+//   - m.cfg.APIKey 读 → 内层 m.cfg 也是读（而非"无用途默认 write"）
+//   - x.a.b = v 写 → 内层 x.a 也是写
+//   - x.a = x.a + 1 → 内层同时 read+write
+func fieldAddrUse(fa *ssa.FieldAddr) (hasStore, hasDeref bool) {
+	refs := fa.Referrers()
+	if refs == nil {
+		return false, false
+	}
+	for _, u := range *refs {
+		switch uu := u.(type) {
+		case *ssa.Store:
+			if uu.Addr == fa {
+				hasStore = true
+			}
+		case *ssa.UnOp:
+			if uu.Op == token.MUL && uu.X == fa {
+				hasDeref = true
+			}
+		case *ssa.FieldAddr:
+			if uu.X == fa {
+				s, d := fieldAddrUse(uu)
+				hasStore, hasDeref = hasStore || s, hasDeref || d
+			}
 		}
 	}
 	return hasStore, hasDeref
@@ -536,6 +572,29 @@ func (ext *fieldExtractor) emitValue(v ssa.Value) (domain.CanonicalID, error) {
 	defer logger.Debug("exit (fieldExtractor).emitValue")
 	if id, ok := ext.values[v]; ok {
 		return id, nil
+	}
+	// 嵌套字段/元素链中间层：FieldAddr/IndexAddr 第一遍已建字段访问节点——
+	// 基值边直接连字段访问节点（#m.cfg → #m.cfg.APIKey），避免 ssa_value
+	// 平行链导致追溯链断裂（value-trace 停在 #t0 无法穿层）
+	if fa, ok := v.(*ssa.FieldAddr); ok {
+		if f := ext.fields[fa]; f != nil {
+			ext.values[v] = f.id
+			return f.id, nil
+		}
+		if f := ext.reads[fa]; f != nil {
+			ext.values[v] = f.id
+			return f.id, nil
+		}
+	}
+	if ia, ok := v.(*ssa.IndexAddr); ok {
+		if f := ext.indexes[ia]; f != nil {
+			ext.values[v] = f.id
+			return f.id, nil
+		}
+		if f := ext.indexReads[ia]; f != nil {
+			ext.values[v] = f.id
+			return f.id, nil
+		}
 	}
 	funcID, ok := ext.funcIDOf(v)
 	if !ok {
