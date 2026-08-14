@@ -11,7 +11,8 @@ import (
 )
 
 // emitSummaries 计算并发射全部函数的 function_field_summary 行与 INDIRECT_WRITE 边。
-func emitSummaries(data map[domain.CanonicalID]*funcData, emit domain.EmitFunc) error {
+// excluded（Q80 别名分析）：确认无别名的间接写候选，迭代时跳过。
+func emitSummaries(data map[domain.CanonicalID]*funcData, alias *aliasResult, emit domain.EmitFunc) error {
 	logger := zap.L()
 	logger.Debug("enter emitSummaries")
 	defer logger.Debug("exit emitSummaries")
@@ -27,6 +28,10 @@ func emitSummaries(data map[domain.CanonicalID]*funcData, emit domain.EmitFunc) 
 			for _, c := range fd.calls {
 				for _, e := range calleeWrites(data, indirect, c.calleeID) {
 					if _, ok := indirect[fID][e.fieldPath]; ok {
+						continue
+					}
+					// 别名排除（Q80）：确认该调用点无别名 → 不算间接写
+					if alias != nil && alias.excluded[fID][c.calleeID][e.fieldPath] {
 						continue
 					}
 					if !contains(c.argStructPaths, structPathOf(e.fieldPath)) {

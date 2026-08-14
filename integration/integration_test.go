@@ -95,6 +95,32 @@ func (s *Service) Handle() string {
 }
 
 func (s *Service) helper() {}
+
+// 别名分析场景（Q80）：fillParam 写实参；fillLocal 写自己创建的对象
+type Cfg struct {
+	Key   string
+	Local string
+}
+
+func fillParam(c *Cfg) {
+	c.Key = "x"
+}
+
+func fillLocal() {
+	c := &Cfg{}
+	c.Local = "x"
+}
+
+func run(c *Cfg) {
+	fillParam(c)
+	fillLocal()
+}
+
+func aliasLocal() {
+	a := &Cfg{}
+	b := a
+	b.Key = "y"
+}
 `)
 	return dir
 }
@@ -255,6 +281,35 @@ func TestCLIFullFlow(t *testing.T) {
 	}
 	if _, err := os.Stat(exportPath); err != nil {
 		t.Errorf("export file missing: %v", err)
+	}
+
+	// 5. 轻量别名分析（Q80，docs/field_trace.md §14.8）：
+	//    run 调 fillParam（写实参 → 间接写 Key）+ fillLocal（写内部对象，
+	//    无别名 → 不得计入 Local）
+	runID := "symbol:go:example.com/app/svc:run"
+	code, out = runCLIOut(t, "query", "fields", runID, "--repo", dir)
+	if code != 0 {
+		t.Errorf("query fields run exit = %d", code)
+	}
+	if !strings.Contains(out, "svc.Cfg.Key") {
+		t.Errorf("run 间接写应含 Cfg.Key（fillParam 别名命中），output=%q", out)
+	}
+	if strings.Contains(out, "svc.Cfg.Local") {
+		t.Errorf("run 间接写不应含 Cfg.Local（fillLocal 写内部对象，无别名），output=%q", out)
+	}
+	//    aliasLocal 内 b := a 别名同一 alloc → expand 返回 alias 边
+	aliasFacts, _, err := repo.Expand("symbol:go:example.com/app/svc:aliasLocal")
+	if err != nil {
+		t.Fatalf("expand aliasLocal: %v", err)
+	}
+	aliasHit := false
+	for _, f := range aliasFacts {
+		if f.Kind == domain.FactAlias {
+			aliasHit = true
+		}
+	}
+	if !aliasHit {
+		t.Errorf("expand aliasLocal 应返回 alias 边（b 与 a 别名同一 alloc）: %+v", aliasFacts)
 	}
 
 	// 4. clean 删除索引

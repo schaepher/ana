@@ -88,8 +88,13 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, emit domai
 			return err
 		}
 	}
-	// function_field_summary 预计算 + INDIRECT_WRITE 边（间接写闭包）
-	return emitSummaries(a.fd, emit)
+	// 轻量别名分析（Q80）：产出间接写排除集 + ALIAS 边（须在 emitSummaries 前）
+	aliasRes, err := computeAliases(repo, prog, idents, emit)
+	if err != nil {
+		return fmt.Errorf("alias analysis: %w", err)
+	}
+	// function_field_summary 预计算 + INDIRECT_WRITE 边（间接写闭包，消费排除集）
+	return emitSummaries(a.fd, aliasRes, emit)
 }
 
 // buildIdentIndex 收集项目内文件的所有标识符（位置 → 名字），供 Alloc 反查源码变量名。
