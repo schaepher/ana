@@ -221,6 +221,16 @@ defer logger.Debug("exit <name>")
 
 ## 测试
 
+测试先行（先写失败测试再实现）；验证矩阵：make test（12 包）/ make it（-tags integration，需 scip-go）/ make e2e（27 项）。
+
+**基建速查**（写测试前先读对应包）：
+- ssa：`indexFixture(t, files)` → (nodes, facts)；`indexFixtureFull` → (nodes, facts, summaries)——临时 module（`moduleGoMod`）跑完整 Adapter.Index（含别名/摘要/派发），fixture 可加 `external/` 子包与 `field-summary.yaml`；helper `findFieldAccess`/`findSSAValue`（slot 前缀匹配）/`factsFrom`
+- sqlite：`newTestRepo` + `save` + `node`；TraceForward 测试的参数节点须补 `type_string`（B2 后起点须类型匹配）
+- action：`seedRepo` → (a, dir)；TraceConditions 测试须自行写真实 main.go（seedRepo 只建节点不写文件）
+- integration：`go:build integration` 标签；`runCLIOut` 跑 CLI；`scipGoAvailable` 跳过
+
+**断言坑**（踩过）：SSA 临时名 tN/lifting 提升不稳定 → 节点 ID/名称用前缀或通配匹配；fixture 行号数错、断言提前 return 会掩盖失败 → 先收集后判断；依赖 map 迭代顺序的不稳定 bug 用 `-count=10` 复现；alias 边 source 是值节点（funcID#slot），expand 函数节点不返回 alias。
+
 - `internal/canonicalizer`：纯单测（SCIP symbol 解析的各种形式）
 - `internal/orchestrator`：端到端测试，临时 Go module → FullBuild → 校验图数据
   （需要 scip-go，缺失时自动 skip）
