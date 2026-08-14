@@ -7,9 +7,11 @@ package ast
 import (
 	"context"
 	"go/ast"
+	"go/constant"
 	"go/token"
 	"go/types"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
@@ -204,6 +206,8 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 	objCache := map[token.Pos]domain.CanonicalID{}
 	// gRPC 客户端对象（§18.2）：变量名 → 服务名（NewXxxClient 返回值，函数内追踪）
 	grpcClients := map[string]string{}
+	// 手写 client（§18.6）：同函数内 `method := "/pkg.Svc/M"` 一层赋值链
+	methodVars := map[string]string{}
 
 	ast.Inspect(f, func(n ast.Node) bool {
 		if n == nil {
@@ -227,6 +231,12 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 						if svc, ok3 := newClients[cc.Pkg().Path()+":"+cc.Name()]; ok3 {
 							grpcClients[id.Name] = svc
 						}
+					}
+				}
+				// §18.6：method := "/pkg.Svc/M" 一层赋值链（常量传播）
+				if bl, isLit := assign.Rhs[0].(*ast.BasicLit); isLit && bl.Kind == token.STRING {
+					if mp := unquoteMethodPath(bl.Value); mp != "" {
+						methodVars[id.Name] = mp
 					}
 				}
 			}
@@ -321,6 +331,36 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 							"line_num": pkg.Fset.PositionFor(call.Pos(), false).Line,
 						},
 					}})
+				}
+				// §18.6 手写 client：Invoke/NewStream + gRPC 方法路径
+				if mp := directMethodPath(pkg, methodVars, call, callee); mp != "" {
+					parts := strings.Split(strings.TrimPrefix(mp, "/"), "/")
+					if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
+						svcName := parts[0]
+						protoPkg := svcName
+						if i := strings.LastIndex(svcName, "."); i >= 0 {
+							protoPkg, svcName = svcName[:i], svcName[i+1:]
+						}
+						svcID := domain.CanonicalID("symbol:proto:" + protoPkg + ":svc." + svcName)
+						_ = emit(domain.Item{Node: &domain.CodeEntity{
+							ID:   svcID,
+							Kind: domain.KindGrpcService,
+							Name: "svc." + svcName,
+							Properties: map[string]any{"service_name": svcName},
+						}})
+						_ = emit(domain.Item{Fact: &domain.Fact{
+							SourceID:   callerID,
+							TargetID:   svcID,
+							Kind:       domain.FactGrpcCall,
+							ToolSource: domain.ToolCodeGraph,
+							Confidence: 1.0,
+							Metadata: map[string]any{
+								"method":      parts[1],
+								"method_path": mp,
+								"line_num":    pkg.Fset.PositionFor(call.Pos(), false).Line,
+							},
+						}})
+					}
 				}
 				if objID, ok := objVars[xid.Name]; ok {
 					if methodID, methodKind := fnID(callee); methodID != "" {
@@ -1300,4 +1340,68 @@ func isInModule(pkgPath, module string) bool {
 	logger.Debug("enter isInModule")
 	defer logger.Debug("exit isInModule")
 	return pkgPath == module || strings.HasPrefix(pkgPath, module+"/")
+}
+
+// unquoteMethodPath 校验并还原字符串字面量为 gRPC 方法路径
+// （/pkg.Service/Method 格式）；非路径返回空。
+func unquoteMethodPath(lit string) string {
+	s, err := strconv.Unquote(lit)
+	if err != nil || !isGrpcMethodPath(s) {
+		return ""
+	}
+	return s
+}
+
+// isGrpcMethodPath gRPC 方法路径格式："/<包.服务>/<方法>"。
+func isGrpcMethodPath(s string) bool {
+	if !strings.HasPrefix(s, "/") || strings.Count(s, "/") != 2 {
+		return false
+	}
+	parts := strings.Split(strings.TrimPrefix(s, "/"), "/")
+	return len(parts) == 2 && parts[0] != "" && parts[1] != ""
+}
+
+// directPathIdx 方法路径在实参中的位置：方法调用 Invoke 第 2 参 /
+// NewStream 第 3 参；顶层 grpc.Invoke 第 3 参。
+func directPathIdx(callee *types.Func) int {
+	if sig, _ := callee.Type().(*types.Signature); sig != nil && sig.Recv() == nil {
+		return 2 // 顶层 grpc.Invoke(ctx, target, method)
+	}
+	if callee.Name() == "NewStream" {
+		return 2
+	}
+	return 1
+}
+
+// directMethodPath 从 Invoke/NewStream 调用提取 gRPC 方法路径
+// （§18.6）：字面量直接取；Ident 经一层常量传播（同函数 methodVars
+// 或 types.Const）。非路径形态返回空。
+func directMethodPath(pkg *packages.Package, methodVars map[string]string,
+	call *ast.CallExpr, callee *types.Func) string {
+	if callee == nil || (callee.Name() != "Invoke" && callee.Name() != "NewStream") {
+		return ""
+	}
+	pathIdx := directPathIdx(callee)
+	if len(call.Args) <= pathIdx {
+		return ""
+	}
+	arg := call.Args[pathIdx]
+	switch a := arg.(type) {
+	case *ast.BasicLit:
+		if a.Kind == token.STRING {
+			return unquoteMethodPath(a.Value)
+		}
+	case *ast.Ident:
+		if v, ok := methodVars[a.Name]; ok {
+			return v
+		}
+		if obj := pkg.TypesInfo.ObjectOf(a); obj != nil {
+			if c, ok := obj.(*types.Const); ok && c.Val() != nil && c.Val().Kind() == constant.String {
+				if isGrpcMethodPath(constant.StringVal(c.Val())) {
+					return constant.StringVal(c.Val())
+				}
+			}
+		}
+	}
+	return ""
 }

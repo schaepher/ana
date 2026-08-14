@@ -465,3 +465,80 @@ func register(s any) {
 		t.Error("grpc_call 边缺失（NewGreeterClient 客户端调用未归属）")
 	}
 }
+
+// TestGrpcDirectCallEdge：§18.6 手写 client——conn.Invoke 字面量路径 /
+// const 传播 / 顶层 grpc.Invoke / 变量（不产边）→ grpc_call 边
+// （target = symbol:proto:<proto包>:svc.<服务名>，metadata method_path）。
+func TestGrpcDirectCallEdge(t *testing.T) {
+	_, facts := indexFixture(t, map[string]string{
+		"go.mod": "module example.com/mtest\n\ngo 1.21\n",
+		"grpc/conn.go": `package grpc
+
+type ClientConn struct{}
+
+func (c *ClientConn) Invoke(ctx any, method string, args ...any) {}
+
+func (c *ClientConn) NewStream(ctx any, desc any, method string) {}
+
+func Invoke(ctx any, target, method string, args ...any) {}
+`,
+		"svc_a/svc_a.go": `package svc_a
+
+import "example.com/mtest/grpc"
+
+func callDirect(conn *grpc.ClientConn) {
+	conn.Invoke(nil, "/example.com.pb.Greeter/SayHello", nil)
+}
+
+func callConst(conn *grpc.ClientConn) {
+	const method = "/example.com.pb.Order/Create"
+	conn.Invoke(nil, method, nil)
+}
+
+func callStream(conn *grpc.ClientConn) {
+	conn.NewStream(nil, nil, "/example.com.pb.Greeter/Stream")
+}
+
+func callTopLevel() {
+	grpc.Invoke(nil, "localhost:8080", "/example.com.pb.Greeter/Ping", nil)
+}
+
+func callDynamic(conn *grpc.ClientConn, method string) {
+	conn.Invoke(nil, method, nil) // 变量：不产边（盲区）
+}
+`,
+	})
+	type want struct {
+		caller string
+		svcID  string
+		path   string
+		method string
+	}
+	wants := []want{
+		{"symbol:go:example.com/mtest/svc_a:callDirect", "symbol:proto:example.com.pb:svc.Greeter", "/example.com.pb.Greeter/SayHello", "SayHello"},
+		{"symbol:go:example.com/mtest/svc_a:callConst", "symbol:proto:example.com.pb:svc.Order", "/example.com.pb.Order/Create", "Create"},
+		{"symbol:go:example.com/mtest/svc_a:callStream", "symbol:proto:example.com.pb:svc.Greeter", "/example.com.pb.Greeter/Stream", "Stream"},
+		{"symbol:go:example.com/mtest/svc_a:callTopLevel", "symbol:proto:example.com.pb:svc.Greeter", "/example.com.pb.Greeter/Ping", "Ping"},
+	}
+	got := map[string]map[string]bool{} // caller → set("svcID|method|path")
+	for _, f := range facts {
+		if f.Kind != domain.FactGrpcCall {
+			continue
+		}
+		key := string(f.SourceID)
+		if got[key] == nil {
+			got[key] = map[string]bool{}
+		}
+		got[key][string(f.TargetID)+"|"+f.Metadata["method"].(string)+"|"+f.Metadata["method_path"].(string)] = true
+	}
+	for _, w := range wants {
+		key := w.caller
+		if got[key] == nil || !got[key][w.svcID+"|"+w.method+"|"+w.path] {
+			t.Errorf("缺 grpc_call %s → %s (%s)，got %v", w.caller, w.svcID, w.path, got[key])
+		}
+	}
+	// callDynamic（变量路径）：不产 grpc_call 边
+	if len(got["symbol:go:example.com/mtest/svc_a:callDynamic"]) != 0 {
+		t.Errorf("变量方法路径不应产 grpc_call 边: %v", got["symbol:go:example.com/mtest/svc_a:callDynamic"])
+	}
+}

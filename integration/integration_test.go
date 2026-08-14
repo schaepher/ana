@@ -2600,3 +2600,63 @@ func register(s any) {
 		t.Errorf("export graph modules 缺失，code=%d output=%q", code, out[:min(len(out), 300)])
 	}
 }
+
+// TestModuleCallsDirectSelfContained：§18.6 手写 client——conn.Invoke
+// 方法路径调用 + const 传播 → module-calls 输出含服务端模块（impl 按
+// grpc_service name 匹配，跨 symbol:go / symbol:proto 标识）。
+func TestModuleCallsDirectSelfContained(t *testing.T) {
+	if !scipGoAvailable() {
+		t.Skip("scip-go not found")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/mono\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "grpc/conn.go"), `package grpc
+
+type ClientConn struct{}
+
+func (c *ClientConn) Invoke(ctx any, method string, args ...any) {}
+`)
+	writeFile(t, filepath.Join(dir, "pb/greet.pb.go"), `package pb
+
+type GreeterServer interface{ SayHello(string) string }
+
+func RegisterGreeterServer(s any, impl GreeterServer) {}
+`)
+	writeFile(t, filepath.Join(dir, "svc_a/client.go"), `package svc_a
+
+import "example.com/mono/grpc"
+
+func callGreeter(conn *grpc.ClientConn) {
+	conn.Invoke(nil, "/example.com.pb.Greeter/SayHello", nil)
+}
+`)
+	writeFile(t, filepath.Join(dir, "svc_b/server.go"), `package svc_b
+
+import "example.com/mono/pb"
+
+type greeterImpl struct{}
+
+func (g *greeterImpl) SayHello(s string) string { return s }
+
+func register(s any) {
+	pb.RegisterGreeterServer(s, &greeterImpl{})
+}
+`)
+	writeFile(t, filepath.Join(dir, "modules.yaml"), `modules:
+  - prefix: "svc_a"
+    name: "svc_a"
+  - prefix: "svc_b"
+    name: "svc_b"
+`)
+	if code := runCLI(t, "init", "--repo", dir); code != 0 {
+		t.Fatalf("init exit = %d", code)
+	}
+	code, out := runCLIOut(t, "query", "module-calls", "--repo", dir)
+	if code != 0 {
+		t.Fatalf("module-calls exit = %d", code)
+	}
+	// 手写 client 调用 → 服务端模块 svc_b（impl 经 name 匹配）
+	if !strings.Contains(out, "svc_a → svc_b") || !strings.Contains(out, "Greeter.SayHello") {
+		t.Errorf("module-calls 应输出 svc_a → svc_b: Greeter.SayHello（手写形态），output=%q", out)
+	}
+}

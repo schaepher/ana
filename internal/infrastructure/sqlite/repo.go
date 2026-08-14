@@ -1707,7 +1707,8 @@ func (r *Repo) GetGrpcCalls() ([]*domain.GrpcCallRow, error) {
 	defer logger.Debug("exit (Repo).GetGrpcCalls")
 	rows, err := r.Query(`SELECT e.source_id, e.target_id, n.name,
 		json_extract(e.metadata, '$.method'), COALESCE(json_extract(e.metadata, '$.line_num'), 0),
-		(SELECT s.source_id FROM edges s WHERE s.target_id = e.target_id AND s.kind = 'grpc_impl' LIMIT 1)
+		(SELECT s.source_id FROM edges s JOIN nodes sn ON sn.id = s.target_id
+		 WHERE s.kind = 'grpc_impl' AND sn.name = n.name LIMIT 1)
 	FROM edges e JOIN nodes n ON n.id = e.target_id
 	WHERE e.kind = 'grpc_call' ORDER BY e.source_id`)
 	if err != nil {
