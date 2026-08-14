@@ -68,6 +68,11 @@ func cmdQuery(args []string) int {
 	defer db.Close()
 	acts := action.New(sqlite.NewRepo(db))
 
+	// 索引过期检测（§20.3）：构建早于 git HEAD → stderr 提示
+	if tip := staleInfo(abs, sqlite.NewRepo(db)); tip != "" {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", tip)
+	}
+
 	opts := outputOpts{json: f.json, compact: f.compact}
 	// --since 标注（§17.2）：symbol/fields/callers/callees/impact 输出
 	// 对函数/方法节点标注 [new]/[mod]

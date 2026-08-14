@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -152,4 +153,28 @@ func detectChangedGoFiles(repoPath string) ([]string, error) {
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+// staleInfo 索引过期检测（field_trace.md §20.3）：build_metadata 最新
+// timestamp 早于 git HEAD commit 时间 → 返回提示文本；非 git 仓库 /
+// 无构建记录 / 不过期 → 返回空。
+func staleInfo(repoAbs string, r *sqlite.Repo) string {
+	head, err := exec.Command("git", "-C", repoAbs, "log", "-1", "--format=%ct").Output()
+	if err != nil {
+		return "" // 非 git 仓库：无法比较
+	}
+	headTs, err := strconv.ParseInt(strings.TrimSpace(string(head)), 10, 64)
+	if err != nil || headTs <= 0 {
+		return ""
+	}
+	var buildTs int64
+	if err := r.QueryRow(`SELECT timestamp FROM build_metadata
+		ORDER BY timestamp DESC, rowid DESC LIMIT 1`).Scan(&buildTs); err != nil {
+		return "" // 无构建记录
+	}
+	if buildTs < headTs {
+		return fmt.Sprintf("索引可能过期（构建于 %s，HEAD 更新于 %s）；运行 codeintel update",
+			time.Unix(buildTs, 0).Format("01-02 15:04"), time.Unix(headTs, 0).Format("01-02 15:04"))
+	}
+	return ""
 }

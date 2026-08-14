@@ -985,3 +985,18 @@ CLI `update`（全量分析+增量写入）已有；补**自动触发闭环**（
   基线数据）
 - 与验证矩阵分离（`make bench`）；构建目标仓库索引为副作用
   （允许——基准即重建）
+
+### 20.3 触发失败提示与陈旧检测（Q138–Q139，2026-08-15）
+
+- **hook 失败提示（Q138）**：post-commit hook 触发失败不再静默——
+  curl 模式连接失败（serve 未启动）在 `git commit` 输出提示
+  "⚠ codeintel 索引未更新（serve 未启动？）"；`--direct` 模式
+  （install-git-hook.sh --direct）post-commit 直接运行
+  `codeintel update --repo <repo>`（不依赖 serve，确定性更新；
+  代价 = 每次提交跑全量分析，大仓提交变慢——update 分析成本
+  ≈ init，git commit 增量无法裁剪：类型检查/SCIP/SSA 构建均为
+  全仓库粒度，文件级增量会破坏跨函数数据流完整性）
+- **查询陈旧检测（Q139）**：query 命令启动时对比 build_metadata
+  最新 timestamp 与 `git log -1 --format=%ct`——索引早于 HEAD →
+  stderr 提示"⚠ 索引可能过期（构建于 X，HEAD 更新于 Y）；运行
+  codeintel update"——无论 hook 是否触发都能发现陈旧（兜底）
