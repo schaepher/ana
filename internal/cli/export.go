@@ -128,8 +128,8 @@ func cmdExportGraph(args []string) int {
 			repoPath = strings.TrimPrefix(a, "--repo=")
 		}
 	}
-	if graphType != "value-trace" && graphType != "callees" {
-		fmt.Fprintln(os.Stderr, "error: --type 须为 value-trace 或 callees")
+	if graphType != "value-trace" && graphType != "callees" && graphType != "lifecycle" {
+		fmt.Fprintln(os.Stderr, "error: --type 须为 value-trace / callees / lifecycle")
 		return 2
 	}
 	if target == "" {
@@ -168,6 +168,8 @@ func cmdExportGraph(args []string) int {
 	switch {
 	case graphType == "callees":
 		output, err = renderCalleesDot(acts, domain.CanonicalID(target))
+	case graphType == "lifecycle":
+		output, err = renderLifecycleMermaid(acts, domain.CanonicalID(target))
 	case format == "mermaid":
 		output, err = renderValueTraceMermaid(acts, domain.CanonicalID(target))
 	default:
@@ -264,5 +266,61 @@ func renderValueTraceDot(acts *action.Actions, id domain.CanonicalID) (string, e
 			shortID(r.ID), shortID(r.ID)+"|"+r.Name, lastEdgeKind(r.EdgeKinds)))
 	}
 	sb.WriteString("}\n")
+	return sb.String(), nil
+}
+
+// renderLifecycleMermaid 端到端生命周期图（Q99）：value-trace 全链聚合，
+// 节点类型标注（来源/读写/存储/观测）+ 路径条件（Q92），mermaid flowchart
+// 输出。复用 TraceConditions（查询期条件标注）。
+func renderLifecycleMermaid(acts *action.Actions, id domain.CanonicalID) (string, error) {
+	rows, err := acts.ValueTrace(id, 8)
+	if err != nil {
+		return "", err
+	}
+	rows, err = acts.TraceConditions(rows)
+	if err != nil {
+		return "", err
+	}
+	var sb strings.Builder
+	sb.WriteString("flowchart LR\n")
+	group := ""
+	for _, r := range rows {
+		if r.FuncID != group {
+			if group != "" {
+				sb.WriteString("  end\n")
+			}
+			group = r.FuncID
+			gname := shortFuncName(group)
+			if gname == "" {
+				gname = "unknown"
+			}
+			sb.WriteString(fmt.Sprintf("  subgraph %q\n", gname))
+		}
+		// 节点类型标注（生命周期语义）
+		label := r.Name
+		switch {
+		case strings.HasPrefix(r.Name, "sql."):
+			label += " [存储]"
+		case strings.HasPrefix(r.Name, "metric"):
+			label += " [观测]"
+		case r.Kind == domain.KindFieldAccess:
+			acc := "写"
+			if r.Access == "read" {
+				acc = "读"
+			}
+			label += " [" + acc + "]"
+		}
+		if len(r.Conditions) > 0 {
+			label += " 条件:" + strings.Join(r.Conditions, ";")
+		}
+		arrow := "-->"
+		if r.Dir == 0 {
+			arrow = "<--"
+		}
+		sb.WriteString(fmt.Sprintf("    %q %s %q\n", shortID(r.ID), arrow, shortID(r.ID)+"|"+label))
+	}
+	if group != "" {
+		sb.WriteString("  end\n")
+	}
 	return sb.String(), nil
 }

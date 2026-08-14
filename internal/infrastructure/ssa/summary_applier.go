@@ -130,6 +130,19 @@ func builtinSummaries() map[string]summarySpec {
 			}
 		}
 	}
+	// prometheus 观测指标（Q99）：字段值/维度传入指标函数 → 读摘要
+	for _, fn := range []string{
+		"prometheus.(Counter).Inc", "prometheus.(Counter).Add",
+		"prometheus.(CounterVec).WithLabelValues",
+		"prometheus.(Histogram).Observe",
+		"prometheus.(Gauge).Set", "prometheus.(Gauge).Inc", "prometheus.(Gauge).Dec",
+		"prometheus.(Summary).Observe",
+	} {
+		specs["github.com/prometheus/client_golang/"+fn] = summarySpec{
+			Func: "github.com/prometheus/client_golang/" + fn, ParamIndex: 0,
+			ReadArgsAll: true, // 观测：读实参字段（指标维度/值来源）
+		}
+	}
 	specs["database/sql.(DB).Begin"] = summarySpec{Func: "database/sql.(DB).Begin", TxBoundary: "begin"}
 	specs["database/sql.(Tx).Commit"] = summarySpec{Func: "database/sql.(Tx).Commit", TxBoundary: "commit"}
 	specs["database/sql.(Tx).Rollback"] = summarySpec{Func: "database/sql.(Tx).Rollback", TxBoundary: "rollback"}

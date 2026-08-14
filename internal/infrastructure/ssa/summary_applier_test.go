@@ -223,3 +223,18 @@ func f(rows *sql.Rows, dest *struct{ A int }) error {
 	}
 	_ = facts
 }
+
+// TestBuiltinSummaryMetrics：prometheus 观测函数内置摘要（Q99 观测指标识别）。
+func TestBuiltinSummaryMetrics(t *testing.T) {
+	specs := builtinSummaries()
+	for _, fn := range []string{
+		"github.com/prometheus/client_golang/prometheus.(Counter).Inc",
+		"github.com/prometheus/client_golang/prometheus.(CounterVec).WithLabelValues",
+		"github.com/prometheus/client_golang/prometheus.(Histogram).Observe",
+		"github.com/prometheus/client_golang/prometheus.(Gauge).Set",
+	} {
+		if _, ok := specs[fn]; !ok {
+			t.Errorf("内置摘要缺观测函数: %s", fn)
+		}
+	}
+}
