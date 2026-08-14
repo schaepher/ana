@@ -228,18 +228,24 @@ func queryTraceDir(acts *action.Actions, field, funcPath string, maxDepth int, f
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
+	// 路径条件标注（Q92 查询期计算）
+	rows, err = acts.TraceConditions(rows)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: 条件标注: %v\n", err)
+	}
 	if opts.json {
 		type traceRow struct {
-			ID     string `json:"id"`
-			Depth  int    `json:"depth"`
-			Name   string `json:"name"`
-			Edge   string `json:"edge"`
-			Line   int    `json:"line"`
-			IsUsage bool  `json:"is_usage"`
+			ID         string   `json:"id"`
+			Depth      int      `json:"depth"`
+			Name       string   `json:"name"`
+			Edge       string   `json:"edge"`
+			Line       int      `json:"line"`
+			IsUsage    bool     `json:"is_usage"`
+			Conditions []string `json:"conditions,omitempty"`
 		}
 		jrows := make([]traceRow, 0, len(rows))
 		for _, r := range rows {
-			jrows = append(jrows, traceRow{string(r.ID), r.Depth, r.Name, lastEdgeKind(r.EdgeKinds), r.Line, r.IsUsage})
+			jrows = append(jrows, traceRow{string(r.ID), r.Depth, r.Name, lastEdgeKind(r.EdgeKinds), r.Line, r.IsUsage, r.Conditions})
 		}
 		encodeJSON(map[string]any{"field": field, "func": n.Name, "rows": jrows})
 		return 0
@@ -266,11 +272,15 @@ func queryTraceDir(acts *action.Actions, field, funcPath string, maxDepth int, f
 		if r.Line > 0 {
 			line = fmt.Sprintf(" (%d)", r.Line)
 		}
+		cond := ""
+		if len(r.Conditions) > 0 {
+			cond = " [条件: " + strings.Join(r.Conditions, "; ") + "]"
+		}
 		indent := strings.Repeat("  ", r.Depth)
 		if opts.compact {
 			indent = ""
 		}
-		fmt.Printf("%s%s %s %s%s%s\n", indent, direction, edge, r.Name, line, mark)
+		fmt.Printf("%s%s %s %s%s%s%s\n", indent, direction, edge, r.Name, line, mark, cond)
 	}
 	return 0
 }
@@ -552,23 +562,29 @@ func queryValueTrace(acts *action.Actions, nodeID string, maxDepth int, opts out
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
+	// 路径条件标注（Q92 查询期计算）：节点所在分支的 if/类型条件
+	rows, err = acts.TraceConditions(rows)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: 条件标注: %v\n", err)
+	}
 	if opts.json {
 		type flowRow struct {
-			ID       string `json:"id"`
-			Name     string `json:"name"`
-			Depth    int    `json:"depth"`
-			Dir      int    `json:"dir"`
-			Edge     string `json:"edge"`
-			Line     int    `json:"line"`
-			Kind     string `json:"kind"`
-			Access   string `json:"access"`
-			FuncID   string `json:"func_id"`
-			FuncName string `json:"func_name"`
+			ID         string   `json:"id"`
+			Name       string   `json:"name"`
+			Depth      int      `json:"depth"`
+			Dir        int      `json:"dir"`
+			Edge       string   `json:"edge"`
+			Line       int      `json:"line"`
+			Kind       string   `json:"kind"`
+			Access     string   `json:"access"`
+			FuncID     string   `json:"func_id"`
+			FuncName   string   `json:"func_name"`
+			Conditions []string `json:"conditions,omitempty"`
 		}
 		jrows := make([]flowRow, 0, len(rows))
 		for _, r := range rows {
 			jrows = append(jrows, flowRow{string(r.ID), r.Name, r.Depth, r.Dir,
-				lastEdgeKind(r.EdgeKinds), r.Line, string(r.Kind), r.Access, r.FuncID, shortFuncName(r.FuncID)})
+				lastEdgeKind(r.EdgeKinds), r.Line, string(r.Kind), r.Access, r.FuncID, shortFuncName(r.FuncID), r.Conditions})
 		}
 		encodeJSON(map[string]any{"flows": jrows})
 		return 0
@@ -606,11 +622,15 @@ func queryValueTrace(acts *action.Actions, nodeID string, maxDepth int, opts out
 		if r.Line > 0 {
 			line = fmt.Sprintf(":%d", r.Line)
 		}
+		cond := ""
+		if len(r.Conditions) > 0 {
+			cond = " [条件: " + strings.Join(r.Conditions, "; ") + "]"
+		}
 		indent := strings.Repeat("  ", r.Depth)
 		if opts.compact {
 			indent = ""
 		}
-		fmt.Printf("%s%s %s %s%s\n", indent, arrow, edge, r.Name+acc, line)
+		fmt.Printf("%s%s %s %s%s%s\n", indent, arrow, edge, r.Name+acc, line, cond)
 	}
 	return 0
 }

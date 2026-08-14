@@ -34,6 +34,7 @@ type Reader interface {
 	GetDispatchEdges(ifaceID domain.CanonicalID) ([]*domain.Fact, error)
 	Counts() (nodes int, edges int, err error)
 	GetLatest() (*domain.BuildMeta, error)
+	RepoPath() string
 }
 
 // Actions 是 CLI 与 HTTP 共享的查询用例集合。
