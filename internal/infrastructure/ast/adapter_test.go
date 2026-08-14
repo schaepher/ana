@@ -87,6 +87,53 @@ func hasFact(facts []*domain.Fact, source, target, kind string) bool {
 
 const fixtureGoMod = "module example.com/mtest\n\ngo 1.21\n"
 
+// TestSetChangedFilesSkipsUnchanged：P1-1——SetChangedFiles 后只分析变更
+// 文件（增量更新 AST 文件级跳过，§20.3 唯一真实加速点）；未设置时全量。
+func TestSetChangedFilesSkipsUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), fixtureGoMod)
+	// a.go: A 调用 B；b.go: B 调用 C（B→C 调用点在 b.go，跳过 b.go 后应消失）
+	writeFile(t, filepath.Join(dir, "a.go"), "package m\n\nfunc A() { B() }\n")
+	writeFile(t, filepath.Join(dir, "b.go"), "package m\n\nfunc B() { C() }\n")
+	writeFile(t, filepath.Join(dir, "c.go"), "package m\n\nfunc C() {}\n")
+
+	load := func(withChanged []string) ([]*domain.CodeEntity, []*domain.Fact) {
+		pkgs, err := astLoadTestPackages(dir)
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		var nodes []*domain.CodeEntity
+		var facts []*domain.Fact
+		adapter := &Adapter{}
+		adapter.SetChangedFiles(withChanged)
+		repo := &domain.Repository{Path: dir, Module: "example.com/mtest"}
+		if err := adapter.Index(context.Background(), repo, pkgs, func(item domain.Item) error {
+			if item.Node != nil {
+				nodes = append(nodes, item.Node)
+			}
+			if item.Fact != nil {
+				facts = append(facts, item.Fact)
+			}
+			return nil
+		}); err != nil {
+			t.Fatalf("Index: %v", err)
+		}
+		return nodes, facts
+	}
+
+	// ① 全量基线（changedFiles = nil）：A→B、B→C 都在
+	_, facts := load(nil)
+	findFact(t, facts, "symbol:go:example.com/mtest:A", "symbol:go:example.com/mtest:B", string(domain.FactCalls))
+	findFact(t, facts, "symbol:go:example.com/mtest:B", "symbol:go:example.com/mtest:C", string(domain.FactCalls))
+
+	// ② SetChangedFiles(["a.go"])：a.go 调用点仍在，b.go 调用点被跳过
+	_, facts2 := load([]string{"a.go"})
+	findFact(t, facts2, "symbol:go:example.com/mtest:A", "symbol:go:example.com/mtest:B", string(domain.FactCalls))
+	if hasFact(facts2, "symbol:go:example.com/mtest:B", "symbol:go:example.com/mtest:C", string(domain.FactCalls)) {
+		t.Fatalf("B→C 调用点在 b.go，SetChangedFiles([a.go]) 后不应分析")
+	}
+}
+
 func TestIndexCallsAndImports(t *testing.T) {
 	nodes, facts := indexFixture(t, map[string]string{
 		"go.mod":    fixtureGoMod,
@@ -618,6 +665,88 @@ func (h *Handler) List() {}
 	// 未匹配的外部节点 metadata host 保留
 	if !strings.Contains(gotCall[key3], "ext.example.com") {
 		t.Errorf("callExt host 缺失: %q", gotCall[key3])
+	}
+}
+
+// TestHTTPClientDoReq：P1-3——HTTP 客户端识别三项扩展：
+// ① NewRequestWithContext（同 NewRequest 参数位，此前完全漏识别）
+// ② const 字符串拼接 URL（extractStringArg 常量传播扩展）
+// ③ req := http.NewRequest(...) + client.Do(req) 组合不重复建边
+func TestHTTPClientDoReq(t *testing.T) {
+	_, facts := indexFixture(t, map[string]string{
+		"go.mod": "module example.com/mtest\n\ngo 1.21\n",
+		"routes.yaml": `routes:
+  - path: "/api/orders"
+    handler: "svc_orders:(Handler).ListOrders"
+    method: "GET"
+`,
+		"http/http.go": `package http
+
+type Request struct{}
+
+type Client struct{}
+
+func Get(url string) {}
+
+func NewRequest(method, url string, body any) (*Request, error) { return nil, nil }
+
+func NewRequestWithContext(ctx any, method, url string, body any) (*Request, error) { return nil, nil }
+
+func (c *Client) Do(req any) {}
+`,
+		"svc_a/client.go": `package svc_a
+
+import "example.com/mtest/http"
+
+const apiBase = "https://orders.example.com"
+
+// ① NewRequestWithContext（真实 http 包同签名，radar openai.go 在用）
+func callWithCtx() {
+	http.NewRequestWithContext(nil, "GET", "https://orders.example.com/api/orders", nil)
+}
+
+// ② const 拼接：apiBase + "/api/orders"
+func callConstConcat() {
+	http.Get(apiBase + "/api/orders")
+}
+
+// ③ NewRequest + Do(req) 组合：请求发出点是 Do，但 URL 信息在
+// NewRequest——只在 NewRequest 调用点建边，Do 不重复
+func callReqDo() {
+	req, _ := http.NewRequest("GET", "https://orders.example.com/api/orders", nil)
+	var c http.Client
+	c.Do(req)
+}
+`,
+		"svc_orders/svc.go": `package svc_orders
+
+type Handler struct{}
+
+func (h *Handler) ListOrders() {}
+`,
+	})
+	gotCall := map[string][]string{} // source → targets
+	for _, f := range facts {
+		if f.Kind == domain.FactHTTPCall {
+			key := string(f.SourceID)
+			gotCall[key] = append(gotCall[key], string(f.TargetID))
+		}
+	}
+	want := "symbol:go:example.com/mtest/svc_orders:route./api/orders"
+
+	// ① NewRequestWithContext 字面量 URL → 建边
+	if len(gotCall["symbol:go:example.com/mtest/svc_a:callWithCtx"]) != 1 ||
+		gotCall["symbol:go:example.com/mtest/svc_a:callWithCtx"][0] != want {
+		t.Errorf("callWithCtx http_call = %v, want [%s]（NewRequestWithContext 漏识别）", gotCall["symbol:go:example.com/mtest/svc_a:callWithCtx"], want)
+	}
+	// ② const 拼接 URL → 建边
+	if len(gotCall["symbol:go:example.com/mtest/svc_a:callConstConcat"]) != 1 ||
+		gotCall["symbol:go:example.com/mtest/svc_a:callConstConcat"][0] != want {
+		t.Errorf("callConstConcat http_call = %v, want [%s]（const 拼接未传播）", gotCall["symbol:go:example.com/mtest/svc_a:callConstConcat"], want)
+	}
+	// ③ NewRequest+Do 组合 → 恰好 1 条边（NewRequest 处；Do 不重复）
+	if len(gotCall["symbol:go:example.com/mtest/svc_a:callReqDo"]) != 1 {
+		t.Errorf("callReqDo http_call = %d 条, want 1（Do 处重复建边）: %v", len(gotCall["symbol:go:example.com/mtest/svc_a:callReqDo"]), gotCall["symbol:go:example.com/mtest/svc_a:callReqDo"])
 	}
 }
 

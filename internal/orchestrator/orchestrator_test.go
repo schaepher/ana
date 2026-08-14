@@ -9,6 +9,7 @@ import (
 
 	"github.com/schaepher/codeintel/internal/domain"
 	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
+	"golang.org/x/tools/go/packages"
 )
 
 // TestFullBuildAndQuery 端到端：临时 Go 模块 → 全量构建 → 校验图数据。
@@ -119,6 +120,67 @@ func (s *Service) TestHelper() {
 	}
 	if len(impact) == 0 {
 		t.Error("impact should not be empty")
+	}
+}
+
+// mockAdapter 记录 SetChangedFiles 注入（P1-1 AST 文件级跳过），
+// Index 产出固定节点避免空构建。
+type mockAdapter struct {
+	changed []string
+}
+
+func (m *mockAdapter) Name() string { return "mock" }
+
+func (m *mockAdapter) Index(_ context.Context, repo *domain.Repository, _ []*packages.Package, emit domain.EmitFunc) error {
+	return emit(domain.Item{Node: &domain.CodeEntity{
+		ID: "symbol:go:example.com/e2e:mock", Kind: domain.KindFunction,
+		Name: "mock", FilePath: "main.go",
+	}})
+}
+
+func (m *mockAdapter) SetChangedFiles(files []string) { m.changed = files }
+
+// TestInjectChangedFiles：P1-1——runAdapters 对实现 SetChangedFiles 的适配器
+// 注入变更文件（增量）；全量构建注入 nil（每次运行重置，防残留）。
+func TestInjectChangedFiles(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/e2e\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "main.go"), "package main\n\nfunc main() {}\n")
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	mock := &mockAdapter{}
+	orch := &Orchestrator{
+		Repo:     &domain.Repository{Path: dir, Module: "example.com/e2e"},
+		RepoImpl: sqlite.NewRepo(db),
+		Adapters: []domain.IndexerPort{mock},
+	}
+
+	// 全量：nil（不限制）
+	if _, err := orch.FullBuild(context.Background()); err != nil {
+		t.Fatalf("full build: %v", err)
+	}
+	if mock.changed != nil {
+		t.Errorf("FullBuild changed = %v, want nil", mock.changed)
+	}
+
+	// 增量：变更文件注入
+	if _, err := orch.IncrementalBuild(context.Background(), []string{"main.go"}); err != nil {
+		t.Fatalf("incremental build: %v", err)
+	}
+	if len(mock.changed) != 1 || mock.changed[0] != "main.go" {
+		t.Errorf("IncrementalBuild changed = %v, want [main.go]", mock.changed)
+	}
+
+	// 再次全量：重置为 nil（防残留）
+	if _, err := orch.FullBuild(context.Background()); err != nil {
+		t.Fatalf("full build 2: %v", err)
+	}
+	if mock.changed != nil {
+		t.Errorf("FullBuild after incremental changed = %v, want nil", mock.changed)
 	}
 }
 

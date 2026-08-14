@@ -31,6 +31,22 @@ type Adapter struct {
 	pkgsByPath map[string]*packages.Package
 	// HTTP 路由表（§18.7，routes.yaml 人工维护）：path → http_route 节点
 	routes []routeEntry
+	// 增量更新的变更文件（相对仓库根路径，§20.3 AST 文件级跳过）；
+	// nil = 全量分析所有文件
+	changedFiles map[string]bool
+}
+
+// SetChangedFiles 限定增量分析的文件集合（orchestrator 增量构建注入，
+// 见 field_trace.md §20.3）；传 nil 恢复全量。文件为相对仓库根的路径。
+func (a *Adapter) SetChangedFiles(files []string) {
+	if files == nil {
+		a.changedFiles = nil
+		return
+	}
+	a.changedFiles = make(map[string]bool, len(files))
+	for _, f := range files {
+		a.changedFiles[filepath.Clean(f)] = true
+	}
 }
 
 // routeEntry 构建期路由表条目。
@@ -239,6 +255,10 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 	if filePath == "" {
 		return nil
 	}
+	// 增量更新（§20.3）：只分析变更文件，未变更文件跳过（节点保留在库中）
+	if a.changedFiles != nil && !a.changedFiles[filepath.Clean(filePath)] {
+		return nil
+	}
 
 	if err := a.emitMethodReceiver(repo, pkg, f, emit); err != nil {
 		return err
@@ -255,6 +275,11 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 	grpcClients := map[string]string{}
 	// 手写 client（§18.6）：同函数内 `method := "/pkg.Svc/M"` 一层赋值链
 	methodVars := map[string]string{}
+	// HTTP req 变量（P1-3）：req 名 → URL（req := http.NewRequest(...) 赋值追踪，
+	// 供 client.Do(req) 消费防重复判断）
+	reqVars := map[string]string{}
+	// 本函数已 emit http_call 的 URL（NewRequest 建边后，Do(req) 不重复）
+	httpURLsSeen := map[string]bool{}
 
 	ast.Inspect(f, func(n ast.Node) bool {
 		if n == nil {
@@ -343,9 +368,16 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 				}
 				// §18：c := pb.NewXxxClient(conn) → gRPC 客户端对象（服务名）
 				if call, isCall := assign.Rhs[0].(*ast.CallExpr); isCall {
-					if cc, ok2 := resolveCallee(pkg.TypesInfo, call.Fun); ok2 && cc.Pkg() != nil {
-						if svc, ok3 := newClients[cc.Pkg().Path()+":"+cc.Name()]; ok3 {
-							grpcClients[id.Name] = svc
+					if cc, ok2 := resolveCallee(pkg.TypesInfo, call.Fun); ok2 {
+						if cc.Pkg() != nil {
+							if svc, ok3 := newClients[cc.Pkg().Path()+":"+cc.Name()]; ok3 {
+								grpcClients[id.Name] = svc
+							}
+						}
+						// P1-3：req := http.NewRequest(...) → req 变量 URL 追踪
+						// （URL 提取含常量拼接；client.Do(req) 消费时防重复判断）
+						if url, okU := httpURLString(pkg, methodVars, call, cc); okU {
+							reqVars[id.Name] = url
 						}
 					}
 				}
@@ -479,8 +511,9 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 					}
 				}
 				// §18.7 HTTP 客户端：http.Get(url) / http.NewRequest(method, url, ...)
+				// / NewRequestWithContext(ctx, method, url, ...)（P1-3 补）
 				// URL 字面量+常量传播 → 路由表匹配 → http_call 边
-				if url, okURL := httpURLString(pkg, methodVars, call, callee); okURL {
+				emitHTTP := func(url string, line int) {
 					host, path := parseURL(url)
 					target := ""
 					for _, re := range a.routes {
@@ -497,7 +530,7 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 						target = "symbol:http:" + h + ":route." + path
 					}
 					httpMethod := "GET"
-					if callee.Name() == "NewRequest" && len(call.Args) > 0 {
+					if len(call.Args) > 0 {
 						if bl, ok := call.Args[0].(*ast.BasicLit); ok && bl.Kind == token.STRING {
 							if m, err := strconv.Unquote(bl.Value); err == nil && m != "" {
 								httpMethod = m
@@ -521,9 +554,22 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 							"host":     host,
 							"path":     path,
 							"method":   httpMethod,
-							"line_num": pkg.Fset.PositionFor(call.Pos(), false).Line,
+							"line_num": line,
 						},
 					}})
+					httpURLsSeen[url] = true
+				}
+				if url, okURL := httpURLString(pkg, methodVars, call, callee); okURL {
+					emitHTTP(url, pkg.Fset.PositionFor(call.Pos(), false).Line)
+				}
+				// P1-3：client.Do(req)——req 由本函数 NewRequest 赋值（URL 已建
+				// 边 → 防重复跳过；请求发出点语义仍以 NewRequest 行号为准）
+				if callee != nil && callee.Name() == "Do" && len(call.Args) > 0 {
+					if xid, isID := call.Args[0].(*ast.Ident); isID {
+						if url, okR := reqVars[xid.Name]; okR && !httpURLsSeen[url] {
+							emitHTTP(url, pkg.Fset.PositionFor(call.Pos(), false).Line)
+						}
+					}
 				}
 				if objID, ok := objVars[xid.Name]; ok {
 					if methodID, methodKind := fnID(callee); methodID != "" {
@@ -1565,7 +1611,7 @@ func pkgOfID(id domain.CanonicalID) string {
 }
 
 // extractStringArg 从实参提取字符串值（字面量 / 同函数 methodVars /
-// types.Const），非字符串返回空。
+// types.Const / 常量字符串拼接 P1-3），非字符串返回空。
 func extractStringArg(pkg *packages.Package, methodVars map[string]string, arg ast.Expr) string {
 	switch a := arg.(type) {
 	case *ast.BasicLit:
@@ -1583,21 +1629,39 @@ func extractStringArg(pkg *packages.Package, methodVars map[string]string, arg a
 				return constant.StringVal(c.Val())
 			}
 		}
+	case *ast.BinaryExpr:
+		// P1-3：常量字符串拼接——const base = "https://x.com"; base + "/y"
+		// （递归支持多层拼接；非字符串操作数提取失败返回空，不误拼）
+		if a.Op == token.ADD {
+			l := extractStringArg(pkg, methodVars, a.X)
+			r := extractStringArg(pkg, methodVars, a.Y)
+			if l != "" && r != "" {
+				return l + r
+			}
+		}
 	}
 	return ""
 }
 
-// httpURLString 从 http.Get/NewRequest 调用提取 URL 字符串（§18.7）：
-// Get 第 1 参 / NewRequest 第 2 参；URL 须含 scheme 或以 / 开头（防
+// httpURLString 从 http.Get/NewRequest/NewRequestWithContext 调用提取
+// URL 字符串（§18.7，P1-3 补 NewRequestWithContext——与 NewRequest 同
+// 参数位，ctx 在 0 位）：Get 第 1 参 / NewRequest 第 2 参 /
+// NewRequestWithContext 第 3 参；URL 须含 scheme 或以 / 开头（防
 // 误伤同名方法）。动态变量返回 ok=false（盲区）。
 func httpURLString(pkg *packages.Package, methodVars map[string]string,
 	call *ast.CallExpr, callee *types.Func) (string, bool) {
-	if callee == nil || (callee.Name() != "Get" && callee.Name() != "NewRequest") {
+	if callee == nil {
 		return "", false
 	}
 	idx := 0
-	if callee.Name() == "NewRequest" {
+	switch callee.Name() {
+	case "Get":
+	case "NewRequest":
 		idx = 1
+	case "NewRequestWithContext":
+		idx = 2
+	default:
+		return "", false
 	}
 	if len(call.Args) <= idx {
 		return "", false

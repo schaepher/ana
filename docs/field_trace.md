@@ -1015,10 +1015,16 @@ CLI `update`（全量分析+增量写入）已有；补**自动触发闭环**（
   构建期读取 → 生成 `http_route` 节点（`symbol:go:<handler包>:route.<path>`，
   properties 带 handler 函数 ID + path + method）；handler 解析失败
   （符号不存在）→ 跳过并警告
-- **客户端识别（Q141）**：`http.Get(url)`（URL 第 1 参）/ 
-  `http.NewRequest(method, url, ...)`（URL 第 2 参）——URL 字面量 +
-  一层常量传播（复用 §18.6 的 methodVars/const 机制）；`client.Do(req)`
-  一期盲区（req 对象追踪）；URL 解析出 host + path（query 剥离）
+- **客户端识别（Q141，P1-3 扩展 2026-08-15）**：`http.Get(url)`（URL 第 1 参）/
+  `http.NewRequest(method, url, ...)`（URL 第 2 参）/ 
+  `http.NewRequestWithContext(ctx, method, url, ...)`（URL 第 3 参——P1-3
+  补，同签名此前完全漏识别）——URL 字面量 + 常量传播（复用 §18.6 的
+  methodVars/const 机制）+ **常量字符串拼接**（`const base = "https://x"` +
+  `base+"/y"`，P1-3 extractStringArg 加 BinaryExpr）；`client.Do(req)`：
+  req 由本函数 `req := http.NewRequest(...)` 赋值时追踪（reqVars），
+  Do 消费建边但 NewRequest 已建同 URL 边时跳过防重复——请求发出点
+  语义仍以 NewRequest 行号为准；req 跨函数来源仍盲区。URL 解析出
+  host + path（query 剥离）
 - **目标模块判定（Q142）**：**仅路由表路径匹配**（无 hosts.yaml——
   host 由服务部署配置管理，代码不硬编码域名；host 仅记录于 metadata
   作展示）。路径匹配 = 精确 + 前缀（路由 path 以 `/` 结尾或含 `{id}`

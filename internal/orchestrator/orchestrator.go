@@ -95,7 +95,7 @@ func (o *Orchestrator) FullBuild(ctx context.Context) (*BuildResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	results, skipped, err := o.runAdapters(ctx, pkgs, nil)
+	results, skipped, err := o.runAdapters(ctx, pkgs, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +156,7 @@ func (o *Orchestrator) IncrementalBuild(ctx context.Context, changedFiles []stri
 	if err != nil {
 		return nil, err
 	}
-	results, skipped, err := o.runAdapters(ctx, pkgs, keep)
+	results, skipped, err := o.runAdapters(ctx, pkgs, keep, changedFiles)
 	if err != nil {
 		return nil, err
 	}
@@ -204,7 +204,14 @@ func deleteFiles(repo *sqlite.Repo, files []string) error {
 // runAdapters 并行执行适配器并写库（keep 为 nil 时全部写入；否则只保留
 // keep(item) 为 true 的条目）。pkgs 为共享加载的 go/packages 结果
 // （AST/SSA 复用，避免重复类型检查）。返回各适配器结果与跳过的 FK 冲突边数。
-func (o *Orchestrator) runAdapters(ctx context.Context, pkgs []*packages.Package, keep func(domain.Item) bool) ([]AdapterResult, int, error) {
+func (o *Orchestrator) runAdapters(ctx context.Context, pkgs []*packages.Package, keep func(domain.Item) bool, changedFiles []string) ([]AdapterResult, int, error) {
+	// 增量更新：AST 适配器文件级跳过（§20.3 唯一真实加速点）；nil = 全量。
+	// 每次运行重置，避免上次增量残留影响后续全量构建。
+	for _, a := range o.Adapters {
+		if inc, ok := a.(interface{ SetChangedFiles([]string) }); ok {
+			inc.SetChangedFiles(changedFiles)
+		}
+	}
 	var (
 		results []AdapterResult
 		skipped int

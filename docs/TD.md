@@ -276,7 +276,8 @@ type BuildMetadataRepository interface {
 3. 适配器流式返回原始数据到 Canonicalizer。
 4. Canonicalizer 实时处理：生成 Canonical ID，写入数据库（分批 1000 条事务）。
 5. 若某适配器超时或失败，其已提交数据保留，标记降级。
-6. 构建结束写入 `build_metadata`，status = degraded 如果至少一个失败，failed 如果 SCIP 或 Git 失败。
+6. 构建结束写入 `build_metadata`，status = degraded 如果至少一个失败，
+   failed 仅当 SCIP 失败（Git 失败 → 降级，历史信息缺失，见 §9.2）。
 
 增量构建：
 1. Git post-receive hook → HTTP POST 到 `codeintel serve`。
