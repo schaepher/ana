@@ -62,6 +62,26 @@ codeintel query impact 'symbol:go:example.com/svc:(Service).Handle' --repo /path
 codeintel clean --repo /path/to/repo
 ```
 
+## Agent Skill
+
+为 AI Agent 提供 codeintel 命令行使用指南（字段追溯 / 字段读写摘要 / 数据值
+全链追踪等查询能力），可通过 [skills 生态](https://github.com/vercel-labs/skills)
+一键安装：
+
+```shell
+# 从本仓库安装（GitHub）
+npx skills add schaepher/codeintel --skill codeintel-cli
+
+# 本地路径安装
+npx skills add .claude/skills --skill codeintel-cli
+
+# 安装到用户目录（所有项目可用），指定 agent 并跳过确认
+npx skills add schaepher/codeintel --skill codeintel-cli -g -a claude-code -y
+```
+
+skill 源文件：`.claude/skills/codeintel-cli/SKILL.md`（含全部命令、参数说明与
+真实示例）。安装后 agent 会自动匹配该 skill 来使用 codeintel 命令行。
+
 ## CLI 一览
 
 ```
