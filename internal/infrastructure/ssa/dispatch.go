@@ -66,50 +66,6 @@ func emitDispatches(repo *domain.Repository, prog *ssa.Program, pkgs []*types.Pa
 		return nil
 	}
 
-	// 模块内实现者缓存：接口类型 → 方法名 → 实现方法
-	implCache := map[*types.Named]map[string]*types.Func{}
-	enumFor := func(iface *types.Named, method string) []*types.Func {
-		if m, ok := implCache[iface]; ok {
-			if f, ok2 := m[method]; ok2 {
-				return []*types.Func{f}
-			}
-			return nil
-		}
-		m := map[string]*types.Func{}
-		for _, pkg := range pkgs {
-			if !isInModule(pkg.Path(), repo.Module) {
-				continue
-			}
-			scope := pkg.Scope()
-			for _, name := range scope.Names() {
-				tn, ok := scope.Lookup(name).(*types.TypeName)
-				if !ok {
-					continue
-				}
-				named, ok := tn.Type().(*types.Named)
-				if !ok {
-					continue
-				}
-				if named == iface {
-					continue // 接口自身（Implements 自反）不算实现者
-				}
-				// 指针接收者方法：值类型不实现，须检查 *T 与 T 两个方法集
-				if !types.Implements(named, iface.Underlying().(*types.Interface)) &&
-					!types.Implements(types.NewPointer(named), iface.Underlying().(*types.Interface)) {
-					continue
-				}
-				if fn := findMethod(named, method); fn != nil {
-					m[method] = fn
-				}
-			}
-		}
-		implCache[iface] = m
-		if f, ok := m[method]; ok {
-			return []*types.Func{f}
-		}
-		return nil
-	}
-
 	for ck := range calls {
 		ifaceID := interfaceID(ck.iface)
 		if ifaceID == "" {
@@ -126,7 +82,7 @@ func emitDispatches(repo *domain.Repository, prog *ssa.Program, pkgs []*types.Pa
 				candidates[candidateKey(fn)] = dispatchCandidate{fn: fn, origin: "register", confidence: 0.9, site: site}
 			}
 		}
-		for _, fn := range enumFor(ck.iface, ck.method) {
+		for _, fn := range implMethodsFor(pkgs, repo.Module, ck.iface, ck.method) {
 			key := candidateKey(fn)
 			if _, ok := candidates[key]; ok {
 				continue // 注册点优先
@@ -159,6 +115,40 @@ func emitDispatches(repo *domain.Repository, prog *ssa.Program, pkgs []*types.Pa
 		}
 	}
 	return nil
+}
+
+// implMethodsFor 枚举模块内实现接口方法的具名类型方法（值与指针方法集
+// 都查）；接口自身（Implements 自反）排除。⑮ 动态派发追踪复用。
+func implMethodsFor(pkgs []*types.Package, module string, iface *types.Named, method string) []*types.Func {
+	var out []*types.Func
+	for _, pkg := range pkgs {
+		if !isInModule(pkg.Path(), module) {
+			continue
+		}
+		scope := pkg.Scope()
+		for _, name := range scope.Names() {
+			tn, ok := scope.Lookup(name).(*types.TypeName)
+			if !ok {
+				continue
+			}
+			named, ok := tn.Type().(*types.Named)
+			if !ok {
+				continue
+			}
+			if named == iface {
+				continue // 接口自身不算实现者
+			}
+			// 指针接收者方法：值类型不实现，须检查 *T 与 T 两个方法集
+			if !types.Implements(named, iface.Underlying().(*types.Interface)) &&
+				!types.Implements(types.NewPointer(named), iface.Underlying().(*types.Interface)) {
+				continue
+			}
+			if fn := findMethod(named, method); fn != nil {
+				out = append(out, fn)
+			}
+		}
+	}
+	return out
 }
 
 // dispatchCandidate 单个候选实现。

@@ -75,11 +75,18 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 
 	a.fd = map[domain.CanonicalID]*funcData{}
 	fallbackTotal := 0
+	// 接口动态派发候选枚举用（⑮：模块内类型池）
+	var typePkgs []*types.Package
+	for _, p := range pkgs {
+		if p.Types != nil {
+			typePkgs = append(typePkgs, p.Types)
+		}
+	}
 	for fn := range ssautil.AllFunctions(prog) {
 		if !isModuleFunction(fn, repo.Module) {
 			continue // 外部依赖走摘要（Phase 5）
 		}
-		if err := emitFunction(repo, prog, fn, idents, assignTargets, a.fd, specs, &fallbackTotal, emit); err != nil {
+		if err := emitFunction(repo, prog, fn, idents, assignTargets, a.fd, specs, &fallbackTotal, emit, typePkgs); err != nil {
 			return err
 		}
 	}
@@ -100,12 +107,6 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 		return err
 	}
 	// 接口动态派发（Q91/Q93/Q94）：dispatch_to 边（接口类型 → 候选实现方法）
-	var typePkgs []*types.Package
-	for _, p := range pkgs {
-		if p.Types != nil {
-			typePkgs = append(typePkgs, p.Types)
-		}
-	}
 	return emitDispatches(repo, prog, typePkgs, emit)
 }
 
@@ -145,7 +146,8 @@ func isModuleFunction(fn *ssa.Function, module string) bool {
 func emitFunction(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
 	idents map[token.Pos]string, assignTargets []assignTarget,
 	data map[domain.CanonicalID]*funcData,
-	specs map[string]summarySpec, fallbackTotal *int, emit domain.EmitFunc) error {
+	specs map[string]summarySpec, fallbackTotal *int, emit domain.EmitFunc,
+	pkgs []*types.Package) error {
 	logger := zap.L()
 	logger.Debug("enter emitFunction")
 	defer logger.Debug("exit emitFunction")
@@ -189,7 +191,7 @@ func emitFunction(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
 		fd = &funcData{}
 		data[id] = fd
 	}
-	return emitFunctionFields(repo, prog, fn, id, idents, assignTargets, fd, specs, fallbackTotal, emit)
+	return emitFunctionFields(repo, prog, fn, id, idents, assignTargets, fd, specs, fallbackTotal, emit, pkgs)
 }
 
 // emitSignatureNodes 发射函数/方法签名的参数与返回节点（parameter / result）

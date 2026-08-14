@@ -105,7 +105,41 @@ func (ext *fieldExtractor) emitCall(cc *ssa.CallCommon, callVal ssa.Value) error
 	defer logger.Debug("exit (fieldExtractor).emitCall")
 	callee := resolveStaticCallee(cc)
 	if callee == nil {
-		return nil // 动态调用（接口/函数值）：无法解析被调方
+		// ⑮ 接口动态派发：无静态 callee 但为具名接口方法调用时，枚举模块
+		// 内候选实现，实参 → 候选 Params 建立 argument 边——追踪进入
+		// 具体实现（此前动态调用不产边，字段链路断在接口调用点）
+		if cc.Method != nil {
+			if iface := interfaceNamedOf(cc.Value.Type()); iface != nil {
+				for _, implFn := range implMethodsFor(ext.pkgs, ext.repo.Module, iface, cc.Method.Name()) {
+					implSSA := ext.prog.FuncValue(implFn)
+					if implSSA == nil {
+						continue
+					}
+					// 动态 invoke 的 cc.Args 不含接收者（在 cc.Value）——
+					// 实参对应候选方法 Params[1:]（Params[0] 是 receiver）
+					for i, arg := range cc.Args {
+						if i+1 >= len(implSSA.Params) {
+							break
+						}
+						if _, isConst := arg.(*ssa.Const); isConst {
+							continue
+						}
+						argID, err := ext.emitValue(arg)
+						if err != nil || argID == "" {
+							continue
+						}
+						paramID, err := ext.emitValue(implSSA.Params[i+1])
+						if err != nil || paramID == "" {
+							continue
+						}
+						if err := ext.emitEdgeKind(argID, paramID, domain.FactArgument); err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
+		return nil // 函数值调用：无法解析被调方
 	}
 	// 摘要优先：外部函数走内置/用户摘要；本地函数经 field-summary.yaml
 	// 自定义条目（如 orm_write 的本地 ORM 层）。无匹配 spec 时 applySummary

@@ -33,7 +33,8 @@ import (
 // emitFunctionFields 发射单个函数内的字段访问节点与数据流边。
 func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
 	funcID domain.CanonicalID, idents map[token.Pos]string, assignTargets []assignTarget,
-	funcData *funcData, specs map[string]summarySpec, fallbackTotal *int, emit domain.EmitFunc) error {
+	funcData *funcData, specs map[string]summarySpec, fallbackTotal *int, emit domain.EmitFunc,
+	pkgs []*types.Package) error {
 	logger := zap.L()
 	logger.Debug("enter emitFunctionFields")
 	defer logger.Debug("exit emitFunctionFields")
@@ -43,6 +44,7 @@ func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Func
 	ext := &fieldExtractor{
 		repo:     repo,
 		prog:     prog,
+		pkgs:     pkgs,
 		fn:       fn,
 		funcID:   funcID,
 		// 当前函数文件（虚拟节点 FilePath 用：SQL/GORM/外部摘要）
@@ -830,6 +832,7 @@ func ssaOp(v ssa.Value) string {
 type fieldExtractor struct {
 	repo   *domain.Repository
 	prog   *ssa.Program
+	pkgs   []*types.Package // ⑮ 接口动态派发候选枚举用
 	fn     *ssa.Function
 	funcID domain.CanonicalID
 	idents        map[token.Pos]string // 源码标识符索引（Alloc 反查变量名）

@@ -1491,3 +1491,89 @@ func main() {}
 		t.Error("Update(record, scope) 缺 summary_io 持久化边（对象值 → 表.列 节点）")
 	}
 }
+
+// TestLocalObjectTraceSelfContained：⑭ 局部对象追踪——DAO 返回对象 →
+// 局部变量 → helper 传参（起点须纳入与目标字段同类型的 local/phi 值）。
+func TestLocalObjectTraceSelfContained(t *testing.T) {
+	if !scipGoAvailable() {
+		t.Skip("scip-go not found")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/loc\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "main.go"), `package loc
+
+type Record struct {
+	FinalFee float64
+}
+
+func helper(r *Record) {
+	r.FinalFee = 100
+}
+
+func buildRecord() *Record {
+	return &Record{}
+}
+
+func run() {
+	obj := buildRecord()
+	helper(obj)
+}
+
+func main() {}
+`)
+	if code := runCLI(t, "init", "--repo", dir); code != 0 {
+		t.Fatalf("init exit = %d", code)
+	}
+	code, out := runCLIOut(t, "query", "trace-forward", "example.com/loc.Record.FinalFee",
+		"--func", "symbol:go:example.com/loc:run", "--repo", dir)
+	if code != 0 {
+		t.Fatalf("trace-forward exit = %d", code)
+	}
+	if !strings.Contains(out, "r.FinalFee") {
+		t.Errorf("局部对象（DAO 返回）传参未连到 helper 写入，output=%q", out[:min(len(out), 400)])
+	}
+}
+
+// TestInterfaceCallTraceSelfContained：⑮ 接口动态派发——接口方法调用
+// 传参（无静态 callee）须经候选实现建立 argument 边，追踪进入实现。
+func TestInterfaceCallTraceSelfContained(t *testing.T) {
+	if !scipGoAvailable() {
+		t.Skip("scip-go not found")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/ifc\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "main.go"), `package ifc
+
+type Record struct {
+	FinalFee float64
+}
+
+type Writer interface {
+	Write(r *Record)
+}
+
+type FileWriter struct{}
+
+func (w *FileWriter) Write(r *Record) {
+	r.FinalFee = 200
+}
+
+func run2() {
+	var w Writer = &FileWriter{}
+	w.Write(&Record{})
+}
+
+func main() {}
+`)
+	if code := runCLI(t, "init", "--repo", dir); code != 0 {
+		t.Fatalf("init exit = %d", code)
+	}
+	code, out := runCLIOut(t, "query", "trace-forward", "example.com/ifc.Record.FinalFee",
+		"--func", "symbol:go:example.com/ifc:run2", "--repo", dir)
+	if code != 0 {
+		t.Fatalf("trace-forward exit = %d", code)
+	}
+	if !strings.Contains(out, "r.FinalFee") {
+		t.Errorf("接口调用传参未连到实现 (FileWriter).Write 的写入，output=%q", out[:min(len(out), 400)])
+	}
+}

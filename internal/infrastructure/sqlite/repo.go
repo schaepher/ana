@@ -863,14 +863,17 @@ SELECT id, depth, name, edge_kinds, line FROM def_trace ORDER BY depth, id`
       AND json_extract(n.properties, '$.full_path') = ?
       AND json_extract(n.properties, '$.func_id') = ?
     UNION
-    -- 起点：函数参数与局部对象变量（调用方经 argument 进入 callee 对该
-    -- 字段的实际写入；① param/receiver 传参、⑩ alloc 局部对象传参——
-    -- var c Cfg; fill(&c) 调用方无字段访问时仍能正向追踪）
+    -- 起点：函数参数、局部对象变量与同类型 local/phi 值（调用方经
+    -- argument 进入 callee 对该字段的实际写入；① param/receiver 传参、
+    -- ⑩ alloc 局部对象、⑭ DAO 返回对象→局部变量→helper——与目标字段
+    -- 所属结构体同类型的 SSA 值也作起点，避免"返回对象→局部变量"路径丢失）
     SELECT n.id, 0, n.name, '', n.line_start, 0, n.kind
     FROM nodes n
     WHERE n.kind = 'ssa_value'
       AND json_extract(n.properties, '$.func_id') = ?
-      AND json_extract(n.properties, '$.origin_kind') IN ('param','receiver','alloc')
+      AND (json_extract(n.properties, '$.origin_kind') IN ('param','receiver','alloc')
+           OR json_extract(n.properties, '$.type_string') = ?
+           OR json_extract(n.properties, '$.type_string') = ?)
     UNION
     SELECT e.target_id, d.depth + 1, n_next.name,
            CASE WHEN d.edge_kinds = '' THEN e.kind
@@ -900,7 +903,10 @@ SELECT id, depth, name, edge_kinds, line, is_usage FROM fwd_trace ORDER BY depth
 		err  error
 	)
 	if forward {
-		rows, err = r.Query(query, field, string(funcID), string(funcID), field, field,
+		targetType := strings.TrimSuffix(field, "."+lastSeg(field))
+		rows, err = r.Query(query, field, string(funcID), string(funcID),
+			targetType, "*"+targetType,
+			field, field,
 			"%."+lastSeg(field), "%"+pkgOf(field)+".%", maxDepth)
 	} else {
 		rows, err = r.Query(query, field, string(funcID), maxDepth)
