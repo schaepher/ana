@@ -889,3 +889,25 @@ codeintel export graph --type modules [--format mermaid] --repo <path>
   未知实现标 `[未知实现]`
 - `export graph --type modules`：mermaid 模块调用图（模块节点 +
   grpc 边，边标注 服务.方法 计数）
+
+### 18.5 一期/二期范围（Q130）
+
+**一期已交付（bc51b5a）**：
+- gRPC 客户端/服务端识别（NewXxxClient / RegisterXxxServer，protoc 惯例）
+- modules.yaml 模块边界（查询期计算，改配置无需重建索引）
+- grpc_service 节点 + grpc_call / grpc_impl 边
+- query module-calls（含 --module / --json）+ export graph --type modules
+
+**二期（backlog，设计已预留扩展位）**：
+- **HTTP（REST）模块间调用**：http.Client 调用点识别 + 服务端路由
+  （URL 字符串/配置驱动，模式杂）——Q124 传输范围扩展
+- **消息队列**（kafka/rabbit 发布订阅）——Q124 同上
+- **跨函数客户端传递**（`handle(c)` 内 `c.Method()`）：当前仅函数内
+  追踪（grpcClients 为 processFile 局部 map）；需 AST 参数流扩展
+  （实参→形参关联客户端对象）——Q125 盲区
+- **ServiceDesc 动态注册**（grpc 反射服务）：当前标"未知实现"——
+  需识别 `grpc.ServiceDesc` 注册表——Q127 盲区
+- **多 go.mod 大仓**：当前仅单 module 构建（多个 go.mod 需构建期
+  扩展加载与模块归属）——Q121 备注
+- **模块图进前端图探索**（serve 页面模块视图）：当前仅 CLI/export
+  输出，无 module 节点落库——Q129 备注
