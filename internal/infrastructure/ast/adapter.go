@@ -56,12 +56,14 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 	// 注意：不能用调用点所在包的 Fset 解析被调用函数的位置（跨包偏移
 	// 不匹配），须在各自包内收集。
 	registerServers := collectRegisterServers(pkgs, repo.Module)
+	// §18：protoc 生成的 NewXxxClient 客户端构造器（key: "pkgPath:funcName" → 服务名）
+	newClients := collectNewClients(pkgs, repo.Module)
 
 	for _, pkg := range pkgs {
 		if !isInModule(pkg.PkgPath, repo.Module) {
 			continue // 仅处理项目内包
 		}
-		if err := a.processPackage(repo, pkg, emit, serviceFlags, registerServers); err != nil {
+		if err := a.processPackage(repo, pkg, emit, serviceFlags, registerServers, newClients); err != nil {
 			return err
 		}
 	}
@@ -95,8 +97,52 @@ func collectRegisterServers(pkgs []*packages.Package, module string) map[string]
 	return out
 }
 
+// collectNewClients 遍历 .pb.go 收集 protoc 生成的 NewXxxClient 客户端
+// 构造器（field_trace.md §18.2；key: "pkgPath:funcName" → 服务名）。
+func collectNewClients(pkgs []*packages.Package, module string) map[string]string {
+	out := map[string]string{}
+	for _, pkg := range pkgs {
+		if !isInModule(pkg.PkgPath, module) {
+			continue
+		}
+		for _, f := range pkg.Syntax {
+			file := pkg.Fset.PositionFor(f.Pos(), false).Filename
+			if !strings.HasSuffix(file, ".pb.go") {
+				continue
+			}
+			for _, decl := range f.Decls {
+				fn, ok := decl.(*ast.FuncDecl)
+				if !ok || fn.Recv != nil {
+					continue
+				}
+				if svc, ok2 := newClientService(fn.Name.Name); ok2 {
+					out[pkg.PkgPath+":"+fn.Name.Name] = svc
+				}
+			}
+		}
+	}
+	return out
+}
+
+// newClientService 从 NewXxxClient 函数名提取服务名（NewGreeterClient →
+// Greeter）；非客户端构造器返回 ok=false。
+func newClientService(name string) (string, bool) {
+	if !strings.HasPrefix(name, "New") || !strings.HasSuffix(name, "Client") ||
+		len(name) <= len("NewClient") {
+		return "", false
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(name, "New"), "Client"), true
+}
+
+// registerService 从 RegisterXxxServer 函数名提取服务名（RegisterGreeterServer
+// → Greeter）。
+func registerService(name string) string {
+	return strings.TrimSuffix(strings.TrimPrefix(name, "Register"), "Server")
+}
+
 func (a *Adapter) processPackage(repo *domain.Repository, pkg *packages.Package, emit domain.EmitFunc,
-	serviceFlags map[domain.CanonicalID]map[string]bool, registerServers map[string]bool) error {
+	serviceFlags map[domain.CanonicalID]map[string]bool, registerServers map[string]bool,
+	newClients map[string]string) error {
 	logger := zap.L()
 	logger.Debug("enter (Adapter).processPackage")
 	defer logger.Debug("exit (Adapter).processPackage")
@@ -126,7 +172,7 @@ func (a *Adapter) processPackage(repo *domain.Repository, pkg *packages.Package,
 	}
 
 	for _, f := range pkg.Syntax {
-		if err := a.processFile(repo, pkg, f, emit, serviceFlags, registerServers); err != nil {
+		if err := a.processFile(repo, pkg, f, emit, serviceFlags, registerServers, newClients); err != nil {
 			return err
 		}
 	}
@@ -135,7 +181,8 @@ func (a *Adapter) processPackage(repo *domain.Repository, pkg *packages.Package,
 
 // processFile 遍历单个 AST：定位每个调用点，连接调用者与被调用者。
 func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f *ast.File, emit domain.EmitFunc,
-	serviceFlags map[domain.CanonicalID]map[string]bool, registerServers map[string]bool) error {
+	serviceFlags map[domain.CanonicalID]map[string]bool, registerServers map[string]bool,
+	newClients map[string]string) error {
 	logger := zap.L()
 	logger.Debug("enter (Adapter).processFile")
 	defer logger.Debug("exit (Adapter).processFile")
@@ -155,6 +202,8 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 	// 对象流追踪：变量名 → 对象 ID（同一函数内）；表达式 Pos → 对象 ID（去重）
 	objVars := map[string]domain.CanonicalID{}
 	objCache := map[token.Pos]domain.CanonicalID{}
+	// gRPC 客户端对象（§18.2）：变量名 → 服务名（NewXxxClient 返回值，函数内追踪）
+	grpcClients := map[string]string{}
 
 	ast.Inspect(f, func(n ast.Node) bool {
 		if n == nil {
@@ -171,6 +220,14 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 			if id, isID := assign.Lhs[0].(*ast.Ident); isID {
 				if objID, ok := a.createObject(pkg, assign.Rhs[0], stack, emit, repo, objCache); ok {
 					objVars[id.Name] = objID
+				}
+				// §18：c := pb.NewXxxClient(conn) → gRPC 客户端对象（服务名）
+				if call, isCall := assign.Rhs[0].(*ast.CallExpr); isCall {
+					if cc, ok2 := resolveCallee(pkg.TypesInfo, call.Fun); ok2 && cc.Pkg() != nil {
+						if svc, ok3 := newClients[cc.Pkg().Path()+":"+cc.Name()]; ok3 {
+							grpcClients[id.Name] = svc
+						}
+					}
 				}
 			}
 		}
@@ -243,6 +300,28 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 		// 对象使用处：x.Method()（x 是初始化的对象）→ uses 边（对象 → 方法）
 		if sel, isSel := call.Fun.(*ast.SelectorExpr); isSel {
 			if xid, isID := sel.X.(*ast.Ident); isID {
+				// §18：gRPC 客户端方法调用 c.Method() → grpc_call 边
+				// （客户端调用服务 <svc> 的 <Method>）
+				if svc, okG := grpcClients[xid.Name]; okG && callee.Pkg() != nil {
+					svcID := domain.CanonicalID("symbol:go:" + callee.Pkg().Path() + ":svc." + svc)
+					_ = emit(domain.Item{Node: &domain.CodeEntity{
+						ID:   svcID,
+						Kind: domain.KindGrpcService,
+						Name: "svc." + svc,
+						Properties: map[string]any{"service_name": svc},
+					}})
+					_ = emit(domain.Item{Fact: &domain.Fact{
+						SourceID:   callerID,
+						TargetID:   svcID,
+						Kind:       domain.FactGrpcCall,
+						ToolSource: domain.ToolCodeGraph,
+						Confidence: 1.0,
+						Metadata: map[string]any{
+							"method":   sel.Sel.Name,
+							"line_num": pkg.Fset.PositionFor(call.Pos(), false).Line,
+						},
+					}})
+				}
 				if objID, ok := objVars[xid.Name]; ok {
 					if methodID, methodKind := fnID(callee); methodID != "" {
 						_ = emit(domain.Item{Node: nodeFor(repo, pkg, callee, methodID, methodKind, nil)})
@@ -327,10 +406,25 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 					flags["serves_grpc"] = true
 					marked = true
 				}
+				// §18：grpc_service 节点 + grpc_impl 边（实现类型 → 服务）
+				svcID := domain.CanonicalID("symbol:go:" + callee.Pkg().Path() + ":svc." + registerService(callee.Name()))
+				_ = emit(domain.Item{Node: &domain.CodeEntity{
+					ID:   svcID,
+					Kind: domain.KindGrpcService,
+					Name: "svc." + registerService(callee.Name()),
+					Properties: map[string]any{"service_name": registerService(callee.Name())},
+				}})
 				if impl := serviceImplNode(pkg, call, repo); impl != nil {
 					if err := emit(domain.Item{Node: impl}); err != nil {
 						return false
 					}
+					_ = emit(domain.Item{Fact: &domain.Fact{
+						SourceID:   impl.ID,
+						TargetID:   svcID,
+						Kind:       domain.FactGrpcImpl,
+						ToolSource: domain.ToolCodeGraph,
+						Confidence: 1.0,
+					}})
 				}
 			}
 			if marked {

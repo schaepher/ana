@@ -128,11 +128,11 @@ func cmdExportGraph(args []string) int {
 			repoPath = strings.TrimPrefix(a, "--repo=")
 		}
 	}
-	if graphType != "value-trace" && graphType != "callees" && graphType != "lifecycle" {
-		fmt.Fprintln(os.Stderr, "error: --type 须为 value-trace / callees / lifecycle")
+	if graphType != "value-trace" && graphType != "callees" && graphType != "lifecycle" && graphType != "modules" {
+		fmt.Fprintln(os.Stderr, "error: --type 须为 value-trace / callees / lifecycle / modules")
 		return 2
 	}
-	if target == "" {
+	if target == "" && graphType != "modules" {
 		fmt.Fprintln(os.Stderr, "error: --target <节点> 是必需的")
 		return 2
 	}
@@ -169,6 +169,14 @@ func cmdExportGraph(args []string) int {
 	switch {
 	case graphType == "callees":
 		output, err = renderCalleesDot(acts, anchor)
+	case graphType == "modules":
+		// 模块调用图（§18.4）：无需 target 锚点
+		calls, merr := acts.ModuleCalls("")
+		if merr != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", merr)
+			return 1
+		}
+		output = renderModulesMermaid(calls)
 	case graphType == "lifecycle":
 		// ⑤：字段路径输入解析为锚点（此前传字段路径 → 无行 → 空图）
 		if anchor, err = acts.ResolveAnchor(target); err != nil {

@@ -61,6 +61,17 @@ type UnusedFunc struct {
 	SinceMark  string // --since 标注："" / "new"（声明行新增）/ "mod"（行号区间新增）
 }
 
+// GrpcCallRow 模块间调用原始行（field_trace.md §18.3）：grpc_call 边 +
+// 服务端实现归属（grpc_impl 边反向查）。
+type GrpcCallRow struct {
+	CallerID   CanonicalID // 客户端调用方函数
+	ServiceID  CanonicalID // grpc_service 节点
+	Service    string      // 生成包路径 + 服务名（如 example.com/app/pb.Greeter）
+	Method     string      // 客户端调用的方法名
+	Line       int
+	ImplTypeID CanonicalID // 服务端实现类型（grpc_impl 边 source；无实现时空）
+}
+
 // SinceInfo --since <ref> 的 diff 解析结果（field_trace.md §16.5）。
 type SinceInfo struct {
 	Ref        string             // git ref（--since 参数）

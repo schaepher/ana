@@ -827,3 +827,65 @@ codeintel query path <from> <to> [--max-depth N] [--kind data|calls] [--json] --
   `{path: [...], length: N, reachable: bool}`
 - 用途：需求断言"X 的值应到达 Y"——AGENT 直接判定 reachable，替代
   人工判读 value-trace
+
+---
+
+## 18. 大仓模块间调用关系分析（Q121–Q128，2026-08-14）
+
+### 18.1 需求与形态（Q121–Q122）
+
+大仓（monorepo）中模块间通过 gRPC 跨进程调用（如服务 A 调服务 B 的
+`Greeter.SayHello`）。目标：分析模块间调用关系——谁调用了谁、调用的
+服务与方法、服务端实现归属。
+
+- 模块边界：**仅配置驱动**（Q123）——仓库根 `modules.yaml` 定义
+  前缀→模块名映射（无默认规则）：
+  ```yaml
+  modules:
+    - prefix: "internal/svc_a"   # 包路径前缀（module 相对）
+      name: "svc_a"
+    - prefix: "pkg/common"
+      name: "common"
+  ```
+  未匹配前缀的包归 `_root` 模块（查询期计算，改配置无需重建索引）
+- 传输范围：仅 gRPC（Q124，protoc 生成惯例；HTTP/消息队列二期，
+  设计预留框架无关启发式扩展位）
+
+### 18.2 识别模式（Q125–Q126）
+
+- **服务端**：`pb.RegisterXxxServer(s, impl)`（protoc 惯例，AST 适配器
+  serves_grpc 已识别）→ 服务 `Xxx` 由 impl 类型实现
+- **客户端**：`c := pb.NewXxxClient(conn)` → 客户端对象 c 记入 objVars
+  （复用 `x := &T{}` 对象追踪机制，Q3）；函数内 `c.Method(ctx, req)`
+  经 objVars 归属 → 客户端调用服务 `Xxx` 的 `Method`
+- **ServiceDesc 动态注册**（grpc 反射服务）：标"未知实现"（缺失信息，
+  Q93 精神）
+- **跨函数客户端传递**（`handle(c)` 内 `c.Method()`）：一期盲区（仅
+  函数内追踪），文档记录
+
+### 18.3 数据模型（Q127）
+
+- 新增节点 `grpc_service`：ID `symbol:go:<生成包>:svc.<Xxx>`（服务标识 =
+  生成包路径 + protoc 服务名）；properties `{service_name}`
+- 新增边：
+  - `grpc_impl`：服务实现类型 → grpc_service 节点（服务端归属，
+    conf 1.0）
+  - `grpc_call`：客户端调用方函数 → grpc_service 节点（conf 1.0，
+    metadata `{method, line_num}`——客户端调用服务 Xxx 的 Method）
+- 匹配键（Q128）：服务名（生成包路径+服务名）+ 方法名双键；
+  客户端调用无仓库内服务端实现 → 标"服务端未在仓库内"
+
+### 18.4 产出（Q129）
+
+```
+codeintel query module-calls [--module <name>] [--json] --repo <path>
+codeintel export graph --type modules [--format mermaid] --repo <path>
+```
+
+- `query module-calls`：模块级调用表——调用方模块 → 被调模块：
+  服务.方法 + 行号 + 调用方函数；`--module` 过滤单模块；
+  `--json` 结构化 `{calls: [{from_module, to_module, service, method,
+  caller, line}]}`；服务端未在仓库内的调用标 `[外部服务]`、
+  未知实现标 `[未知实现]`
+- `export graph --type modules`：mermaid 模块调用图（模块节点 +
+  grpc 边，边标注 服务.方法 计数）

@@ -37,6 +37,7 @@ type Reader interface {
 	GetUncalledFunctions() ([]*domain.UnusedFunc, error)
 	GetIsolatedChains() ([][]*domain.UnusedFunc, error)
 	GetPath(from, to domain.CanonicalID, maxDepth int, viaCalls bool) ([]*domain.TraceRow, error)
+	GetGrpcCalls() ([]*domain.GrpcCallRow, error)
 	Counts() (nodes int, edges int, err error)
 	GetLatest() (*domain.BuildMeta, error)
 	RepoPath() string
@@ -44,7 +45,8 @@ type Reader interface {
 
 // Actions 是 CLI 与 HTTP 共享的查询用例集合。
 type Actions struct {
-	repo Reader
+	repo    Reader
+	modName string // go.mod module 路径（moduleName 缓存）
 }
 
 // New 创建 Actions。

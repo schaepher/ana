@@ -2527,3 +2527,76 @@ func main() {
 		t.Errorf("helper 未改动不应标注，output=%q", out[:min(len(out), 200)])
 	}
 }
+
+// TestModuleCallsSelfContained：模块间 gRPC 调用（field_trace.md §18）——
+// fixture 模拟 protoc 生成代码（.pb.go）+ modules.yaml → query module-calls
+// 输出 svc_a → svc_b: Greeter.SayHello；export graph --type modules 产出图。
+func TestModuleCallsSelfContained(t *testing.T) {
+	if !scipGoAvailable() {
+		t.Skip("scip-go not found")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/mono\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "pb/greet.pb.go"), `package pb
+
+type GreeterServer interface{ SayHello(string) string }
+
+func RegisterGreeterServer(s any, impl GreeterServer) {}
+
+type GreeterClient interface{ SayHello(string) string }
+
+func NewGreeterClient(conn any) GreeterClient { return nil }
+`)
+	writeFile(t, filepath.Join(dir, "svc_a/client.go"), `package svc_a
+
+import "example.com/mono/pb"
+
+func callGreeter(conn any) {
+	c := pb.NewGreeterClient(conn)
+	c.SayHello("hi")
+}
+`)
+	writeFile(t, filepath.Join(dir, "svc_b/server.go"), `package svc_b
+
+import "example.com/mono/pb"
+
+type greeterImpl struct{}
+
+func (g *greeterImpl) SayHello(s string) string { return s }
+
+func register(s any) {
+	pb.RegisterGreeterServer(s, &greeterImpl{})
+}
+`)
+	writeFile(t, filepath.Join(dir, "modules.yaml"), `modules:
+  - prefix: "svc_a"
+    name: "svc_a"
+  - prefix: "svc_b"
+    name: "svc_b"
+`)
+	if code := runCLI(t, "init", "--repo", dir); code != 0 {
+		t.Fatalf("init exit = %d", code)
+	}
+	code, out := runCLIOut(t, "query", "module-calls", "--repo", dir)
+	if code != 0 {
+		t.Fatalf("module-calls exit = %d", code)
+	}
+	if !strings.Contains(out, "svc_a → svc_b") || !strings.Contains(out, "Greeter.SayHello") {
+		t.Errorf("module-calls 应输出 svc_a → svc_b: Greeter.SayHello，output=%q", out)
+	}
+	// --json
+	code, out = runCLIOut(t, "query", "module-calls", "--repo", dir, "--json")
+	if code != 0 || !strings.Contains(out, `"from_module": "svc_a"`) || !strings.Contains(out, `"to_module": "svc_b"`) {
+		t.Errorf("module-calls --json 缺失，code=%d output=%q", code, out[:min(len(out), 300)])
+	}
+	// --module 过滤
+	code, out = runCLIOut(t, "query", "module-calls", "svc_b", "--repo", dir)
+	if code != 0 || strings.Contains(out, "svc_a →") {
+		t.Errorf("--module svc_b 应无调用（svc_b 是被调方），code=%d output=%q", code, out)
+	}
+	// export graph --type modules
+	code, out = runCLIOut(t, "export", "graph", "--type", "modules", "--repo", dir)
+	if code != 0 || !strings.Contains(out, "flowchart") || !strings.Contains(out, "Greeter.SayHello") {
+		t.Errorf("export graph modules 缺失，code=%d output=%q", code, out[:min(len(out), 300)])
+	}
+}

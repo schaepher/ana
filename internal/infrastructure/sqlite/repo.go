@@ -1697,3 +1697,58 @@ func (r *Repo) GetPath(from, to domain.CanonicalID, maxDepth int, viaCalls bool)
 	}
 	return out, nil
 }
+
+// GetGrpcCalls 模块间调用原始行（field_trace.md §18.3）：
+// grpc_call 边（客户端调用方 → grpc_service）+ 经 grpc_impl 边
+// 反查服务端实现类型（无实现时 ImplTypeID 空——服务端不在仓库内）。
+func (r *Repo) GetGrpcCalls() ([]*domain.GrpcCallRow, error) {
+	logger := zap.L()
+	logger.Debug("enter (Repo).GetGrpcCalls")
+	defer logger.Debug("exit (Repo).GetGrpcCalls")
+	rows, err := r.Query(`SELECT e.source_id, e.target_id, n.name,
+		json_extract(e.metadata, '$.method'), COALESCE(json_extract(e.metadata, '$.line_num'), 0),
+		(SELECT s.source_id FROM edges s WHERE s.target_id = e.target_id AND s.kind = 'grpc_impl' LIMIT 1)
+	FROM edges e JOIN nodes n ON n.id = e.target_id
+	WHERE e.kind = 'grpc_call' ORDER BY e.source_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*domain.GrpcCallRow
+	for rows.Next() {
+		var (
+			row    domain.GrpcCallRow
+			caller string
+			svc    string
+			name   string
+			method string
+			line   int
+			impl   sql.NullString
+		)
+		if err := rows.Scan(&caller, &svc, &name, &method, &line, &impl); err != nil {
+			return nil, err
+		}
+		row.CallerID = domain.CanonicalID(caller)
+		row.ServiceID = domain.CanonicalID(svc)
+		row.Service = strings.TrimPrefix(name, "svc.")
+		if pkg := pkgOfID(row.ServiceID); pkg != "" {
+			row.Service = pkg + "." + strings.TrimPrefix(name, "svc.")
+		}
+		row.Method = method
+		row.Line = line
+		if impl.Valid && impl.String != "" {
+			row.ImplTypeID = domain.CanonicalID(impl.String)
+		}
+		out = append(out, &row)
+	}
+	return out, rows.Err()
+}
+
+// pkgOfID 从 canonical ID 提取包路径（symbol:go:<pkg>:<name>）。
+func pkgOfID(id domain.CanonicalID) string {
+	s := strings.TrimPrefix(string(id), "symbol:go:")
+	if i := strings.LastIndex(s, ":"); i >= 0 {
+		return s[:i]
+	}
+	return s
+}

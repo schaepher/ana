@@ -396,3 +396,72 @@ func main() { _ = G }
 		t.Error("var x = NewFoo() 未建 calls 边（构造函数会被误报未调用）")
 	}
 }
+
+// TestGrpcClientCallEdge：模块间调用（field_trace.md §18）——模拟 protoc
+// 生成代码（.pb.go）：RegisterGreeterServer（服务端）+ NewGreeterClient
+// （客户端）→ grpc_service 节点、grpc_impl 边（实现类型）、grpc_call 边
+// （客户端调用方函数 → 服务，metadata 带方法名与行号）。
+func TestGrpcClientCallEdge(t *testing.T) {
+	_, facts := indexFixture(t, map[string]string{
+		"go.mod": "module example.com/mtest\n\ngo 1.21\n",
+		"pb/greet.pb.go": `package pb
+
+type GreeterServer interface{ SayHello(string) string }
+
+func RegisterGreeterServer(s any, impl GreeterServer) {}
+
+type GreeterClient interface{ SayHello(string) string }
+
+func NewGreeterClient(conn any) GreeterClient { return nil }
+`,
+		"svc_a/client.go": `package svc_a
+
+import "example.com/mtest/pb"
+
+func callGreeter(conn any) {
+	c := pb.NewGreeterClient(conn)
+	c.SayHello("hi")
+}
+`,
+		"svc_b/server.go": `package svc_b
+
+import "example.com/mtest/pb"
+
+type greeterImpl struct{}
+
+func (g *greeterImpl) SayHello(s string) string { return s }
+
+func register(s any) {
+	pb.RegisterGreeterServer(s, &greeterImpl{})
+}
+`,
+	})
+	// grpc_service 节点
+	svcNode := false
+	for _, f := range facts {
+		if f.Kind == domain.FactGrpcCall {
+			// grpc_call：调用方函数 → grpc_service
+			if string(f.SourceID) != "symbol:go:example.com/mtest/svc_a:callGreeter" {
+				t.Errorf("grpc_call source = %s", f.SourceID)
+			}
+			if string(f.TargetID) != "symbol:go:example.com/mtest/pb:svc.Greeter" {
+				t.Errorf("grpc_call target = %s", f.TargetID)
+			}
+			if f.Metadata["method"] != "SayHello" {
+				t.Errorf("grpc_call method = %v", f.Metadata["method"])
+			}
+			svcNode = true
+		}
+		if f.Kind == domain.FactGrpcImpl {
+			if string(f.SourceID) != "symbol:go:example.com/mtest/svc_b:greeterImpl" {
+				t.Errorf("grpc_impl source = %s", f.SourceID)
+			}
+			if string(f.TargetID) != "symbol:go:example.com/mtest/pb:svc.Greeter" {
+				t.Errorf("grpc_impl target = %s", f.TargetID)
+			}
+		}
+	}
+	if !svcNode {
+		t.Error("grpc_call 边缺失（NewGreeterClient 客户端调用未归属）")
+	}
+}

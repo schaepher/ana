@@ -31,6 +31,7 @@ const (
 	KindParameter      EntityKind = "parameter"       // 函数签名参数
 	KindReceiver       EntityKind = "receiver"        // 方法接收者（与普通参数区分展示）
 	KindResult         EntityKind = "result"          // 函数/方法返回值
+	KindGrpcService    EntityKind = "grpc_service"    // gRPC 服务标识（模块间调用，field_trace.md §18）
 )
 
 // FactKind 事实（关系）种类，对应 edges.kind 列。
@@ -62,6 +63,8 @@ const (
 	FactSummaryIO     FactKind = "summary_io"     // 外部摘要函数 → 字段路径
 	FactHasParam      FactKind = "has_param"      // 函数 → 签名参数节点
 	FactHasResult     FactKind = "has_result"     // 函数 → 返回值节点
+	FactGrpcCall      FactKind = "grpc_call"      // 客户端调用方函数 → grpc_service（模块间调用，§18）
+	FactGrpcImpl      FactKind = "grpc_impl"      // 服务实现类型 → grpc_service（服务端归属，§18）
 )
 
 // 工具来源标识，对应 edges.tool_source 列。

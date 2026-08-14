@@ -43,7 +43,7 @@ func cmdQuery(args []string) int {
 	// 手动解析 flags（flag 包遇到位置参数即停止，无法支持 "query symbol X --repo Y" 形式）
 	f := parseQueryFlags(rest)
 	target := ""
-	if sub != "unused" {
+	if sub != "unused" && sub != "module-calls" {
 		if len(f.positional) < 1 {
 			fmt.Fprintf(os.Stderr, "error: 缺少符号参数\n")
 			return 2
@@ -88,6 +88,12 @@ func cmdQuery(args []string) int {
 		return querySummary(acts, target, opts, f.format)
 	case "unused":
 		return queryUnused(acts, abs, f)
+	case "module-calls":
+		module := ""
+		if len(f.positional) >= 1 {
+			module = f.positional[0]
+		}
+		return queryModuleCalls(acts, module, opts)
 	case "path":
 		return queryPath(acts, f.positional[0], f.positional[1], f)
 	case "callers", "callees", "impact":
