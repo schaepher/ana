@@ -194,12 +194,30 @@ defer logger.Debug("exit <name>")
     （rm -rf .codeintel 或 init 清库）会留下持有已删除文件句柄的旧 serve 进程，
     表现为 API 返回旧数据。改库后须重启 serve。
 
+## 开发操作坑（踩过，勿重蹈）
+
+- **`pkill -f "codeintel-e2e serve"` 会匹配自身自杀**（2026-08-14 复发两次）。
+  清理 e2e 进程用 `pkill -x codeintel-e2e`（精确进程名）；杀完 sleep 0.5 再起新进程。
+- **git 命令务必在 ana 仓库目录执行**：曾在 `/home/schaepher/Codes/radar`（验证仓库）
+  误执行 `git add -A` 把 `.codeintel/` 文件提交进 radar（已撤销）。验证仓库只读不改。
+- **schema 无自动迁移**（`PRAGMA user_version=2`）：改动表结构后验证仓库必须
+  `codeintel clean` + `init` 重建，否则旧库 schema 不匹配报错或数据形态过时
+  （曾因旧库缺 GORM 虚拟节点误判功能未生效）。
+- **日志已切文件**：所有带 `--repo` 的命令日志写入 `.codeintel/codeintel.log`，
+  stdout 只承载查询结果——排查问题看日志文件，不要从 stdout 找日志。
+- **验证矩阵**：make test（12 包）/ make it（integration，需 scip-go）/
+  make e2e（端口 8096，E2E_REPO 指定）——改完代码三件套都要过。
+- **工作流约定**（用户明确）：每个功能先写测试再实现（测试先行）；开发中的
+  疑问必须先向用户确认（设计树访谈模式）；改完验证后必须 git push。
+- **schema 与语义变更需重建验证**：适配器改动后验证仓库必须 `init` 全量重建
+  （增量 update 只更新变更文件，可能残留旧形态数据）。
+
 ## 已知限制
 
 - 仅单 module 仓库；包级初始化（var x = NewFoo()）中的调用不建 CALLS 边
-- sqlite-vec 向量表未创建（Semble 未接入）；schema 版本由 PRAGMA user_version=1 管理，
+- sqlite-vec 向量表未创建（Semble 未接入）；schema 版本由 PRAGMA user_version=2 管理，
   版本不匹配时报错提示 `codeintel clean` 重建
-- 未实现：MCP serve（explore_symbol 等 5 工具）、增量构建、LLM 摘要、Semble
+- 未实现：MCP serve（explore_symbol 等 5 工具）、LLM 摘要、Semble
 
 ## 测试
 
