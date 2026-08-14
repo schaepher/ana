@@ -40,7 +40,8 @@ codeintel 已提供符号导航（SCIP）、调用图与影响分析（AST/go/pa
   ① 给定任意函数，列出其直接/间接读取和编辑的所有结构体字段（全路径 `a.b.c`，类型限定）；
   ② 给定任意字段，反向追溯其所有产生点（赋值来源），正向追溯其返回后所有使用点（消费位置）。
 - **v1 非目标**：不提供漏洞扫描、安全规则匹配、污点传播、反射分析；channel 元素收发不追踪（map/slice/array 元素追踪见 §14.11）。
-- **v2 计划**：MCP serve 交互入口（TD.md §7 契约，不单独设计 shell）、增量更新、map/slice 等复合类型元素追踪。
+- **v2 计划**：增量更新、map/slice 等复合类型元素追踪（MCP serve 已取消
+  ——AI 代理直接使用 CLI 查询命令，§19）。
 
 ### 1.3 适用规模
 
@@ -58,7 +59,7 @@ codeintel 已提供符号导航（SCIP）、调用图与影响分析（AST/go/pa
 | S2 | `codeintel query trace-backward --field github.com/x/payment.Request.Amount --func symbol:go:github.com/x/payment:(Service).Process` | 追溯该字段在 `Process` 函数中的来源（产生点），输出树形路径（缩进 + 边类型 + 节点名 + 行号）。 |
 | S3 | `codeintel query trace-forward --field github.com/x/payment.Request.Amount --func symbol:go:github.com/x/payment:(Service).Process` | 以字段对象/引用为追踪目标，追溯该字段在 `Process` 返回后（调用方）的后续读写，输出调用链缩进树。 |
 | S4 | `codeintel export --out=analysis.json` | 生成双层索引 JSON（函数→字段，字段→函数），用于 IDE 或脚本二次分析。 |
-| S5 | ~~交互式 shell~~（**取消**） | 交互入口由 v2 MCP serve 承担（TD.md §7），不再单独设计 shell 命令。 |
+| S5 | ~~交互式 shell~~（**取消**） | 交互入口 = AI 代理直接使用 CLI 查询命令（MCP serve 已取消，§19）。 |
 
 ---
 
@@ -365,7 +366,7 @@ codeintel/
 ├── docs/TD.md                  # v2.0 设计文档 + §12 补充记录（v2.2 追加本能力）
 ```
 
-**不保留**：`pkg/cpg` 公共 API（原 go-cpg §8.1）——查询入口为 CLI（及未来 MCP serve），无独立 pkg 导出层。
+**不保留**：`pkg/cpg` 公共 API（原 go-cpg §8.1）——查询入口为 CLI（MCP 已取消，§19），无独立 pkg 导出层。
 
 ---
 
@@ -393,7 +394,7 @@ codeintel/
 | **Phase 5** | 摘要与收尾 | 内置摘要、`field-summary.yaml`、测试（单测 + 集成）、性能验证 |
 
 ### v2 计划（与 TD.md 对齐）
-- MCP serve 交互入口（TD.md §7 契约，字段追溯作为新工具契约）
+- ~~MCP serve~~（已取消，§19：AI 直接使用 CLI）
 - 增量更新（`--update` / Git Hook）
 - map/slice/array/channel 元素追踪
 - 泛型实例化完整支持
@@ -428,7 +429,7 @@ SSA 语义与映射类决策全部保留：Q1（SSA_VALUE 统一建模）、Q2�
 | Q47 | 退出码 0/1/2/3/4 | 0/1/2（现状） | 对齐现有 CLI |
 | Q59 | `cpg-summary.yaml`，解析失败中止 | `field-summary.yaml`，解析失败降级（degraded） | 对齐降级矩阵 |
 | Q60 | testdata 五项目 | `ssa/testdata` 模块 + integration 扩展 | 对齐现有测试方式 |
-| Q20 | 无 S5 | S5 取消，交互入口走 MCP serve | TD.md 已有 MCP 契约 |
+| Q20 | 无 S5 | S5 取消，交互入口 = CLI 查询命令（MCP 已取消，§19） | 2026-08-15 修订 |
 
 ### 12.3 新增决策（Q68–Q73）
 
@@ -581,9 +582,11 @@ radar 实测：790 元素访问节点（`data["Active"]` 等）、736 行元素�
 ### 14.10 已确认 backlog（非 v1 范围）
 
 - 入口可达子图优化（§9：默认只分析入口可达，当前为全 module 构建）
+  ——**最低优先级**（Q135，2026-08-15 降级：待性能基准 benchmarks/ 数据
+  支撑后再评估；unused 分析 §16 已提供死代码量化手段作预判）
 - 性能基准 benchmarks/（§11：pprof 构建时间/内存记录）
-- v2 计划：MCP serve、泛型完整支持（channel 元素追踪 4f21ef3 已实现；
-  增量更新 7dec073 已实现）
+- v2 计划：泛型完整支持（channel 元素追踪 4f21ef3 已实现；
+  增量更新 7dec073 已实现；MCP serve 已取消——§19）
 
 ---
 
@@ -939,3 +942,13 @@ grpc.Invoke(ctx, target, "/example.com.pb.Greeter/SayHello", ...) // 旧版顶�
   `method_path`（完整路径）+ `method`（末段方法名）+ line_num；
   `module-calls` 聚合对两种形态统一按 `服务名.方法名` 展示；impl 匹配
   子查询改为按 grpc_service 节点 name 相等（`svc.<服务名>`，跨 ID 前缀）
+
+---
+
+## 19. 路线调整（Q135，2026-08-15）
+
+- **MCP serve 取消**：AI 代理直接使用 CLI 查询命令——全部 query 子命令
+  的 `--json` 结构化输出即机器接口契约；TD.md §7 MCP 工具契约不再实现
+- **入口可达子图优化降为最低优先级**：构建性能优化待性能基准
+  （benchmarks/）数据支撑后再评估；`query unused`（§16）已提供死代码
+  量化手段，可作为是否值得裁剪的预判依据

@@ -326,6 +326,10 @@ codeintel init --repo /path/to/repo
 
 ## 7. MCP 工具契约
 
+> **2026-08-15 修订（Q135）**：MCP serve **取消**——AI 代理直接使用 CLI
+> 查询命令（全部 query 子命令 + `--json` 结构化输出即机器接口契约）。
+> 本章契约不再实现，查询能力以 internal/cli 为准。
+
 ### 7.1 `explore_symbol`
 
 **输入**：
@@ -823,7 +827,8 @@ document 测 processDocument（接口方法过滤/实现方向）。
 
 ### 12.7 仍为降级项（v2.0 未实现）
 
-- MCP serve（explore_symbol 等 5 个工具）与 MCP 工具契约
+- ~~MCP serve（explore_symbol 等 5 个工具）与 MCP 工具契约~~——**已取消**
+  （2026-08-15 Q135：AI 代理直接使用 CLI 查询命令；`--json` 即结构化契约）
 - 增量构建（Git Hook 触发、stale 包刷新）
 - Semble（语义向量，sqlite-vec 表未建）
 - LLM 摘要（LLMPort 未接入）
