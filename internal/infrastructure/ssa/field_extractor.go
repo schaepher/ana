@@ -699,6 +699,11 @@ func (ext *fieldExtractor) funcIDOf(v ssa.Value) (domain.CanonicalID, bool) {
 		return ext.funcIDOfFn(fn)
 	}
 	parent := v.Parent()
+	// 闭包内值：Object() 为 nil（FuncLit）——向上找外层具名函数
+	// （Q14：闭包字段访问归入外层函数命名空间）
+	for parent != nil && parent.Object() == nil {
+		parent = parent.Parent()
+	}
 	if parent == nil {
 		return ext.funcID, true // 程序级值（Const 等）：归当前函数命名空间
 	}

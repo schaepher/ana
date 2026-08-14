@@ -1807,3 +1807,163 @@ func main() {}
 		t.Errorf("Load 值传参未连到 helper4 写入，output=%q", out[:min(len(out), 400)])
 	}
 }
+
+// TestClosureFieldTraceSelfContained：继续查——闭包内字段写入节点生成
+// （闭包字段访问归入外层函数，func_id=外层——追踪可用性验证）。
+func TestClosureFieldTraceSelfContained(t *testing.T) {
+	if !scipGoAvailable() {
+		t.Skip("scip-go not found")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/cl\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "main.go"), `package cl
+
+type Record struct {
+	FinalFee float64
+}
+
+func run8() {
+	rec := &Record{}
+	fn := func() {
+		rec.FinalFee = 700
+	}
+	fn()
+	_ = rec
+}
+
+func main() {}
+`)
+	if code := runCLI(t, "init", "--repo", dir); code != 0 {
+		t.Fatalf("init exit = %d", code)
+	}
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := sqlite.NewRepo(db)
+	// 闭包内写入节点：func_id 应为外层 run8（归入外层函数）
+	var writeID string
+	rows, err := repo.Query(`SELECT id FROM nodes WHERE kind='field_access'
+		AND json_extract(properties, '$.full_path') = 'example.com/cl.Record.FinalFee'
+		AND json_extract(properties, '$.access_kind') = 'write'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows.Next() {
+		_ = rows.Scan(&writeID)
+	}
+	rows.Close()
+	if writeID == "" {
+		t.Fatalf("闭包内字段写入节点缺失")
+	}
+	// 从写节点 value-trace 应连到 rec 分配（run8 上下文）
+	code, out := runCLIOut(t, "query", "value-trace", writeID, "--repo", dir)
+	if code != 0 {
+		t.Fatalf("value-trace exit = %d", code)
+	}
+	if !strings.Contains(out, "run8") {
+		t.Errorf("闭包内写入未归入外层函数，output=%q", out[:min(len(out), 300)])
+	}
+}
+
+// TestMapElemArgTraceSelfContained：继续查——map 元素值传参
+// （m["k"] 的值传给 helper）。
+func TestMapElemArgTraceSelfContained(t *testing.T) {
+	if !scipGoAvailable() {
+		t.Skip("scip-go not found")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/me\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "main.go"), `package me
+
+type Record struct {
+	FinalFee float64
+}
+
+func helper5(r *Record) {
+	r.FinalFee = 800
+}
+
+func run9(m map[string]*Record) {
+	helper5(m["k"])
+}
+
+func main() {}
+`)
+	if code := runCLI(t, "init", "--repo", dir); code != 0 {
+		t.Fatalf("init exit = %d", code)
+	}
+	code, out := runCLIOut(t, "query", "trace-forward", "example.com/me.Record.FinalFee",
+		"--func", "symbol:go:example.com/me:run9", "--repo", dir)
+	if code != 0 {
+		t.Fatalf("trace-forward exit = %d", code)
+	}
+	if !strings.Contains(out, "r.FinalFee") {
+		t.Errorf("map 元素传参未连到 helper5 写入，output=%q", out[:min(len(out), 400)])
+	}
+}
+
+// TestValueTraceInterfaceSelfContained：继续查——value-trace 经接口
+// argument 边进入候选实现（⑮ 只测了 trace-forward）。
+func TestValueTraceInterfaceSelfContained(t *testing.T) {
+	if !scipGoAvailable() {
+		t.Skip("scip-go not found")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/vtif\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "main.go"), `package vtif
+
+type Record struct {
+	FinalFee float64
+}
+
+type Writer interface {
+	Write(r *Record)
+}
+
+type FileWriter struct{}
+
+func (w *FileWriter) Write(r *Record) {
+	r.FinalFee = 200
+}
+
+func runA() {
+	var w Writer = &FileWriter{}
+	w.Write(&Record{})
+}
+
+func main() {}
+`)
+	if code := runCLI(t, "init", "--repo", dir); code != 0 {
+		t.Fatalf("init exit = %d", code)
+	}
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := sqlite.NewRepo(db)
+	// 锚点：runA 中 &Record{} 的 alloc 值（ssa_value，type=*Record）
+	var allocID string
+	rows, err := repo.Query(`SELECT id FROM nodes WHERE kind='ssa_value'
+		AND json_extract(properties, '$.func_id') = 'symbol:go:example.com/vtif:runA'
+		AND json_extract(properties, '$.type_string') = '*example.com/vtif.Record' LIMIT 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows.Next() {
+		_ = rows.Scan(&allocID)
+	}
+	rows.Close()
+	if allocID == "" {
+		t.Fatalf("runA alloc 节点缺失")
+	}
+	code, out := runCLIOut(t, "query", "value-trace", allocID, "--repo", dir)
+	if code != 0 {
+		t.Fatalf("value-trace exit = %d", code)
+	}
+	if !strings.Contains(out, "(FileWriter).Write") || !strings.Contains(out, "r.FinalFee") {
+		t.Errorf("value-trace 未经接口 argument 边进入候选实现，output=%q", out[:min(len(out), 400)])
+	}
+}

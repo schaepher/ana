@@ -152,7 +152,27 @@ func emitFunction(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
 	logger.Debug("enter emitFunction")
 	defer logger.Debug("exit emitFunction")
 	if _, ok := fn.Syntax().(*ast.FuncDecl); !ok {
-		return nil // 闭包 / 合成 wrapper
+		// 闭包（FuncLit）：字段访问归入外层具名函数（Q14 适配——此前
+		// 注释承诺但未实现，闭包内字段写入节点缺失）。合成 wrapper 无
+		// 外层（Parent nil）跳过。
+		parent := fn.Parent()
+		if parent == nil {
+			return nil
+		}
+		obj, ok := parent.Object().(*types.Func)
+		if !ok || obj == nil {
+			return nil
+		}
+		pid, _, _ := funcIdentity(obj)
+		if pid == "" {
+			return nil
+		}
+		pfd := data[pid]
+		if pfd == nil {
+			pfd = &funcData{}
+			data[pid] = pfd
+		}
+		return emitFunctionFields(repo, prog, fn, pid, idents, assignTargets, pfd, specs, fallbackTotal, emit, pkgs)
 	}
 	obj, ok := fn.Object().(*types.Func)
 	if !ok || obj == nil {
