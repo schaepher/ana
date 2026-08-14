@@ -927,9 +927,11 @@ func (r *Repo) GetFunctionFlows(funcID domain.CanonicalID, maxDepth int) ([]*dom
 	if maxDepth <= 0 {
 		maxDepth = 8
 	}
-	rows, err := r.Query(`WITH RECURSIVE flows(id, depth, name, edge_kinds, line, dir, kind, access) AS (
+	rows, err := r.Query(`WITH RECURSIVE flows(id, depth, name, edge_kinds, line, dir, kind, access, func_id, full_path) AS (
     SELECT n.id, 0, n.name, '', n.line_start, 0, n.kind,
-           json_extract(n.properties, '$.access_kind')
+           json_extract(n.properties, '$.access_kind'),
+           json_extract(n.properties, '$.func_id'),
+           json_extract(n.properties, '$.full_path')
     FROM nodes n
     WHERE n.kind = 'field_access'
       AND json_extract(n.properties, '$.func_id') = ?
@@ -938,7 +940,9 @@ func (r *Repo) GetFunctionFlows(funcID domain.CanonicalID, maxDepth int) ([]*dom
     SELECT e.source_id, d.depth + 1, n_prev.name,
            CASE WHEN d.edge_kinds = '' THEN e.kind
                 ELSE d.edge_kinds || ',' || e.kind END, n_prev.line_start, 0,
-           n_prev.kind, json_extract(n_prev.properties, '$.access_kind')
+           n_prev.kind, json_extract(n_prev.properties, '$.access_kind'),
+           json_extract(n_prev.properties, '$.func_id'),
+           json_extract(n_prev.properties, '$.full_path')
     FROM edges e
     JOIN flows d ON e.target_id = d.id
     JOIN nodes n_prev ON e.source_id = n_prev.id
@@ -950,7 +954,9 @@ func (r *Repo) GetFunctionFlows(funcID domain.CanonicalID, maxDepth int) ([]*dom
     SELECT e.target_id, d.depth + 1, n_next.name,
            CASE WHEN d.edge_kinds = '' THEN e.kind
                 ELSE d.edge_kinds || ',' || e.kind END, n_next.line_start, 1,
-           n_next.kind, json_extract(n_next.properties, '$.access_kind')
+           n_next.kind, json_extract(n_next.properties, '$.access_kind'),
+           json_extract(n_next.properties, '$.func_id'),
+           json_extract(n_next.properties, '$.full_path')
     FROM edges e
     JOIN flows d ON e.source_id = d.id
     JOIN nodes n_next ON e.target_id = n_next.id
@@ -958,7 +964,7 @@ func (r *Repo) GetFunctionFlows(funcID domain.CanonicalID, maxDepth int) ([]*dom
       AND (d.dir = 1 OR d.depth = 0) AND d.depth < ?
       AND json_extract(n_next.properties, '$.func_id') = ?
 )
-SELECT id, depth, name, edge_kinds, line, dir, kind, access FROM flows ORDER BY dir, depth, id`,
+SELECT id, depth, name, edge_kinds, line, dir, kind, access, func_id, full_path FROM flows ORDER BY dir, depth, id`,
 		string(funcID), maxDepth, string(funcID), maxDepth, string(funcID))
 	if err != nil {
 		return nil, err
@@ -967,14 +973,16 @@ SELECT id, depth, name, edge_kinds, line, dir, kind, access FROM flows ORDER BY 
 	var out []*domain.TraceRow
 	for rows.Next() {
 		var (
-			row    domain.TraceRow
-			id     string
-			line   sql.NullInt64
-			dir    int
-			kind   string
-			access sql.NullString
+			row      domain.TraceRow
+			id       string
+			line     sql.NullInt64
+			dir      int
+			kind     string
+			access   sql.NullString
+			funcID   sql.NullString
+			fullPath sql.NullString
 		)
-		if err := rows.Scan(&id, &row.Depth, &row.Name, &row.EdgeKinds, &line, &dir, &kind, &access); err != nil {
+		if err := rows.Scan(&id, &row.Depth, &row.Name, &row.EdgeKinds, &line, &dir, &kind, &access, &funcID, &fullPath); err != nil {
 			return nil, err
 		}
 		row.ID = domain.CanonicalID(id)
@@ -982,6 +990,12 @@ SELECT id, depth, name, edge_kinds, line, dir, kind, access FROM flows ORDER BY 
 		row.Kind = domain.EntityKind(kind)
 		if access.Valid {
 			row.Access = access.String
+		}
+		if funcID.Valid {
+			row.FuncID = funcID.String
+		}
+		if fullPath.Valid {
+			row.FullPath = fullPath.String
 		}
 		if line.Valid {
 			row.Line = int(line.Int64)
@@ -1019,9 +1033,10 @@ func (r *Repo) GetValueTrace(nodeID domain.CanonicalID, maxDepth int) ([]*domain
 	if maxDepth <= 0 {
 		maxDepth = 8
 	}
-	rows, err := r.Query(`WITH RECURSIVE vt(id, depth, name, edge_kinds, line, dir, kind, access, func_id) AS (
+	rows, err := r.Query(`WITH RECURSIVE vt(id, depth, name, edge_kinds, line, dir, kind, access, func_id, full_path) AS (
     SELECT n.id, 0, n.name, '', n.line_start, 0, n.kind,
-           json_extract(n.properties, '$.access_kind'), json_extract(n.properties, '$.func_id')
+           json_extract(n.properties, '$.access_kind'), json_extract(n.properties, '$.func_id'),
+           json_extract(n.properties, '$.full_path')
     FROM nodes n WHERE n.id = ?
     UNION
     -- 反向：流向当前节点（产生链）
@@ -1029,7 +1044,8 @@ func (r *Repo) GetValueTrace(nodeID domain.CanonicalID, maxDepth int) ([]*domain
            CASE WHEN d.edge_kinds = '' THEN e.kind
                 ELSE d.edge_kinds || ',' || e.kind END, n_prev.line_start, 0,
            n_prev.kind, json_extract(n_prev.properties, '$.access_kind'),
-           json_extract(n_prev.properties, '$.func_id')
+           json_extract(n_prev.properties, '$.func_id'),
+           json_extract(n_prev.properties, '$.full_path')
     FROM edges e
     JOIN vt d ON e.target_id = d.id
     JOIN nodes n_prev ON e.source_id = n_prev.id
@@ -1041,14 +1057,15 @@ func (r *Repo) GetValueTrace(nodeID domain.CanonicalID, maxDepth int) ([]*domain
            CASE WHEN d.edge_kinds = '' THEN e.kind
                 ELSE d.edge_kinds || ',' || e.kind END, n_next.line_start, 1,
            n_next.kind, json_extract(n_next.properties, '$.access_kind'),
-           json_extract(n_next.properties, '$.func_id')
+           json_extract(n_next.properties, '$.func_id'),
+           json_extract(n_next.properties, '$.full_path')
     FROM edges e
     JOIN vt d ON e.source_id = d.id
     JOIN nodes n_next ON e.target_id = n_next.id
     WHERE e.kind IN ('data_flows_to','argument','returns','phi_operand')
       AND (d.dir = 1 OR d.depth = 0) AND d.depth < ?
 )
-SELECT id, depth, name, edge_kinds, line, dir, kind, access, func_id FROM vt ORDER BY dir, depth, id`,
+SELECT id, depth, name, edge_kinds, line, dir, kind, access, func_id, full_path FROM vt ORDER BY dir, depth, id`,
 		string(nodeID), maxDepth, maxDepth)
 	if err != nil {
 		return nil, err
@@ -1057,15 +1074,16 @@ SELECT id, depth, name, edge_kinds, line, dir, kind, access, func_id FROM vt ORD
 	var out []*domain.TraceRow
 	for rows.Next() {
 		var (
-			row    domain.TraceRow
-			id     string
-			line   sql.NullInt64
-			dir    int
-			kind   string
-			access sql.NullString
-			funcID sql.NullString
+			row      domain.TraceRow
+			id       string
+			line     sql.NullInt64
+			dir      int
+			kind     string
+			access   sql.NullString
+			funcID   sql.NullString
+			fullPath sql.NullString
 		)
-		if err := rows.Scan(&id, &row.Depth, &row.Name, &row.EdgeKinds, &line, &dir, &kind, &access, &funcID); err != nil {
+		if err := rows.Scan(&id, &row.Depth, &row.Name, &row.EdgeKinds, &line, &dir, &kind, &access, &funcID, &fullPath); err != nil {
 			return nil, err
 		}
 		row.ID = domain.CanonicalID(id)
@@ -1076,6 +1094,9 @@ SELECT id, depth, name, edge_kinds, line, dir, kind, access, func_id FROM vt ORD
 		}
 		if funcID.Valid {
 			row.FuncID = funcID.String
+		}
+		if fullPath.Valid {
+			row.FullPath = fullPath.String
 		}
 		if line.Valid {
 			row.Line = int(line.Int64)

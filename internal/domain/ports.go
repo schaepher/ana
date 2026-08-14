@@ -39,6 +39,7 @@ type TraceRow struct {
 	Kind      EntityKind
 	Access    string // field_access 的 read/write
 	FuncID    string // 所属函数 canonical ID（GetValueTrace 函数上下文分组用）
+	FullPath  string // field_access 的类型限定路径（前端展开匹配用）
 }
 
 // EmitFunc 将适配器产出的数据流式交给 Canonicalizer 消费。

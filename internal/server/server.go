@@ -282,6 +282,7 @@ func (s *Server) handleValueTrace(w http.ResponseWriter, r *http.Request) {
 			Access:   row.Access,
 			FuncID:   row.FuncID,
 			FuncName: shortFuncName(row.FuncID),
+			FullPath: row.FullPath,
 		})
 	}
 	writeJSON(w, map[string]any{"flows": flows})
@@ -319,6 +320,9 @@ func (s *Server) handleFlows(w http.ResponseWriter, r *http.Request) {
 			Line:     row.Line,
 			Kind:     string(row.Kind),
 			Access:   row.Access,
+			FullPath: row.FullPath,
+			FuncID:   row.FuncID,
+			FuncName: shortFuncName(row.FuncID),
 		})
 	}
 	writeJSON(w, map[string]any{"flows": flows})
