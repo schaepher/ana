@@ -491,3 +491,45 @@ func TestHandleIncremental(t *testing.T) {
 	}
 	close(block)
 }
+
+// TestModuleCallsEndpoint：/api/module-calls（field_trace.md §21.3）——
+// 空数据返回空数组；module-calls JSON 结构。
+func TestModuleCallsEndpoint(t *testing.T) {
+	ts := newTestServer(t)
+	resp, m := get(t, ts, "/api/module-calls")
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	calls, ok := m["calls"].([]any)
+	if !ok {
+		t.Fatalf("calls 字段缺失: %v", m)
+	}
+	if len(calls) != 0 {
+		t.Errorf("无调用数据应为空数组: %v", calls)
+	}
+}
+
+// TestModulesPage：/modules.html 前端模块视图可达。
+func TestModulesPage(t *testing.T) {
+	dir := t.TempDir()
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	web := fstest.MapFS{
+		"index.html":   &fstest.MapFile{Data: []byte("x")},
+		"modules.html": &fstest.MapFile{Data: []byte("<html>modules</html>")},
+	}
+	srv := New(context.Background(), action.New(sqlite.NewRepo(db)), web, dir)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	resp, err := http.Get(ts.URL + "/modules.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Errorf("modules.html status = %d", resp.StatusCode)
+	}
+}

@@ -61,6 +61,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/value-trace", s.handleValueTrace)
 	mux.HandleFunc("/api/source", s.handleSource)
 	mux.HandleFunc("/incremental", s.handleIncremental)
+	mux.HandleFunc("/api/module-calls", s.handleModuleCalls)
 	mux.Handle("/", http.FileServer(http.FS(s.web)))
 	return mux
 }
@@ -115,6 +116,20 @@ type EdgeJSON struct {
 	Kind      string `json:"kind"`
 	Direction string `json:"direction"`
 	Line      int    `json:"line,omitempty"`
+}
+
+// handleModuleCalls 模块间调用（field_trace.md §21.3）：HTTP JSON 透出
+// action.ModuleCalls（grpc + http，transport 标注）——前端模块视图数据源。
+func (s *Server) handleModuleCalls(w http.ResponseWriter, r *http.Request) {
+	calls, err := s.acts.ModuleCalls("")
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if calls == nil {
+		calls = []action.ModuleCall{}
+	}
+	writeJSON(w, map[string]any{"calls": calls})
 }
 
 // handleIncremental 增量构建自动触发（field_trace.md §20.1）：

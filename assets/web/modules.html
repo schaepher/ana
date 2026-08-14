@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>codeintel 模块间调用</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; background: #fafafa; color: #333; }
+  header { padding: 12px 20px; background: #fff; border-bottom: 1px solid #e8e8e8; display: flex; gap: 16px; align-items: center; }
+  header a { color: #1677ff; text-decoration: none; }
+  #svg-wrap { padding: 20px; }
+  svg { background: #fff; border: 1px solid #e8e8e8; }
+  .mod { fill: #e6f4ff; stroke: #1677ff; stroke-width: 1.5; }
+  .mod-ext { fill: #fff1f0; stroke: #ff4d4f; stroke-width: 1.5; }
+  text { font-size: 13px; }
+  .edge-label { font-size: 10px; fill: #666; }
+</style>
+</head>
+<body>
+<header>
+  <a href="/">← 图探索</a>
+  <strong>模块间调用</strong>
+  <span id="info" style="color:#999"></span>
+</header>
+<div id="svg-wrap"></div>
+<script>
+const NODE_W = 180, NODE_H = 40, ROW_GAP = 80, COL_GAP = 220;
+async function load() {
+  const res = await fetch('/api/module-calls');
+  const data = await res.json();
+  const calls = data.calls || [];
+  document.getElementById('info').textContent = calls.length + ' 条调用';
+  render(calls);
+}
+function render(calls) {
+  // 模块节点（含外部）
+  const mods = new Map(); // name -> {name, external}
+  const edges = [];
+  for (const c of calls) {
+    if (!mods.has(c.from_module)) mods.set(c.from_module, {name: c.from_module, external: false});
+    const to = c.to_module || '[外部服务]';
+    if (!mods.has(to)) mods.set(to, {name: to, external: c.to_module === ''});
+    edges.push({from: c.from_module, to, label: c.transport + ' ' + (c.method || c.service)});
+  }
+  const list = [...mods.values()];
+  const cols = Math.ceil(Math.sqrt(list.length));
+  const W = cols * COL_GAP + 40, H = Math.ceil(list.length / cols) * ROW_GAP + 40;
+  const pos = new Map();
+  list.forEach((m, i) => pos.set(m.name, {
+    x: 20 + (i % cols) * COL_GAP,
+    y: 20 + Math.floor(i / cols) * ROW_GAP,
+  }));
+  let svg = `<svg width="${W}" height="${H}">`;
+  // 边
+  for (const e of edges) {
+    const a = pos.get(e.from), b = pos.get(e.to);
+    const x1 = a.x + NODE_W, y1 = a.y + NODE_H / 2, x2 = b.x, y2 = b.y + NODE_H / 2;
+    svg += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#1677ff" stroke-width="1.5" marker-end="url(#arrow)"/>`;
+    const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+    svg += `<text x="${mx}" y="${my - 4}" class="edge-label" text-anchor="middle">${e.label}</text>`;
+  }
+  // 节点
+  for (const m of list) {
+    const p = pos.get(m.name);
+    svg += `<rect class="${m.external ? 'mod-ext' : 'mod'}" x="${p.x}" y="${p.y}" width="${NODE_W}" height="${NODE_H}" rx="6"/>`;
+    svg += `<text x="${p.x + NODE_W / 2}" y="${p.y + NODE_H / 2 + 4}" text-anchor="middle">${m.name}</text>`;
+  }
+  svg += `<defs><marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#1677ff"/></marker></defs>`;
+  svg += '</svg>';
+  document.getElementById('svg-wrap').innerHTML = svg;
+}
+load();
+</script>
+</body>
+</html>

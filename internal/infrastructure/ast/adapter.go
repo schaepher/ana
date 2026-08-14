@@ -174,6 +174,15 @@ func newClientService(name string) (string, bool) {
 	return strings.TrimSuffix(strings.TrimPrefix(name, "New"), "Client"), true
 }
 
+// clientTypeService 从客户端接口类型名提取服务名（GreeterClient → Greeter；
+// 形参类型识别，§21.1——与构造器名 NewXxxClient 不同，无 New 前缀）。
+func clientTypeService(name string) (string, bool) {
+	if !strings.HasSuffix(name, "Client") || len(name) <= len("Client") {
+		return "", false
+	}
+	return strings.TrimSuffix(name, "Client"), true
+}
+
 // registerService 从 RegisterXxxServer 函数名提取服务名（RegisterGreeterServer
 // → Greeter）。
 func registerService(name string) string {
@@ -255,6 +264,75 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 			return true
 		}
 		stack = append(stack, n)
+		// §21.1：形参类型是模块内 XxxClient 接口 → 函数内该参数为
+		// gRPC 客户端（跨函数传递：handle(c pb.GreeterClient) 内
+		// c.Method() 归属服务 Greeter）
+		if fd, isFD := n.(*ast.FuncDecl); isFD && fd.Type != nil && fd.Type.Params != nil {
+			for _, fp := range fd.Type.Params.List {
+				t := pkg.TypesInfo.TypeOf(fp.Type)
+				if t == nil {
+					continue
+				}
+				if pt, ok := t.(*types.Pointer); ok {
+					t = pt.Elem()
+				}
+				named, ok := t.(*types.Named)
+				if !ok || named.Obj() == nil || named.Obj().Pkg() == nil {
+					continue
+				}
+				if !isInModule(named.Obj().Pkg().Path(), repo.Module) {
+					continue
+				}
+				if svc, ok2 := clientTypeService(named.Obj().Name()); ok2 {
+					for _, pn := range fp.Names {
+						grpcClients[pn.Name] = svc
+					}
+				}
+			}
+		}
+		// §21.2：grpc.ServiceDesc{ServiceName: "..."} 动态注册
+		if cl, isLit := n.(*ast.CompositeLit); isLit {
+			clt := pkg.TypesInfo.TypeOf(cl)
+			if clt != nil {
+				if pt, ok := clt.(*types.Pointer); ok {
+					clt = pt.Elem()
+				}
+				if named, ok := clt.(*types.Named); ok && named.Obj() != nil && named.Obj().Name() == "ServiceDesc" {
+					for _, el := range cl.Elts {
+						kv, ok := el.(*ast.KeyValueExpr)
+						if !ok {
+							continue
+						}
+						id, ok := kv.Key.(*ast.Ident)
+						if !ok || id.Name != "ServiceName" {
+							continue
+						}
+						bl, ok := kv.Value.(*ast.BasicLit)
+						if !ok || bl.Kind != token.STRING {
+							continue
+						}
+						svcName, err := strconv.Unquote(bl.Value)
+						if err != nil || !strings.Contains(svcName, ".") {
+							continue
+						}
+						protoPkg, name := svcName, svcName
+						if i := strings.LastIndex(svcName, "."); i >= 0 {
+							protoPkg, name = svcName[:i], svcName[i+1:]
+						}
+						svcID := domain.CanonicalID("symbol:proto:" + protoPkg + ":svc." + name)
+						_ = emit(domain.Item{Node: &domain.CodeEntity{
+							ID:   svcID,
+							Kind: domain.KindGrpcService,
+							Name: "svc." + name,
+							Properties: map[string]any{
+								"service_name": name,
+								"service_desc": "true", // 动态注册（无静态实现）
+							},
+						}})
+					}
+				}
+			}
+		}
 
 		// 变量绑定：x := &T{} / var x = &T{} / x := new(T)
 		if assign, isAssign := n.(*ast.AssignStmt); isAssign && assign.Tok == token.DEFINE &&
