@@ -2075,3 +2075,199 @@ func main() {}
 		t.Error("callback 闭包内字段写入节点应存在（归外层 runB）")
 	}
 }
+
+// TestTraceForwardStartFilteredSelfContained：B2 集成固化——trace-forward
+// 起点须与目标字段所属结构体类型匹配；无关类型参数与包级全局变量
+// （string）不得入链（此前 origin_kind IN (...) 无条件放行全部起点）。
+func TestTraceForwardStartFilteredSelfContained(t *testing.T) {
+	if !scipGoAvailable() {
+		t.Skip("scip-go not found")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/filt\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "main.go"), `package filt
+
+var globalName = "x"
+
+type Record struct {
+	FinalFee float64
+}
+
+func A(record *Record, name string) {
+	_ = name
+	_ = globalName
+	record.FinalFee = 1
+}
+
+func main() {}
+`)
+	if code := runCLI(t, "init", "--repo", dir); code != 0 {
+		t.Fatalf("init exit = %d", code)
+	}
+	code, out := runCLIOut(t, "query", "trace-forward", "example.com/filt.Record.FinalFee",
+		"--func", "symbol:go:example.com/filt:A", "--repo", dir)
+	if code != 0 {
+		t.Fatalf("trace-forward exit = %d", code)
+	}
+	if !strings.Contains(out, "FinalFee") {
+		t.Errorf("目标字段 FinalFee 未入链，output=%q", out[:min(len(out), 300)])
+	}
+	for _, noise := range []string{"globalName", "name"} {
+		if strings.Contains(out, noise) {
+			t.Errorf("无关类型起点 %s 不应入链（B2 类型过滤），output=%q", noise, out[:min(len(out), 300)])
+		}
+	}
+}
+
+// TestDeepChainNoIndirectWriteSelfContained：S1 集成固化——三层调用链
+// （a→b→c）中 c 写自己内部对象（与实参无别名）时，a 不得有 T.A 间接写
+// （别名排除须经跨函数参数 may 传播稳定生效，不依赖调用点处理顺序）。
+func TestDeepChainNoIndirectWriteSelfContained(t *testing.T) {
+	if !scipGoAvailable() {
+		t.Skip("scip-go not found")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/deep\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "main.go"), `package deep
+
+type T struct {
+	A int
+}
+
+// c 写自己内部对象 inner（与实参 x 无别名）
+func c(x *T) {
+	var inner T
+	inner.A = 1
+	_ = x
+}
+
+func b(x *T) {
+	c(x)
+}
+
+func a() {
+	var t T
+	b(&t)
+}
+
+func main() {}
+`)
+	if code := runCLI(t, "init", "--repo", dir); code != 0 {
+		t.Fatalf("init exit = %d", code)
+	}
+	code, out := runCLIOut(t, "query", "fields", "symbol:go:example.com/deep:a", "--repo", dir)
+	if code != 0 {
+		t.Fatalf("query fields exit = %d", code)
+	}
+	if strings.Contains(out, "indirect_write") && strings.Contains(out, "T.A") {
+		t.Errorf("a 不应有 T.A 间接写（c 写内部对象，别名排除应生效），output=%q", out[:min(len(out), 300)])
+	}
+}
+
+// TestUserSummaryYAMLSelfContained：S2 集成固化——field-summary.yaml 相对
+// 字段路径（"user.ID"）须补全为类型限定路径（pkg.T.ID），而非错误拼成
+// pkg.T.user.ID。
+func TestUserSummaryYAMLSelfContained(t *testing.T) {
+	if !scipGoAvailable() {
+		t.Skip("scip-go not found")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/um\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "external/external.go"), `package external
+
+func Wrap(v any) {}
+`)
+	writeFile(t, filepath.Join(dir, "main.go"), `package um
+
+import "example.com/um/external"
+
+type T struct {
+	ID   int
+	Name string
+}
+
+func f(t *T) {
+	external.Wrap(t)
+}
+`)
+	writeFile(t, filepath.Join(dir, "field-summary.yaml"), `summaries:
+  - func: "example.com/um/external.Wrap"
+    reads: ["user.ID", "user.Name"]
+    param_index: 0
+`)
+	if code := runCLI(t, "init", "--repo", dir); code != 0 {
+		t.Fatalf("init exit = %d", code)
+	}
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	rows, err := db.Query(`SELECT DISTINCT json_extract(properties, '$.full_path') FROM nodes
+		WHERE kind = 'field_access' AND json_extract(properties, '$.full_path') LIKE '%T.ID'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	foundID := false
+	for rows.Next() {
+		var fp string
+		if err := rows.Scan(&fp); err != nil {
+			t.Fatal(err)
+		}
+		if fp == "example.com/um.T.ID" {
+			foundID = true
+		}
+		if fp == "example.com/um.T.user.ID" {
+			t.Errorf("相对路径补全错误: %s", fp)
+		}
+	}
+	if !foundID {
+		t.Error("用户摘要相对路径未补全为 example.com/um.T.ID")
+	}
+}
+
+// TestAnonymousStructFieldLineSelfContained：B3 集成固化——匿名 struct
+// （range 元素）字段访问须带行号（fieldInfo 匿名分支曾提前 return，
+// line_start=0 导致 CLI 无定位）。
+func TestAnonymousStructFieldLineSelfContained(t *testing.T) {
+	if !scipGoAvailable() {
+		t.Skip("scip-go not found")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/anon\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "main.go"), `package anon
+
+type Conf struct {
+	Items []struct {
+		Key string
+	}
+}
+
+func f(c Conf) {
+	for _, s := range c.Items {
+		_ = s.Key
+	}
+}
+
+func main() {}
+`)
+	if code := runCLI(t, "init", "--repo", dir); code != 0 {
+		t.Fatalf("init exit = %d", code)
+	}
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var line int
+	if err := db.QueryRow(`SELECT line_start FROM nodes
+		WHERE kind = 'field_access'
+		  AND json_extract(properties, '$.func_id') LIKE '%:f'
+		  AND json_extract(properties, '$.instance_path') = 's.Key'`).Scan(&line); err != nil {
+		t.Fatalf("s.Key 节点不存在: %v", err)
+	}
+	if line <= 0 {
+		t.Errorf("匿名 struct 字段访问 line_start = %d, want > 0", line)
+	}
+}
