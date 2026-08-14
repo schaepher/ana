@@ -542,3 +542,81 @@ func callDynamic(conn *grpc.ClientConn, method string) {
 		t.Errorf("变量方法路径不应产 grpc_call 边: %v", got["symbol:go:example.com/mtest/svc_a:callDynamic"])
 	}
 }
+
+// TestHTTPCallEdge：§18.7 HTTP 模块间调用——routes.yaml 路由表 +
+// http.Get/NewRequest 客户端（URL 字面量）→ http_route 节点 +
+// http_call 边（匹配路由 / 前缀 / 未匹配外部虚拟节点）。
+func TestHTTPCallEdge(t *testing.T) {
+	_, facts := indexFixture(t, map[string]string{
+		"go.mod": "module example.com/mtest\n\ngo 1.21\n",
+		"routes.yaml": `routes:
+  - path: "/api/orders"
+    handler: "svc_orders:(Handler).ListOrders"
+    method: "GET"
+  - path: "/api/users/"
+    handler: "svc_users:(Handler).List"
+`,
+		"http/http.go": `package http
+
+func Get(url string) {}
+
+func NewRequest(method, url string, body any) {}
+`,
+		"svc_a/client.go": `package svc_a
+
+import "example.com/mtest/http"
+
+func callOrders() {
+	http.Get("https://orders.example.com/api/orders")
+}
+
+func callUsers() {
+	http.NewRequest("GET", "https://u.example.com/api/users/1", nil)
+}
+
+func callExt() {
+	http.Get("https://ext.example.com/other")
+}
+`,
+		"svc_orders/svc.go": `package svc_orders
+
+type Handler struct{}
+
+func (h *Handler) ListOrders() {}
+`,
+		"svc_users/svc.go": `package svc_users
+
+type Handler struct{}
+
+func (h *Handler) List() {}
+`,
+	})
+	gotCall := map[string]string{} // source → "target|path|host"
+	for _, f := range facts {
+		if f.Kind == domain.FactHTTPCall {
+			key := string(f.SourceID)
+			gotCall[key] = string(f.TargetID) + "|" + f.Metadata["path"].(string) + "|" + f.Metadata["host"].(string)
+		}
+	}
+	// callOrders → 精确匹配 /api/orders 路由
+	want := "symbol:go:example.com/mtest/svc_orders:route./api/orders"
+	key := "symbol:go:example.com/mtest/svc_a:callOrders"
+	if gotCall[key] == "" || gotCall[key][:len(want)] != want {
+		t.Errorf("callOrders http_call = %q, want target 前缀 %s", gotCall[key], want)
+	}
+	// callUsers → 前缀匹配 /api/users/ 路由
+	want2 := "symbol:go:example.com/mtest/svc_users:route./api/users/"
+	key2 := "symbol:go:example.com/mtest/svc_a:callUsers"
+	if gotCall[key2] == "" || gotCall[key2][:len(want2)] != want2 {
+		t.Errorf("callUsers http_call = %q, want target 前缀 %s", gotCall[key2], want2)
+	}
+	// callExt → 未匹配：外部虚拟节点
+	key3 := "symbol:go:example.com/mtest/svc_a:callExt"
+	if gotCall[key3] == "" || !strings.HasPrefix(gotCall[key3], "symbol:http:") {
+		t.Errorf("callExt http_call = %q, want 外部虚拟节点", gotCall[key3])
+	}
+	// 未匹配的外部节点 metadata host 保留
+	if !strings.Contains(gotCall[key3], "ext.example.com") {
+		t.Errorf("callExt host 缺失: %q", gotCall[key3])
+	}
+}

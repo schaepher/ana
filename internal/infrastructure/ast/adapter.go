@@ -6,10 +6,12 @@ package ast
 
 import (
 	"context"
+	"fmt"
 	"go/ast"
 	"go/constant"
 	"go/token"
 	"go/types"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -27,6 +29,14 @@ type Adapter struct {
 	// 包路径 → packages.Package：跨包解析构造器函数体（链式调用
 	// 返回接口时分析 return 的具体类型），Index 时填充
 	pkgsByPath map[string]*packages.Package
+	// HTTP 路由表（§18.7，routes.yaml 人工维护）：path → http_route 节点
+	routes []routeEntry
+}
+
+// routeEntry 构建期路由表条目。
+type routeEntry struct {
+	path   string
+	nodeID domain.CanonicalID
 }
 
 var _ domain.IndexerPort = (*Adapter)(nil)
@@ -60,6 +70,34 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 	registerServers := collectRegisterServers(pkgs, repo.Module)
 	// §18：protoc 生成的 NewXxxClient 客户端构造器（key: "pkgPath:funcName" → 服务名）
 	newClients := collectNewClients(pkgs, repo.Module)
+	// §18.7：HTTP 路由表（routes.yaml）→ http_route 节点（handler 解析）
+	a.routes = nil
+	routes, routeWarns := loadRoutes(repo.Path)
+	for _, w := range routeWarns {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", w)
+	}
+	for _, rt := range routes {
+		if rt.Path == "" || rt.Handler == "" {
+			continue
+		}
+		hID, ok := a.resolveRouteHandler(repo, rt.Handler)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "warning: routes.yaml handler 未找到: %s\n", rt.Handler)
+			continue
+		}
+		nodeID := domain.CanonicalID("symbol:go:" + pkgOfID(hID) + ":route." + rt.Path)
+		_ = emit(domain.Item{Node: &domain.CodeEntity{
+			ID:   nodeID,
+			Kind: domain.KindHTTPRoute,
+			Name: "route." + rt.Path,
+			Properties: map[string]any{
+				"path":       rt.Path,
+				"method":     rt.Method,
+				"handler_id": string(hID),
+			},
+		}})
+		a.routes = append(a.routes, routeEntry{path: rt.Path, nodeID: nodeID})
+	}
 
 	for _, pkg := range pkgs {
 		if !isInModule(pkg.PkgPath, repo.Module) {
@@ -361,6 +399,53 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 							},
 						}})
 					}
+				}
+				// §18.7 HTTP 客户端：http.Get(url) / http.NewRequest(method, url, ...)
+				// URL 字面量+常量传播 → 路由表匹配 → http_call 边
+				if url, okURL := httpURLString(pkg, methodVars, call, callee); okURL {
+					host, path := parseURL(url)
+					target := ""
+					for _, re := range a.routes {
+						if routeMatch(path, re.path) {
+							target = string(re.nodeID)
+							break
+						}
+					}
+					if target == "" {
+						h := host
+						if h == "" {
+							h = "unknown"
+						}
+						target = "symbol:http:" + h + ":route." + path
+					}
+					httpMethod := "GET"
+					if callee.Name() == "NewRequest" && len(call.Args) > 0 {
+						if bl, ok := call.Args[0].(*ast.BasicLit); ok && bl.Kind == token.STRING {
+							if m, err := strconv.Unquote(bl.Value); err == nil && m != "" {
+								httpMethod = m
+							}
+						}
+					}
+					_ = emit(domain.Item{Node: &domain.CodeEntity{
+						ID:   domain.CanonicalID(target),
+						Kind: domain.KindHTTPRoute,
+						Name: "route." + path,
+						Properties: map[string]any{"path": path, "method": httpMethod},
+					}})
+					_ = emit(domain.Item{Fact: &domain.Fact{
+						SourceID:   callerID,
+						TargetID:   domain.CanonicalID(target),
+						Kind:       domain.FactHTTPCall,
+						ToolSource: domain.ToolCodeGraph,
+						Confidence: 1.0,
+						Metadata: map[string]any{
+							"url":      url,
+							"host":     host,
+							"path":     path,
+							"method":   httpMethod,
+							"line_num": pkg.Fset.PositionFor(call.Pos(), false).Line,
+						},
+					}})
 				}
 				if objID, ok := objVars[xid.Name]; ok {
 					if methodID, methodKind := fnID(callee); methodID != "" {
@@ -1385,11 +1470,31 @@ func directMethodPath(pkg *packages.Package, methodVars map[string]string,
 	if len(call.Args) <= pathIdx {
 		return ""
 	}
-	arg := call.Args[pathIdx]
+	v := extractStringArg(pkg, methodVars, call.Args[pathIdx])
+	if isGrpcMethodPath(v) {
+		return v
+	}
+	return ""
+}
+
+// pkgOfID 从 canonical ID 提取包路径（symbol:go:<pkg>:<name>）。
+func pkgOfID(id domain.CanonicalID) string {
+	s := strings.TrimPrefix(string(id), "symbol:go:")
+	if i := strings.LastIndex(s, ":"); i >= 0 {
+		return s[:i]
+	}
+	return s
+}
+
+// extractStringArg 从实参提取字符串值（字面量 / 同函数 methodVars /
+// types.Const），非字符串返回空。
+func extractStringArg(pkg *packages.Package, methodVars map[string]string, arg ast.Expr) string {
 	switch a := arg.(type) {
 	case *ast.BasicLit:
 		if a.Kind == token.STRING {
-			return unquoteMethodPath(a.Value)
+			if v, err := strconv.Unquote(a.Value); err == nil {
+				return v
+			}
 		}
 	case *ast.Ident:
 		if v, ok := methodVars[a.Name]; ok {
@@ -1397,11 +1502,34 @@ func directMethodPath(pkg *packages.Package, methodVars map[string]string,
 		}
 		if obj := pkg.TypesInfo.ObjectOf(a); obj != nil {
 			if c, ok := obj.(*types.Const); ok && c.Val() != nil && c.Val().Kind() == constant.String {
-				if isGrpcMethodPath(constant.StringVal(c.Val())) {
-					return constant.StringVal(c.Val())
-				}
+				return constant.StringVal(c.Val())
 			}
 		}
 	}
 	return ""
+}
+
+// httpURLString 从 http.Get/NewRequest 调用提取 URL 字符串（§18.7）：
+// Get 第 1 参 / NewRequest 第 2 参；URL 须含 scheme 或以 / 开头（防
+// 误伤同名方法）。动态变量返回 ok=false（盲区）。
+func httpURLString(pkg *packages.Package, methodVars map[string]string,
+	call *ast.CallExpr, callee *types.Func) (string, bool) {
+	if callee == nil || (callee.Name() != "Get" && callee.Name() != "NewRequest") {
+		return "", false
+	}
+	idx := 0
+	if callee.Name() == "NewRequest" {
+		idx = 1
+	}
+	if len(call.Args) <= idx {
+		return "", false
+	}
+	u := extractStringArg(pkg, methodVars, call.Args[idx])
+	if u == "" {
+		return "", false
+	}
+	if !strings.Contains(u, "://") && !strings.HasPrefix(u, "/") {
+		return "", false
+	}
+	return u, true
 }

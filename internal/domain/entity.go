@@ -32,6 +32,7 @@ const (
 	KindReceiver       EntityKind = "receiver"        // 方法接收者（与普通参数区分展示）
 	KindResult         EntityKind = "result"          // 函数/方法返回值
 	KindGrpcService    EntityKind = "grpc_service"    // gRPC 服务标识（模块间调用，field_trace.md §18）
+	KindHTTPRoute      EntityKind = "http_route"      // HTTP 路由（人工路由表 routes.yaml，§18.7）
 )
 
 // FactKind 事实（关系）种类，对应 edges.kind 列。
@@ -65,6 +66,7 @@ const (
 	FactHasResult     FactKind = "has_result"     // 函数 → 返回值节点
 	FactGrpcCall      FactKind = "grpc_call"      // 客户端调用方函数 → grpc_service（模块间调用，§18）
 	FactGrpcImpl      FactKind = "grpc_impl"      // 服务实现类型 → grpc_service（服务端归属，§18）
+	FactHTTPCall      FactKind = "http_call"      // 客户端调用方函数 → http_route（HTTP 模块间调用，§18.7）
 )
 
 // 工具来源标识，对应 edges.tool_source 列。

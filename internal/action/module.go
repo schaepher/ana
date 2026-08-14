@@ -78,9 +78,10 @@ func (a *Actions) moduleConfig() *moduleConfig {
 type ModuleCall struct {
 	FromModule string `json:"from_module"`
 	ToModule   string `json:"to_module"` // 服务端不在仓库内时为空
-	Service    string `json:"service"`   // 生成包路径 + 服务名
-	Method     string `json:"method"`
-	Caller     string `json:"caller"` // 客户端调用方函数 ID
+	Service    string `json:"service"`   // grpc：生成包路径+服务名；http：host/route
+	Method     string `json:"method"`    // grpc：方法名；http：路径
+	Transport  string `json:"transport"` // grpc / http
+	Caller     string `json:"caller"`    // 客户端调用方函数 ID
 	Line       int    `json:"line"`
 }
 
@@ -108,11 +109,16 @@ func (a *Actions) ModuleCalls(filter string) ([]ModuleCall, error) {
 		if filter != "" && from != filter {
 			continue
 		}
+		transport := "grpc"
+		if row.Transport == "http_call" {
+			transport = "http"
+		}
 		out = append(out, ModuleCall{
 			FromModule: from,
 			ToModule:   implModule[string(row.ServiceID)],
 			Service:    row.Service,
 			Method:     row.Method,
+			Transport:  transport,
 			Caller:     string(row.CallerID),
 			Line:       row.Line,
 		})

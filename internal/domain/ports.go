@@ -65,11 +65,12 @@ type UnusedFunc struct {
 // 服务端实现归属（grpc_impl 边反向查）。
 type GrpcCallRow struct {
 	CallerID   CanonicalID // 客户端调用方函数
-	ServiceID  CanonicalID // grpc_service 节点
-	Service    string      // 生成包路径 + 服务名（如 example.com/app/pb.Greeter）
-	Method     string      // 客户端调用的方法名
+	ServiceID  CanonicalID // grpc_service / http_route 节点
+	Service    string      // grpc：生成包路径+服务名；http：route 名
+	Method     string      // grpc：方法名；http：路径
 	Line       int
-	ImplTypeID CanonicalID // 服务端实现类型（grpc_impl 边 source；无实现时空）
+	ImplTypeID CanonicalID // 服务端实现（grpc_impl 边 source / route.handler_id；无实现时空）
+	Transport  string      // grpc_call / http_call
 }
 
 // SinceInfo --since <ref> 的 diff 解析结果（field_trace.md §16.5）。

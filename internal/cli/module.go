@@ -36,7 +36,11 @@ func queryModuleCalls(acts *action.Actions, module string, opts outputOpts) int 
 		if c.Line > 0 {
 			loc = fmt.Sprintf(" :%d", c.Line)
 		}
-		fmt.Printf("  %s → %s: %s.%s  (%s%s)\n", c.FromModule, to, c.Service, c.Method, caller, loc)
+		svcName := c.Service
+		if c.Transport == "http" {
+			svcName = c.Service // http：Service 为 host/route 名
+		}
+		fmt.Printf("  %s → %s [%s]: %s.%s  (%s%s)\n", c.FromModule, to, c.Transport, svcName, c.Method, caller, loc)
 	}
 	return 0
 }
