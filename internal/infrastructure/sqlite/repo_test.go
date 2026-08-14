@@ -1278,3 +1278,84 @@ func TestFindFieldReadsOrder(t *testing.T) {
 		}
 	}
 }
+
+// TestTraceForwardGlobalStart：已验场景单元测试化——global 值起点
+// （无 func_id、origin_kind=global——起点条件须放行）。
+func TestTraceForwardGlobalStart(t *testing.T) {
+	r := newTestRepo(t)
+	runID := "symbol:go:example.com/m:run"
+	fillID := "symbol:go:example.com/m:fill"
+	nodes := []*domain.CodeEntity{
+		{ID: domain.CanonicalID(runID), Kind: domain.KindFunction, Name: "run"},
+		{ID: domain.CanonicalID(fillID), Kind: domain.KindFunction, Name: "fill"},
+		// global 值节点：无 func_id，origin_kind=global，type_string=*Record
+		{ID: domain.CanonicalID("symbol:go:example.com/m:var.g"), Kind: domain.KindSSAValue, Name: "g",
+			Properties: map[string]any{"origin_kind": "global", "type_string": "*example.com/m.Record"}},
+		{ID: domain.CanonicalID(fillID + "#c"), Kind: domain.KindSSAValue, Name: "c",
+			Properties: map[string]any{"func_id": fillID, "origin_kind": "param"}},
+		{ID: domain.CanonicalID(fillID + "#c.FinalFee.write@8"), Kind: domain.KindFieldAccess, Name: "c.FinalFee",
+			Properties: map[string]any{"func_id": fillID, "full_path": "example.com/m.Record.FinalFee",
+				"access_kind": "write"}},
+	}
+	edges := []*domain.Fact{
+		{SourceID: domain.CanonicalID("symbol:go:example.com/m:var.g"), TargetID: domain.CanonicalID(fillID + "#c"),
+			Kind: domain.FactArgument, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: domain.CanonicalID(fillID + "#c"), TargetID: domain.CanonicalID(fillID + "#c.FinalFee.write@8"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+	}
+	save(t, r, nodes, edges)
+	rows, err := r.TraceForward("example.com/m.Record.FinalFee", domain.CanonicalID(runID), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hasWrite := false
+	for _, row := range rows {
+		if string(row.ID) == fillID+"#c.FinalFee.write@8" {
+			hasWrite = true
+		}
+	}
+	if !hasWrite {
+		t.Errorf("global 值起点未连到写入: %+v", rows)
+	}
+}
+
+// TestTraceForwardTypeMatchStart：已验场景单元测试化——与目标字段同类型
+// 的 local/phi 值起点（type_string 匹配，⑭）。
+func TestTraceForwardTypeMatchStart(t *testing.T) {
+	r := newTestRepo(t)
+	runID := "symbol:go:example.com/m:run"
+	fillID := "symbol:go:example.com/m:fill"
+	nodes := []*domain.CodeEntity{
+		{ID: domain.CanonicalID(runID), Kind: domain.KindFunction, Name: "run"},
+		{ID: domain.CanonicalID(fillID), Kind: domain.KindFunction, Name: "fill"},
+		// 调用返回值（DAO 返回对象）：origin_kind 非 param/alloc，type 匹配
+		{ID: domain.CanonicalID(runID + "#obj"), Kind: domain.KindSSAValue, Name: "obj",
+			Properties: map[string]any{"func_id": runID, "origin_kind": "call",
+				"type_string": "*example.com/m.Record"}},
+		{ID: domain.CanonicalID(fillID + "#c"), Kind: domain.KindSSAValue, Name: "c",
+			Properties: map[string]any{"func_id": fillID, "origin_kind": "param"}},
+		{ID: domain.CanonicalID(fillID + "#c.FinalFee.write@8"), Kind: domain.KindFieldAccess, Name: "c.FinalFee",
+			Properties: map[string]any{"func_id": fillID, "full_path": "example.com/m.Record.FinalFee",
+				"access_kind": "write"}},
+	}
+	edges := []*domain.Fact{
+		{SourceID: domain.CanonicalID(runID + "#obj"), TargetID: domain.CanonicalID(fillID + "#c"),
+			Kind: domain.FactArgument, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: domain.CanonicalID(fillID + "#c"), TargetID: domain.CanonicalID(fillID + "#c.FinalFee.write@8"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+	}
+	save(t, r, nodes, edges)
+	rows, err := r.TraceForward("example.com/m.Record.FinalFee", domain.CanonicalID(runID), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hasWrite := false
+	for _, row := range rows {
+		if string(row.ID) == fillID+"#c.FinalFee.write@8" {
+			hasWrite = true
+		}
+	}
+	if !hasWrite {
+		t.Errorf("同类型 local 值起点未连到写入: %+v", rows)
+	}
+}
