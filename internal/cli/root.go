@@ -20,6 +20,8 @@ func Main(ctx context.Context, args []string) int {
 	switch args[0] {
 	case "init":
 		return cmdInit(ctx, args[1:])
+	case "update":
+		return cmdUpdate(ctx, args[1:])
 	case "query":
 		return cmdQuery(args[1:])
 	case "export":
@@ -48,6 +50,7 @@ func usage() {
 
 用法:
   codeintel init --repo <path>     全量构建索引（生成 .codeintel/codeintel.db）
+  codeintel update --repo <path>   增量更新（git 检测变更文件，全量分析+增量写入）
   codeintel serve --repo <path>    启动图探索 Web 服务（AntV G6 前端，--addr 默认 :8090）
   codeintel query <symbol|name>    查询符号详情（含调用者/被调用者）
   codeintel query callers <sym>    查询调用者（--depth N，默认 1，置信度阈值 0.8）

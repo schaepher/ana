@@ -8,6 +8,7 @@ package orchestrator
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"os"
@@ -89,7 +90,95 @@ func (o *Orchestrator) FullBuild(ctx context.Context) (*BuildResult, error) {
 	if _, err := o.RepoImpl.Exec("DELETE FROM nodes"); err != nil {
 		return nil, fmt.Errorf("clear nodes: %w", err)
 	}
+	results, skipped, err := o.runAdapters(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	return o.finishBuild(start, results, skipped, "all")
+}
 
+// IncrementalBuild 增量构建（TD.md 5.2 增量语义，MVP：全量分析 + 增量写入）：
+//  1. 删除变更文件旧数据（节点级联删边与摘要）
+//  2. 适配器全量运行，写库时只保留与变更文件相关的产出
+//     （节点 file_path ∈ 变更文件；边/摘要的端点属于变更文件）
+//  3. build_metadata 记录 tool_name=incremental
+//
+// 语义正确性：全量分析保证跨包间接写闭包等结果完整（分析成本与 init 相同），
+// 增量只裁剪写入范围——未变更数据原样保留，不产生全量 DELETE 的碎片。
+func (o *Orchestrator) IncrementalBuild(ctx context.Context, changedFiles []string) (*BuildResult, error) {
+	logger := logging.FromContext(ctx)
+	logger.Debug("enter (Orchestrator).IncrementalBuild")
+	defer logger.Debug("exit (Orchestrator).IncrementalBuild")
+	start := time.Now()
+
+	// 1. 删除变更文件的旧节点（级联删边与摘要行）
+	changed := map[string]bool{}
+	for _, f := range changedFiles {
+		changed[f] = true
+	}
+	if err := deleteFiles(o.RepoImpl, changedFiles); err != nil {
+		return nil, fmt.Errorf("delete changed files: %w", err)
+	}
+
+	// 2. 全量分析 + 增量写库过滤：
+	//    节点：file_path ∈ 变更文件；边/摘要：端点属于变更文件。
+	//    端点 file_path 从 DB 查（写库协程单写者，删除后变更文件端点已不在，
+	//    查不到即视为变更文件——保留写入）
+	endpointFile := map[string]string{}
+	endpointInChanged := func(id string) bool {
+		if fp, ok := endpointFile[id]; ok {
+			return changed[fp]
+		}
+		var fp sql.NullString
+		if err := o.RepoImpl.QueryRow("SELECT file_path FROM nodes WHERE id = ?", id).Scan(&fp); err != nil || !fp.Valid {
+			return true // 节点已删除（属于变更文件）或不存在：保留边/摘要
+		}
+		endpointFile[id] = fp.String
+		return changed[fp.String]
+	}
+	keep := func(item domain.Item) bool {
+		switch {
+		case item.Node != nil:
+			return changed[item.Node.FilePath]
+		case item.Fact != nil:
+			return endpointInChanged(string(item.Fact.SourceID)) || endpointInChanged(string(item.Fact.TargetID))
+		case item.Summary != nil:
+			return endpointInChanged(string(item.Summary.FunctionID))
+		}
+		return false
+	}
+	results, skipped, err := o.runAdapters(ctx, keep)
+	if err != nil {
+		return nil, err
+	}
+	return o.finishBuild(start, results, skipped, "incremental")
+}
+
+// deleteFiles 删除指定文件的节点（级联删边与摘要行）；分批避免 SQLite
+// 参数上限（999）。
+func deleteFiles(repo *sqlite.Repo, files []string) error {
+	const batchSize = 400
+	for i := 0; i < len(files); i += batchSize {
+		end := i + batchSize
+		if end > len(files) {
+			end = len(files)
+		}
+		batch := files[i:end]
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		args := make([]any, len(batch))
+		for j, f := range batch {
+			args[j] = f
+		}
+		if _, err := repo.Exec("DELETE FROM nodes WHERE file_path IN ("+placeholders+")", args...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// runAdapters 并行执行适配器并写库（keep 为 nil 时全部写入；否则只保留
+// keep(item) 为 true 的条目）。返回各适配器结果与跳过的 FK 冲突边数。
+func (o *Orchestrator) runAdapters(ctx context.Context, keep func(domain.Item) bool) ([]AdapterResult, int, error) {
 	var (
 		results []AdapterResult
 		skipped int
@@ -104,6 +193,9 @@ func (o *Orchestrator) FullBuild(ctx context.Context) (*BuildResult, error) {
 	go func() {
 		defer close(flushed)
 		for item := range ch {
+			if keep != nil && !keep(item) {
+				continue
+			}
 			if item.Node != nil {
 				batch.nodes = append(batch.nodes, item.Node)
 			}
@@ -151,7 +243,11 @@ func (o *Orchestrator) FullBuild(ctx context.Context) (*BuildResult, error) {
 	wg.Wait()
 	close(ch)
 	<-flushed // 等待写库协程排空
+	return results, skipped, nil
+}
 
+// finishBuild 汇总构建状态并写 build_metadata（TD.md 9.2 降级矩阵）。
+func (o *Orchestrator) finishBuild(start time.Time, results []AdapterResult, skipped int, toolName string) (*BuildResult, error) {
 	// 汇总状态（TD.md 9.2 降级矩阵）
 	status := domain.BuildSuccess
 	errorMsgs := ""
@@ -187,7 +283,7 @@ func (o *Orchestrator) FullBuild(ctx context.Context) (*BuildResult, error) {
 	meta := &domain.BuildMeta{
 		BuildID:    newBuildID(),
 		CommitSHA:  build.CommitSHA,
-		ToolName:   "all",
+		ToolName:   toolName,
 		Status:     status,
 		DurationMs: duration.Milliseconds(),
 		ErrorMsg:   errorMsgs,

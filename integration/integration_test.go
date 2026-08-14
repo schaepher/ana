@@ -506,6 +506,103 @@ func TestCLIFullFlow(t *testing.T) {
 	}
 }
 
+// TestIncrementalUpdate：init → 修改文件 → update → 新符号出现、
+// 旧符号保留、被删除符号消失（TD.md 5.2 增量语义）。
+func TestIncrementalUpdate(t *testing.T) {
+	if !scipGoAvailable() {
+		t.Skip("scip-go not found (install: go install github.com/scip-code/scip-go/cmd/scip-go@latest)")
+	}
+	dir := fixtureRepo(t)
+	// git 初始化并提交（增量检测依赖 git）
+	gitRun(t, dir, "init", "-q")
+	gitRun(t, dir, "add", "-A")
+	gitRun(t, dir, "commit", "-q", "-m", "init")
+	if code := runCLI(t, "init", "--repo", dir); code != 0 {
+		t.Fatalf("init exit = %d", code)
+	}
+
+	// 1. 修改 svc.go：新增 newFunc、删除 aliasLocal（无调用者，删除后
+	//    其 alias 边与符号应消失；run 的 fillParam 闭包摘要应保留）
+	svcPath := filepath.Join(dir, "svc", "svc.go")
+	data, err := os.ReadFile(svcPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := strings.Replace(string(data), "func aliasLocal() {\n\ta := &Cfg{}\n\tb := a\n\tb.Key = \"y\"\n}\n",
+		"", 1)
+	updated += "\nfunc newFunc() int { return 42 }\n"
+	writeFile(t, svcPath, updated)
+
+	// 2. 增量更新
+	if code := runCLI(t, "update", "--repo", dir); code != 0 {
+		t.Fatalf("update exit = %d", code)
+	}
+
+	// 3. 验证
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	repo := sqlite.NewRepo(db)
+
+	// 新增符号可查
+	if _, err := repo.GetSymbol("symbol:go:example.com/app/svc:newFunc"); err != nil {
+		t.Errorf("newFunc 应出现在增量后索引: %v", err)
+	}
+	// 未变更文件的符号保留
+	if _, err := repo.GetSymbol("symbol:go:example.com/app/svc:(Service).Handle"); err != nil {
+		t.Errorf("未变更符号应保留: %v", err)
+	}
+	if _, err := repo.GetSymbol("symbol:go:example.com/app:main"); err != nil {
+		t.Errorf("main 应保留: %v", err)
+	}
+	// 被删除函数的符号与摘要消失
+	if _, err := repo.GetSymbol("symbol:go:example.com/app/svc:aliasLocal"); err == nil {
+		t.Error("aliasLocal 应从索引消失")
+	}
+	aliasFields, err := repo.GetFunctionFields("symbol:go:example.com/app/svc:aliasLocal")
+	if err != nil || len(aliasFields) > 0 {
+		t.Errorf("aliasLocal 摘要应清空: %v, %v", aliasFields, err)
+	}
+	// 变更文件内未删除符号的字段追溯仍完整（fillM 的 map 元素写）
+	fillMRows, err := repo.GetFunctionFields("symbol:go:example.com/app/svc:fillM")
+	if err != nil || len(fillMRows) == 0 {
+		t.Errorf("fillM 摘要应保留（变更文件内重新索引）: %v, %v", fillMRows, err)
+	}
+	// 未变更数据仍完整：run 的间接写（fillParam 别名命中）保留
+	runRows, err := repo.GetFunctionFields("symbol:go:example.com/app/svc:run")
+	if err != nil {
+		t.Fatalf("GetFunctionFields run: %v", err)
+	}
+	keyHit := false
+	for _, s := range runRows {
+		if s.AccessKind == domain.SummaryIndirectWrite && strings.Contains(s.FieldPath, "Cfg.Key") {
+			keyHit = true
+		}
+	}
+	if !keyHit {
+		t.Errorf("run 的间接写摘要（跨文件闭包）应保留: %+v", runRows)
+	}
+	// build_metadata 标记 incremental
+	meta, err := repo.GetLatest()
+	if err != nil {
+		t.Fatalf("GetLatest: %v", err)
+	}
+	if meta.ToolName != "incremental" {
+		t.Errorf("build tool_name = %s, want incremental", meta.ToolName)
+	}
+}
+
+// gitRun 在指定目录执行 git（注入 user 配置供 commit 使用）。
+func gitRun(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=t", "-c", "user.email=t@t"}, args...)...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
 // TestServerEndToEnd：init 后起 HTTP serve（真实前端资源），全 API 验证。
 func TestServerEndToEnd(t *testing.T) {
 	if !scipGoAvailable() {
