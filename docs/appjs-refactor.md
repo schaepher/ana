@@ -151,7 +151,7 @@ expand → panel（renderNodePanel）、config → expand/layout-tree；
 ## 4. 回归测试
 
 - `e2e/regression-suite.mjs`：playwright 套件，覆盖 1.1–1.10 各模块
-  与第 2 节契约；依赖 :8096 serve（ana 库）
-- 运行：`cd /tmp/layout-test && node /home/schaepher/Codes/ana/e2e/regression-suite.mjs`
+  与第 2 节契约；依赖 :8096 serve（codeintel 库）
+- 运行：`cd /tmp/layout-test && node /home/schaepher/Codes/codeintel/e2e/regression-suite.mjs`
   （playwright 在 /tmp/layout-test/node_modules）
 - 重构完成后跑全量通过即视为行为未变

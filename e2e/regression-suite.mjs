@@ -1,8 +1,8 @@
 // codeintel 前端回归套件：覆盖 app.js 各功能模块与行为契约
 // （docs/appjs-refactor.md 第 2 节）。重构 app.js 后跑全量通过即行为未变。
 //
-// 运行：需 :8096 serve（ana 库）+ playwright
-//   cd /tmp/layout-test && node /home/schaepher/Codes/ana/e2e/regression-suite.mjs
+// 运行：需 :8096 serve（codeintel 库）+ playwright
+//   cd /tmp/layout-test && node /home/schaepher/Codes/codeintel/e2e/regression-suite.mjs
 import { chromium } from 'playwright';
 
 const BASE = 'http://localhost:8096/';

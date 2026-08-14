@@ -198,7 +198,7 @@ defer logger.Debug("exit <name>")
 
 - **`pkill -f "codeintel-e2e serve"` 会匹配自身自杀**（2026-08-14 复发两次）。
   清理 e2e 进程用 `pkill -x codeintel-e2e`（精确进程名）；杀完 sleep 0.5 再起新进程。
-- **git 命令务必在 ana 仓库目录执行**：曾在 `/home/schaepher/Codes/radar`（验证仓库）
+- **git 命令务必在 codeintel 仓库目录执行**：曾在 `/home/schaepher/Codes/radar`（验证仓库）
   误执行 `git add -A` 把 `.codeintel/` 文件提交进 radar（已撤销）。验证仓库只读不改。
 - **schema 无自动迁移**（`PRAGMA user_version=2`）：改动表结构后验证仓库必须
   `codeintel clean` + `init` 重建，否则旧库 schema 不匹配报错或数据形态过时
