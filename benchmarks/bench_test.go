@@ -1,3 +1,5 @@
+//go:build benchmark
+
 // Package benchmarks 性能基准（field_trace.md §20.2）：对指定仓库跑
 // 进程内 FullBuild，记录各适配器耗时 / 峰值内存 / DB 大小。
 // 运行：go test ./benchmarks/ -bench-repo <仓库> [-bench-json]
