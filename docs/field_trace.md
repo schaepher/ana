@@ -676,3 +676,45 @@ Q1–Q19）。决策编号延续 §14 的 Q 体系。实现顺序见 15.7 里程
 - **M3（阶段 C）**：5 生命周期图 → 6 跨层摘要
 - 每项独立提交（可回滚可审查）；验收 = 单元测试 + 集成测试场景 + radar
   实测 + 测试矩阵全绿 + git push
+
+### 15.7 实现记录（2026-08-14 全部交付，测试先行）
+
+9 项优化按里程碑 M1→M3 全部实现并交付（提交 fcf8ddf 起，git log 可查）。
+实现要点与 go/ssa 事实（避免回退踩坑）：
+
+- **M1-1 输出降噪（6ce9cb9）**：日志入 `.codeintel/codeintel.log`（zap +
+  OTel 从创建起写文件——main 粗解析 --repo 传 logging.Setup(logDir)，
+  root span 才不泄漏 stdout）；query 全命令 --json/--compact；
+  export graph（value-trace 默认 mermaid、callees 默认 dot）
+- **M1-2 调用点回连（7e62838）**：callInfo/fieldEntry 带 callLine/argNames，
+  INDIRECT_WRITE 边 metadata {call_line, call_args}（零 schema 变更）；
+  元素间接写（别名分析）同步回连
+- **M1-3 动态派发（7a3f840）**：dispatch_to 边 source=接口类型节点
+  （接口方法无独立节点是 AST 既有决策，Q94 按此适配）、target=候选
+  实现方法；注册点 = SSA MakeInterface（动态值字面量位置，Mi.Pos 为
+  合成位置）；枚举兜底（types.Implements 须同时检查值与指针方法集、
+  排除接口自身——Implements 自反）；置信度 register 0.9 / enum 0.7
+- **M1-4 条件标注（753761f）**：查询期 AST 提取节点所在 if/类型 switch
+  条件（嵌套取最内层），叠加追溯输出 [条件: ...] 与 --json conditions
+- **M2-1 持久化（b9a97a1）**：database/sql 内置摘要（Exec/Query/QueryRow/
+  Prepare + Begin/Commit/Rollback 事务边界）；SQL 字符串启发提取表列
+  （INSERT INTO t(a,b)/UPDATE t SET a=?/DELETE|SELECT FROM）；值实参
+  按 ? 映射列 → 虚拟节点表.列 + summary_io 边；trace 边类型加 summary_io。
+  坑：CallCommon.Args 含接收者（SQL 字符串在 args[1]）；variadic 实参
+  被 Slice 打包（variadicElems 解包）
+- **M2-2 全局/DI（78f80c8）**：全局变量跨函数共享节点
+  （symbol:go:<pkg>:var.<name>，emitValue 特判 *ssa.Global）；emitGlobalInit
+  覆盖隐式 init（无 FuncDecl 不被 emitFunction 处理）。坑：var G = T{...}
+  初始化是字段级 Store（&G.A）而非 Store→Global；v0.26 Global 无 Init
+  字段；init$guard 等内部全局含 $ 需过滤
+- **M3-1 生命周期图（8826d81）**：export graph --type lifecycle
+  （value-trace 聚合 + 类型标注 [存储]/[观测]/[读]/[写] + 条件）；
+  prometheus 观测内置摘要（Counter/Histogram/Gauge 等 ReadArgsAll）
+- **M3-2 跨层摘要（fcf8ddf）**：query summary <节点>——SummaryChain
+  双向最长链（每 depth 层取首个）+ 步骤类型 entry/compute/write/consume
+  + file:line；--json steps / --format mermaid
+
+**测试约定**：每项测试先行（先写单测+集成 → 实现 → 单测 → 集成 →
+radar 实测 → e2e 22/22 → push）；集成 fixture 覆盖全部场景
+（TestCLIFullFlow 含派发/持久化/元素/别名/嵌套读链，TestIncrementalUpdate、
+TestOutputNoiseFree、TestServerEndToEnd）。

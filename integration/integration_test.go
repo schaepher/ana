@@ -99,6 +99,13 @@ func (s *Service) Handle() string {
 
 func (s *Service) helper() {}
 
+// 全局溯源场景（Q98）：全局变量跨函数共享节点
+var DefaultService = Service{Name: "default"}
+
+func defaultServiceName() string {
+	return DefaultService.Name
+}
+
 // 持久化场景（Q97）：SQL 写操作 → 字段→表.列 映射
 func saveService(db *sql.DB, s *Service) {
 	db.Exec("INSERT INTO services(name) VALUES(?)", s.Name)
@@ -545,7 +552,64 @@ func TestCLIFullFlow(t *testing.T) {
 		}
 	}
 
-	// 9. clean 删除索引
+	// 9. 条件标注（Q92）：newLLM 的 m.cfg.APIKey 读在 if 分支内——
+	//    trace 输出带 [条件: ...]
+	llmCondID := fieldAccessID(t, repo, llmID, "m.cfg.APIKey", "read")
+	if llmCondID == "" {
+		t.Fatalf("newLLM m.cfg.APIKey read node missing")
+	}
+	code, out = runCLIOut(t, "query", "trace-backward", "example.com/app/svc.Config.APIKey",
+		"--func", llmID, "--repo", dir)
+	if code != 0 {
+		t.Errorf("trace-backward 条件 exit = %d", code)
+	}
+	if !strings.Contains(out, "[条件:") {
+		t.Errorf("trace 输出应含条件标注 [条件:...]，output=%q", out[:min(len(out), 200)])
+	}
+
+	// 10. 跨层摘要（Q100）：saveService 字段主链（nameNode 复用第 8 节）
+	code, out = runCLIOut(t, "query", "summary", nameNode, "--repo", dir)
+	if code != 0 {
+		t.Errorf("query summary exit = %d", code)
+	}
+	for _, want := range []string{"[entry]", "s.Name"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("summary 输出缺 %q，output=%q", want, out[:min(len(out), 200)])
+		}
+	}
+
+	// 11. 全局溯源（Q98）：DefaultService.Name 读 → 反向可达 var.DefaultService
+	gfName := fieldAccessID(t, repo, "symbol:go:example.com/app/svc:defaultServiceName", "DefaultService.Name", "read")
+	if gfName == "" {
+		t.Fatalf("defaultServiceName read node missing")
+	}
+	code, out = runCLIOut(t, "query", "value-trace", gfName, "--repo", dir)
+	if code != 0 {
+		t.Errorf("value-trace 全局 exit = %d", code)
+	}
+	if !strings.Contains(out, "DefaultService") {
+		t.Errorf("value-trace 应显示全局节点 DefaultService（溯源链），output=%q", out[:min(len(out), 200)])
+	}
+
+	// 12. lifecycle 导出（Q99）：export graph --type lifecycle
+	code, out = runCLIOut(t, "export", "graph", "--type", "lifecycle", "--target", nameNode, "--repo", dir)
+	if code != 0 {
+		t.Errorf("export graph lifecycle exit = %d", code)
+	}
+	if !strings.Contains(out, "flowchart") {
+		t.Errorf("lifecycle 应输出 flowchart，output=%q", out[:min(len(out), 200)])
+	}
+
+	// 13. symbol 接口候选展示（Q95）：svc.Handler 详情含候选实现
+	code, out = runCLIOut(t, "query", "symbol", "symbol:go:example.com/app/svc:Handler", "--repo", dir)
+	if code != 0 {
+		t.Errorf("symbol Handler exit = %d", code)
+	}
+	if !strings.Contains(out, "候选实现") {
+		t.Errorf("symbol Handler 应展示候选实现，output=%q", out[:min(len(out), 200)])
+	}
+
+	// 14. clean 删除索引
 	if code := runCLI(t, "clean", "--repo", dir, "--force"); code != 0 {
 		t.Fatalf("clean exit = %d", code)
 	}
