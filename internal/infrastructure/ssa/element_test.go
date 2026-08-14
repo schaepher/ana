@@ -1,0 +1,165 @@
+package ssa
+
+import (
+	"testing"
+
+	"github.com/schaepher/codeintel/internal/domain"
+)
+
+// findFieldByPath 按 full_path 查找字段/元素访问节点。
+func findFieldByPath(t *testing.T, nodes []*domain.CodeEntity, funcID, fullPath string) *domain.CodeEntity {
+	t.Helper()
+	for _, n := range nodes {
+		if n.Kind == domain.KindFieldAccess && n.Property("func_id") == funcID &&
+			n.Property("full_path") == fullPath {
+			return n
+		}
+	}
+	t.Fatalf("field/element not found: func=%s full_path=%s", funcID, fullPath)
+	return nil
+}
+
+func TestElementMapConstKey(t *testing.T) {
+	// m["a"] 读写：full_path 带引号（Q1/Q5）；常量 key 敏感
+	nodes, facts := indexFixture(t, map[string]string{
+		"go.mod":  moduleGoMod,
+		"main.go": `package m
+
+func f() {
+	m := map[string]int{}
+	m["a"] = 1
+	_ = m["a"]
+}
+`,
+	})
+	funcID := "symbol:go:example.com/mtest:f"
+	w := findFieldByPath(t, nodes, funcID, `m["a"]`)
+	if w.Property("access_kind") != "write" {
+		t.Errorf("write access = %q", w.Property("access_kind"))
+	}
+	r := findFieldAccess(t, nodes, funcID, `m["a"]`, "read")
+	if w.ID == r.ID {
+		t.Errorf("read/write 应独立节点")
+	}
+	// 数据流：写值 → 写节点；读节点 → 结果
+	if out := factsFrom(facts, string(r.ID)); len(out) != 1 || out[0].Kind != domain.FactDataFlowsTo {
+		t.Errorf("read element edges = %+v", out)
+	}
+}
+
+func TestElementSliceIndex(t *testing.T) {
+	// s[0] 写读（IndexAddr+Store / Lookup）
+	nodes, _ := indexFixture(t, map[string]string{
+		"go.mod":  moduleGoMod,
+		"main.go": `package m
+
+func f() {
+	s := make([]int, 3)
+	s[0] = 1
+	_ = s[0]
+}
+`,
+	})
+	funcID := "symbol:go:example.com/mtest:f"
+	findFieldByPath(t, nodes, funcID, `s[0]`) // write
+	findFieldAccess(t, nodes, funcID, `s[0]`, "read")
+}
+
+func TestElementVariableKeyFallback(t *testing.T) {
+	// 变量 key → [key] 回退容器级（Q1）
+	nodes, _ := indexFixture(t, map[string]string{
+		"go.mod":  moduleGoMod,
+		"main.go": `package m
+
+func f(k string) {
+	m := map[string]int{}
+	m[k] = 1
+}
+`,
+	})
+	findFieldByPath(t, nodes, "symbol:go:example.com/mtest:f", `m[key]`)
+}
+
+func TestElementRangeAndChan(t *testing.T) {
+	// range 迭代 = 读（[*]）；channel 排除
+	nodes, _ := indexFixture(t, map[string]string{
+		"go.mod":  moduleGoMod,
+		"main.go": `package m
+
+func f(m map[string]int, ch chan int) {
+	for k, v := range m {
+		_ = k
+		_ = v
+	}
+	for v := range ch {
+		_ = v
+	}
+}
+`,
+	})
+	funcID := "symbol:go:example.com/mtest:f"
+	findFieldByPath(t, nodes, funcID, `m[*]`)
+	for _, n := range nodes {
+		if n.Kind == domain.KindFieldAccess && n.Property("func_id") == funcID &&
+			(n.Property("instance_path") == "ch[*]" || n.Property("full_path") == "ch[*]") {
+			t.Errorf("channel range 不应建节点: %+v", n)
+		}
+	}
+}
+
+func TestElementNamedContainer(t *testing.T) {
+	// named map 容器：full_path 用类型限定路径 + 元素记号（Q5）
+	nodes, _ := indexFixture(t, map[string]string{
+		"go.mod":  moduleGoMod,
+		"main.go": `package m
+
+type M map[string]int
+
+func f() {
+	m := M{}
+	m["a"] = 1
+}
+`,
+	})
+	findFieldByPath(t, nodes, "symbol:go:example.com/mtest:f", `example.com/mtest.M["a"]`)
+}
+
+func TestElementFieldContainer(t *testing.T) {
+	// 容器是结构体字段：full_path = 字段路径 + 元素记号
+	nodes, _ := indexFixture(t, map[string]string{
+		"go.mod":  moduleGoMod,
+		"main.go": `package m
+
+type T struct {
+	M map[string]int
+}
+
+func f(t *T) {
+	t.M["a"] = 1
+}
+`,
+	})
+	findFieldByPath(t, nodes, "symbol:go:example.com/mtest:f", `example.com/mtest.T.M["a"]`)
+}
+
+func TestElementIndirectWrite(t *testing.T) {
+	// 元素间接写（Q7a-② 别名命中）：fillM 写实参容器元素 → 调用者间接写
+	_, _, summaries := indexFixtureFull(t, map[string]string{
+		"go.mod":  moduleGoMod,
+		"main.go": `package m
+
+type M map[string]int
+
+func fillM(m M) {
+	m["a"] = 1
+}
+
+func run() {
+	m := M{}
+	fillM(m)
+}
+`,
+	})
+	findSummary(t, summaries, "symbol:go:example.com/mtest:run",
+		domain.SummaryIndirectWrite, `example.com/mtest.M["a"]`)
+}

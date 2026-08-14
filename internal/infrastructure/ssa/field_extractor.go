@@ -16,6 +16,7 @@ package ssa
 
 import (
 	"fmt"
+	"go/constant"
 	"go/token"
 	"go/types"
 	"os"
@@ -29,8 +30,8 @@ import (
 
 // emitFunctionFields 发射单个函数内的字段访问节点与数据流边。
 func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
-	funcID domain.CanonicalID, idents map[token.Pos]string, funcData *funcData,
-	specs map[string]summarySpec, fallbackTotal *int, emit domain.EmitFunc) error {
+	funcID domain.CanonicalID, idents map[token.Pos]string, assignTargets map[token.Pos]assignTarget,
+	funcData *funcData, specs map[string]summarySpec, fallbackTotal *int, emit domain.EmitFunc) error {
 	logger := zap.L()
 	logger.Debug("enter emitFunctionFields")
 	defer logger.Debug("exit emitFunctionFields")
@@ -42,24 +43,45 @@ func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Func
 		prog:     prog,
 		fn:       fn,
 		funcID:   funcID,
-		idents:   idents,
-		emit:     emit,
-		funcData: funcData,
+		idents:        idents,
+		assignTargets: assignTargets,
+		emit:          emit,
+		funcData:      funcData,
 		specs:    specs,
 		fields:   map[*ssa.FieldAddr]*fieldAccess{},
 		reads:    map[*ssa.FieldAddr]*fieldAccess{},
+		indexes:  map[*ssa.IndexAddr]*fieldAccess{},
+		indexReads: map[*ssa.IndexAddr]*fieldAccess{},
 		values:   map[ssa.Value]domain.CanonicalID{},
 		funcIDs:  map[*ssa.Function]domain.CanonicalID{},
 		slotsFor: map[domain.CanonicalID]map[string]bool{funcID: {}},
 		extSummaries: map[domain.CanonicalID]bool{},
 	}
 
-	// 第一遍：按使用方式判定 FieldAddr 的读写（go/ssa v0.26 表示，
-	// 读经 FieldAddr+UnOp(MUL)，写经 FieldAddr+Store）
+	// 第一遍：按使用方式判定 FieldAddr/IndexAddr 的读写（go/ssa v0.26 表示，
+	// 读经 FieldAddr+UnOp(MUL)，写经 FieldAddr+Store；slice 元素同构）
 	for _, b := range fn.Blocks {
 		for _, instr := range b.Instrs {
 			fa, ok := instr.(*ssa.FieldAddr)
 			if !ok {
+				ia, ok2 := instr.(*ssa.IndexAddr)
+				if !ok2 {
+					continue
+				}
+				if !isSliceLike(ia.X.Type()) {
+					continue
+				}
+				hasStore, hasDeref := faUses(ia)
+				if hasStore || !hasDeref {
+					if f := ext.newElementAccess(ia.X, ia.Index, ia.Pos(), "write"); f != nil {
+						ext.indexes[ia] = f
+					}
+				}
+				if hasDeref {
+					if f := ext.newElementAccess(ia.X, ia.Index, ia.Pos(), "read"); f != nil {
+						ext.indexReads[ia] = f
+					}
+				}
 				continue
 			}
 			hasStore, hasDeref := faUses(fa)
@@ -81,6 +103,77 @@ func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Func
 	for _, b := range fn.Blocks {
 		for _, instr := range b.Instrs {
 			switch v := instr.(type) {
+			case *ssa.Lookup:
+				// map/slice 元素读取（m[k] / s[i]；channel 语义不同，跳过）
+				if !isSliceLike(v.X.Type()) && !isMapLike(v.X.Type()) {
+					continue
+				}
+				if f := ext.newElementAccess(v.X, v.Index, v.Pos(), "read"); f != nil {
+					if err := f.emit(); err != nil {
+						return err
+					}
+					// 元素节点 → 读取结果
+					if err := ext.emitFlow(f.id, v); err != nil {
+						return err
+					}
+				}
+			case *ssa.Index:
+				if !isSliceLike(v.X.Type()) {
+					continue
+				}
+				if f := ext.newElementAccess(v.X, v.Index, v.Pos(), "read"); f != nil {
+					if err := f.emit(); err != nil {
+						return err
+					}
+					if err := ext.emitFlow(f.id, v); err != nil {
+						return err
+					}
+				}
+			case *ssa.MapUpdate:
+				if !isMapLike(v.Map.Type()) {
+					continue
+				}
+				if f := ext.newElementAccess(v.Map, v.Key, v.Pos(), "write"); f != nil {
+					if err := f.emit(); err != nil {
+						return err
+					}
+					// 容器 → 元素节点；写入值 → 元素节点
+					if err := ext.emitFlowValue(v.Map, f.id); err != nil {
+						return err
+					}
+					if err := ext.emitFlowValue(v.Value, f.id); err != nil {
+						return err
+					}
+				}
+			case *ssa.Range:
+				if isChanLike(v.X.Type()) {
+					continue // channel 排除（Q2）
+				}
+				if f := ext.newElementAccess(v.X, nil, v.Pos(), "read"); f != nil {
+					if err := f.emit(); err != nil {
+						return err
+					}
+					if err := ext.emitFlowValue(v.X, f.id); err != nil {
+						return err
+					}
+				}
+			case *ssa.IndexAddr:
+				if f := ext.indexes[v]; f != nil {
+					if err := f.emit(); err != nil {
+						return err
+					}
+					if err := ext.emitFlowValue(v.X, f.id); err != nil {
+						return err
+					}
+				}
+				if f := ext.indexReads[v]; f != nil {
+					if err := f.emit(); err != nil {
+						return err
+					}
+					if err := ext.emitFlowValue(v.X, f.id); err != nil {
+						return err
+					}
+				}
 			case *ssa.Field:
 				if f := ext.newFieldAccessValue(v); f != nil {
 					if err := f.emit(); err != nil {
@@ -92,17 +185,26 @@ func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Func
 					}
 				}
 			case *ssa.Store:
-				fa, ok := v.Addr.(*ssa.FieldAddr)
-				if !ok {
-					continue // 目标不是字段访问，忽略
-				}
-				target, ok := ext.fields[fa]
-				if !ok {
+				if fa, ok := v.Addr.(*ssa.FieldAddr); ok {
+					target, ok := ext.fields[fa]
+					if !ok {
+						continue
+					}
+					// 写入值 ssa_value → 字段节点
+					if err := ext.emitFlowValue(v.Val, target.id); err != nil {
+						return err
+					}
 					continue
 				}
-				// 写入值 ssa_value → 字段节点
-				if err := ext.emitFlowValue(v.Val, target.id); err != nil {
-					return err
+				if ia, ok := v.Addr.(*ssa.IndexAddr); ok {
+					target, ok := ext.indexes[ia]
+					if !ok {
+						continue
+					}
+					// 写入值 ssa_value → 元素节点
+					if err := ext.emitFlowValue(v.Val, target.id); err != nil {
+						return err
+					}
 				}
 			case *ssa.FieldAddr:
 				base := v.X
@@ -128,6 +230,15 @@ func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Func
 				if v.Op != token.MUL {
 					continue
 				}
+				if ia, ok := v.X.(*ssa.IndexAddr); ok {
+					// 元素节点 → 解引用结果（s[i] 读）
+					if f := ext.indexReads[ia]; f != nil {
+						if err := ext.emitFlow(f.id, v); err != nil {
+							return err
+						}
+					}
+					continue
+				}
 				fa, ok := v.X.(*ssa.FieldAddr)
 				if !ok {
 					continue
@@ -151,20 +262,21 @@ func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Func
 	return err
 }
 
-// faUses 扫描 FieldAddr 的使用方式：是否被 Store 写入、是否被 UnOp(MUL) 解引用读。
-func faUses(fa *ssa.FieldAddr) (hasStore, hasDeref bool) {
+// faUses 扫描 FieldAddr/IndexAddr 的使用方式：是否被 Store 写入、
+// 是否被 UnOp(MUL) 解引用读。
+func faUses(addr ssa.Value) (hasStore, hasDeref bool) {
 	logger := zap.L()
 	logger.Debug("enter faUses")
 	defer logger.Debug("exit faUses")
-	refs := fa.Referrers()
+	refs := addr.Referrers()
 	if refs == nil {
 		return false, false
 	}
 	for _, u := range *refs {
-		if st, ok := u.(*ssa.Store); ok && st.Addr == fa {
+		if st, ok := u.(*ssa.Store); ok && st.Addr == addr {
 			hasStore = true
 		}
-		if un, ok := u.(*ssa.UnOp); ok && un.Op == token.MUL && un.X == fa {
+		if un, ok := u.(*ssa.UnOp); ok && un.Op == token.MUL && un.X == addr {
 			hasDeref = true
 		}
 	}
@@ -581,11 +693,14 @@ type fieldExtractor struct {
 	prog   *ssa.Program
 	fn     *ssa.Function
 	funcID domain.CanonicalID
-	idents map[token.Pos]string // 源码标识符索引（Alloc 反查变量名）
-	emit   domain.EmitFunc
+	idents        map[token.Pos]string // 源码标识符索引（Alloc 反查变量名）
+	assignTargets map[token.Pos]assignTarget // 赋值表达式区间 → 目标变量名（MakeMap/MakeSlice 恢复）
+	emit          domain.EmitFunc
 
 	fields   map[*ssa.FieldAddr]*fieldAccess // FieldAddr → write 节点（Store 解析目标）
 	reads    map[*ssa.FieldAddr]*fieldAccess // FieldAddr → read 节点（UnOp 解引用）
+	indexes  map[*ssa.IndexAddr]*fieldAccess // IndexAddr → write 节点（slice 元素）
+	indexReads map[*ssa.IndexAddr]*fieldAccess // IndexAddr → read 节点
 	values   map[ssa.Value]domain.CanonicalID // 已发射的 ssa_value
 	funcIDs  map[*ssa.Function]domain.CanonicalID // 函数 → canonical ID 缓存
 	slotsFor map[domain.CanonicalID]map[string]bool // 每函数 slot 占用（shadowing 消歧）
@@ -608,4 +723,155 @@ func isSSAName(name string) bool {
 		}
 	}
 	return true
+}
+
+// newElementAccess 创建容器元素访问节点（map/slice/array 元素，Q83）。
+// key 为 nil 表示 Range 迭代（[*]）。
+func (ext *fieldExtractor) newElementAccess(container, key ssa.Value, pos token.Pos, access string) *fieldAccess {
+	logger := zap.L()
+	logger.Debug("enter (fieldExtractor).newElementAccess")
+	defer logger.Debug("exit (fieldExtractor).newElementAccess")
+	full, instance := ext.elementPath(container, key)
+	line := ext.prog.Fset.PositionFor(pos, false).Line
+	fi := fieldInfo{
+		fullPath:   full,
+		fieldName:  "",
+		typeString: container.Type().String(),
+		filePath:   ext.currentFile,
+		line:       line,
+		snippet:    ext.sourceLine(ext.currentFile, line),
+	}
+	ext.recordEntry(access, fi, instance)
+	return &fieldAccess{
+		id:       ext.accessID(instance, access, pos),
+		access:   access,
+		instance: instance,
+		info:     fi,
+		ext:      ext,
+	}
+}
+
+// elementPath 生成元素访问的 full_path / instance_path（Q1/Q5）：
+//   常量字符串 key → m["a"]；常量 int 索引 → s[0]；变量 key → [key]；Range → [*]
+//   full_path 基：字段路径（容器是结构体字段）> named 容器类型 > 回退 instance
+func (ext *fieldExtractor) elementPath(container, key ssa.Value) (full, instance string) {
+	mark := elementMark(key)
+	instance = ext.containerInstance(container) + mark
+	full = ext.containerFullPath(container)
+	if full == "" {
+		full = instance // 回退（Q5，instance 已含 mark）
+	} else {
+		full += mark
+	}
+	return full, instance
+}
+
+// containerInstance 容器实例路径（lifting 后 MakeMap/MakeSlice 寄存器
+// 从赋值目标恢复变量名）。
+func (ext *fieldExtractor) containerInstance(container ssa.Value) string {
+	if un, ok := container.(*ssa.UnOp); ok && un.Op == token.MUL {
+		container = un.X
+	}
+	// 容器创建/包装指令（MakeMap/MakeSlice/Slice 等，lifting 后寄存器无源码名）：
+	// 从赋值目标区间恢复容器名
+	if name := ext.lookupAssignTarget(container.Pos()); name != "" {
+		return name
+	}
+	return ext.instancePath(container)
+}
+
+// containerFullPath 容器类型限定路径（字段路径 > named 容器类型 > 空回退）。
+func (ext *fieldExtractor) containerFullPath(container ssa.Value) string {
+	if un, ok := container.(*ssa.UnOp); ok && un.Op == token.MUL {
+		container = un.X
+	}
+	if fa, ok := container.(*ssa.FieldAddr); ok {
+		if info, ok2 := ext.fieldInfo(fa.X.Type(), fa.Field, fa.Pos()); ok2 {
+			return info.fullPath // pkg.T.m（容器是字段）
+		}
+	}
+	if named := namedContainerOf(container.Type()); named != "" {
+		return named // pkg.M（named map/slice 类型）
+	}
+	return ""
+}
+
+// elementMark 生成元素记号（Q5）："a" / 0 / [key] / [*]。
+func elementMark(key ssa.Value) string {
+	if key == nil {
+		return "[*]" // Range 迭代（全部元素）
+	}
+	if c, ok := key.(*ssa.Const); ok && c.Value != nil {
+		switch c.Value.Kind() {
+		case constant.String:
+			return `["` + constant.StringVal(c.Value) + `"]`
+		case constant.Int:
+			return "[" + c.Value.ExactString() + "]"
+		}
+	}
+	return "[key]" // 变量 key：回退容器级
+}
+
+// namedContainerOf 取 named map/slice/array 类型的限定路径（pkg.M）；非 named 返回空。
+func namedContainerOf(t types.Type) string {
+	if p, ok := t.(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	named, ok := t.(*types.Named)
+	if !ok {
+		return ""
+	}
+	switch named.Underlying().(type) {
+	case *types.Map, *types.Slice, *types.Array:
+		obj := named.Obj()
+		if obj == nil || obj.Pkg() == nil {
+			return ""
+		}
+		return obj.Pkg().Path() + "." + obj.Name()
+	}
+	return ""
+}
+
+// isMapLike / isSliceLike / isChanLike 容器类型判定（含 named 与字面类型）。
+func isMapLike(t types.Type) bool {
+	if p, ok := t.(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	if named, ok := t.(*types.Named); ok {
+		t = named.Underlying()
+	}
+	_, ok := t.(*types.Map)
+	return ok
+}
+
+func isSliceLike(t types.Type) bool {
+	if p, ok := t.(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	if named, ok := t.(*types.Named); ok {
+		t = named.Underlying()
+	}
+	switch t.(type) {
+	case *types.Slice, *types.Array:
+		return true
+	}
+	return false
+}
+
+func isChanLike(t types.Type) bool {
+	if named, ok := t.(*types.Named); ok {
+		t = named.Underlying()
+	}
+	_, ok := t.(*types.Chan)
+	return ok
+}
+
+// lookupAssignTarget 区间匹配赋值目标（MakeMap.Pos 落在字面量内部）。
+func (ext *fieldExtractor) lookupAssignTarget(pos token.Pos) string {
+	for start, t := range ext.assignTargets {
+		if pos >= start && pos <= t.end {
+			return t.name
+		}
+	}
+	return ""
 }

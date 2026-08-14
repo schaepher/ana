@@ -39,7 +39,7 @@ codeintel 已提供符号导航（SCIP）、调用图与影响分析（AST/go/pa
 - **核心能力**：
   ① 给定任意函数，列出其直接/间接读取和编辑的所有结构体字段（全路径 `a.b.c`，类型限定）；
   ② 给定任意字段，反向追溯其所有产生点（赋值来源），正向追溯其返回后所有使用点（消费位置）。
-- **v1 非目标**：不提供漏洞扫描、安全规则匹配、污点传播、反射分析；不追踪 map/slice/array/channel 元素访问（推迟至 v2）。
+- **v1 非目标**：不提供漏洞扫描、安全规则匹配、污点传播、反射分析；channel 元素收发不追踪（map/slice/array 元素追踪见 §14.11）。
 - **v2 计划**：MCP serve 交互入口（TD.md §7 契约，不单独设计 shell）、增量更新、map/slice 等复合类型元素追踪。
 
 ### 1.3 适用规模
@@ -554,11 +554,35 @@ SSA 语义与映射类决策全部保留：Q1（SSA_VALUE 统一建模）、Q2�
   （局部变量/解引用/字段链），纯临时值保留 SSA 名 tN；ID 保持稳定
   （slot 仍为 SSA 名，展示名存 name 字段）。
 
+### 14.11 map/slice/array 元素追踪（Q83，2026-08-14 设计树确认）
+
+需求：v1 非目标取消，实现容器元素访问追踪。设计树决策：
+
+| 决策 | 选择 |
+| :--- | :--- |
+| Q1 粒度 | 常量 key 敏感（`m["a"]` / `s[0]`）；变量 key 回退容器级（`[key]`）；Range 迭代 `[*]` |
+| Q2 范围 | map + slice + array（channel 排除：收发非读写语义） |
+| Q3 建模 | 复用 field_access 节点，full_path 用 `[...]` 记号（`pkg.T.M["a"]`）；字段路径 > named 容器类型 > 回退 instance |
+| Q4 集成 | 提取 + 摘要（S1）+ 数据流链（trace/value-trace）；元素间接写只走别名命中（Q7a-②，无类型级 fallback）；外部摘要后置 |
+| Q5 标识 | 字符串 key 带引号 `["a"]`、int 索引 `[0]`、变量 `[key]`、Range `[*]` |
+| Q6 查询 | trace 精确匹配（现状），元素路径需完整输入 |
+| Q7 间接写 | 被调写元素（MapUpdate/IndexAddr+Store）→ 容器 base may ∩ 实参 may → 调用者间接写条目（field_path 为元素路径） |
+
+**指令映射**：`Lookup` / `Index` → read；`MapUpdate` / `IndexAddr`+Store → write；
+`Range` → read（channel 跳过）；`v, ok := m[k]`（CommaOk）→ read。
+
+**SSA 表示坑**：lifting 后 map 字面量是 `MakeMap` 寄存器、`make([]int, n)` 是
+`Alloc+Slice` 包装——容器名从赋值语句反查（buildAssignTargets：表达式区间
+→ 目标变量名，MakeMap.Pos 落在字面量内部须区间匹配）；别名锚点扩展为
+对象创建点（alloc / MakeMap / MakeSlice，may 集泛化为 ssa.Value）。
+
+radar 实测：790 元素访问节点（`data["Active"]` 等）、736 行元素间接写。
+
 ### 14.10 已确认 backlog（非 v1 范围）
 
 - 入口可达子图优化（§9：默认只分析入口可达，当前为全 module 构建）
 - 性能基准 benchmarks/（§11：pprof 构建时间/内存记录）
-- v2 计划：MCP serve、增量更新、map/slice 元素追踪、泛型完整支持
+- v2 计划：MCP serve、增量更新、泛型完整支持、channel 元素追踪
 
 ---
 

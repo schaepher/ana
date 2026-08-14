@@ -72,6 +72,9 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, emit domai
 	// 源码标识符索引（token.Pos → 标识符名）：go/ssa v0.26 的 Alloc 名为 tN，
 	// 实例路径（x.A）需从 AST 恢复源码变量名
 	idents := buildIdentIndex(pkgs, repo.Module)
+	// 赋值目标索引（表达式起点 → 目标变量名）：lifting 后 map/slice 字面量
+	// 是 MakeMap/MakeSlice 寄存器，容器名从此恢复
+	assignTargets := buildAssignTargets(pkgs, repo.Module)
 
 	// 外部函数摘要（内置 + 用户 field-summary.yaml，§7）
 	specs, warnings := loadSummaries(repo.Path)
@@ -85,7 +88,7 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, emit domai
 		if !isModuleFunction(fn, repo.Module) {
 			continue // 外部依赖走摘要（Phase 5）
 		}
-		if err := emitFunction(repo, prog, fn, idents, a.fd, specs, &fallbackTotal, emit); err != nil {
+		if err := emitFunction(repo, prog, fn, idents, assignTargets, a.fd, specs, &fallbackTotal, emit); err != nil {
 			return err
 		}
 	}
@@ -93,7 +96,7 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, emit domai
 		fmt.Fprintf(os.Stderr, "warning: %d 个字段访问静态类型解析失败（匿名 struct 等），已回退源码字面量路径\n", fallbackTotal)
 	}
 	// 轻量别名分析（Q80）：产出间接写排除集 + ALIAS 边（须在 emitSummaries 前）
-	aliasRes, err := computeAliases(repo, prog, idents, emit)
+	aliasRes, err := computeAliases(repo, prog, idents, a.fd, emit)
 	if err != nil {
 		return fmt.Errorf("alias analysis: %w", err)
 	}
@@ -135,7 +138,8 @@ func isModuleFunction(fn *ssa.Function, module string) bool {
 // 仅处理有 FuncDecl 源码的顶层函数/方法——闭包（FuncLit）与合成 wrapper 跳过；
 // 闭包内字段访问在 Phase 2 归入外层函数（field_trace.md Q14 适配）。
 func emitFunction(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
-	idents map[token.Pos]string, data map[domain.CanonicalID]*funcData,
+	idents map[token.Pos]string, assignTargets map[token.Pos]assignTarget,
+	data map[domain.CanonicalID]*funcData,
 	specs map[string]summarySpec, fallbackTotal *int, emit domain.EmitFunc) error {
 	logger := zap.L()
 	logger.Debug("enter emitFunction")
@@ -180,7 +184,7 @@ func emitFunction(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
 		fd = &funcData{}
 		data[id] = fd
 	}
-	return emitFunctionFields(repo, prog, fn, id, idents, fd, specs, fallbackTotal, emit)
+	return emitFunctionFields(repo, prog, fn, id, idents, assignTargets, fd, specs, fallbackTotal, emit)
 }
 
 // emitSignatureNodes 发射函数/方法签名的参数与返回节点（parameter / result）
@@ -344,4 +348,66 @@ func relPath(repoPath, abs string) string {
 // isInModule 判断包路径是否在 go.mod module 前缀内。
 func isInModule(pkgPath, module string) bool {
 	return pkgPath == module || strings.HasPrefix(pkgPath, module+"/")
+}
+
+// assignTarget 赋值表达式区间 → 目标变量名。
+type assignTarget struct {
+	name string
+	end  token.Pos
+}
+
+// buildAssignTargets 构建 赋值表达式区间 → 目标变量名（Q83：lifting 后
+// map/slice 字面量为 MakeMap/MakeSlice 寄存器，其 Pos 落在字面量内部，
+// 用区间匹配恢复容器名）。
+func buildAssignTargets(pkgs []*packages.Package, module string) map[token.Pos]assignTarget {
+	logger := zap.L()
+	logger.Debug("enter buildAssignTargets")
+	defer logger.Debug("exit buildAssignTargets")
+	targets := map[token.Pos]assignTarget{}
+	for _, p := range pkgs {
+		if !isInModule(p.PkgPath, module) {
+			continue
+		}
+		for _, f := range p.Syntax {
+			ast.Inspect(f, func(n ast.Node) bool {
+				switch st := n.(type) {
+				case *ast.AssignStmt:
+					for i, rhs := range st.Rhs {
+						name := lhsIdentName(st.Lhs, i)
+						if name != "" {
+							targets[rhs.Pos()] = assignTarget{name: name, end: rhs.End()}
+						}
+					}
+				case *ast.ValueSpec:
+					for i, v := range st.Values {
+						if i < len(st.Names) {
+							targets[v.Pos()] = assignTarget{name: st.Names[i].Name, end: v.End()}
+						}
+					}
+				}
+				return true
+			})
+		}
+	}
+	return targets
+}
+
+// lhsIdentName 取赋值目标标识符名（多目标取第 i 个；复合目标如 x[0] 取 x）。
+func lhsIdentName(lhs []ast.Expr, i int) string {
+	if i >= len(lhs) {
+		return ""
+	}
+	switch l := lhs[i].(type) {
+	case *ast.Ident:
+		return l.Name
+	case *ast.IndexExpr:
+		if id, ok := l.X.(*ast.Ident); ok {
+			return id.Name
+		}
+	case *ast.SelectorExpr:
+		if id, ok := l.X.(*ast.Ident); ok {
+			return id.Name
+		}
+	}
+	return ""
 }
