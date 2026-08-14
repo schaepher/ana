@@ -350,3 +350,66 @@ func TestValueTraceEndpoint(t *testing.T) {
 		t.Fatalf("missing node flows = %v, want empty", flows)
 	}
 }
+
+// TestValueTraceConditionsEndpoint：⑬ 猎 bug 回归——/api/value-trace
+// 返回 conditions 字段（Q92 条件标注此前前端缺失，CLI 有 HTTP 无）。
+func TestValueTraceConditionsEndpoint(t *testing.T) {
+	repoDir := t.TempDir()
+	db, err := sqlite.Open(repoDir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	r := sqlite.NewRepo(db)
+	funcID := "symbol:go:example.com/app:Greet"
+	// 真实源码文件（TraceConditions 解析 AST 标注条件）
+	writeFileAt := func() {}
+	_ = writeFileAt
+	srcPath := filepath.Join(repoDir, "app.go")
+	if err := os.WriteFile(srcPath, []byte(`package app
+
+func Greet(s *T) {
+	if s.Name == "" {
+		s.Name = "x"
+	}
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	write := &domain.CodeEntity{
+		ID: domain.CanonicalID(funcID + "#s.Name.write@4"), Kind: domain.KindFieldAccess,
+		Name: "s.Name", FilePath: "app.go", LineStart: 4,
+		Properties: map[string]any{"full_path": "example.com/app.T.Name",
+			"instance_path": "s.Name", "access_kind": "write", "func_id": funcID},
+	}
+	val := &domain.CodeEntity{
+		ID: domain.CanonicalID(funcID + "#t0"), Kind: domain.KindSSAValue, Name: "t0",
+		Properties: map[string]any{"func_id": funcID},
+	}
+	if _, err := r.SaveBatchStats([]*domain.CodeEntity{write, val}, []*domain.Fact{{
+		SourceID: val.ID, TargetID: write.ID, Kind: domain.FactDataFlowsTo,
+		ToolSource: domain.ToolSSA, Confidence: 1,
+	}}, nil); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	web := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<html>x</html>")}}
+	ts := httptest.NewServer(New(context.Background(), action.New(r), web, repoDir).Handler())
+	t.Cleanup(ts.Close)
+
+	resp, body := get(t, ts, "/api/value-trace?id="+url.QueryEscape(string(write.ID)))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d: %v", resp.StatusCode, body)
+	}
+	flows, _ := body["flows"].([]any)
+	for _, raw := range flows {
+		f := raw.(map[string]any)
+		if f["name"] == "s.Name" && f["access"] == "write" && f["line"] == float64(4) {
+			conds, ok := f["conditions"].([]any)
+			if !ok || len(conds) == 0 {
+				t.Errorf("写节点缺 conditions（应在 if 分支内标注）: %v", f)
+			}
+			return
+		}
+	}
+	t.Errorf("value-trace 输出缺写节点: %v", body)
+}

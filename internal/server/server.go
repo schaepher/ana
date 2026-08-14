@@ -235,17 +235,18 @@ func nodeToJSON(n *domain.CodeEntity) NodeJSON {
 
 // FlowRowJSON 函数内字段数据流的一步（/api/flows 输出）。
 type FlowRowJSON struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Depth     int    `json:"depth"`
-	Dir       int    `json:"dir"` // 0=产生链（反向），1=使用链（正向）
-	EdgeKind  string `json:"edgeKind,omitempty"` // 进入该节点的边类型
-	Line      int    `json:"line,omitempty"`
-	Kind      string `json:"kind"` // field_access / ssa_value
-	Access    string `json:"access,omitempty"` // field_access 的 read/write
-	FullPath  string `json:"fullPath,omitempty"`
-	FuncID    string `json:"funcId,omitempty"`    // 所属函数 canonical ID
-	FuncName  string `json:"funcName,omitempty"`  // 所属函数短名（函数上下文分组）
+	ID         string   `json:"id"`
+	Name       string   `json:"name"`
+	Depth      int      `json:"depth"`
+	Dir        int      `json:"dir"` // 0=产生链（反向），1=使用链（正向）
+	EdgeKind   string   `json:"edgeKind,omitempty"` // 进入该节点的边类型
+	Line       int      `json:"line,omitempty"`
+	Kind       string   `json:"kind"` // field_access / ssa_value
+	Access     string   `json:"access,omitempty"` // field_access 的 read/write
+	FullPath   string   `json:"fullPath,omitempty"`
+	FuncID     string   `json:"funcId,omitempty"`   // 所属函数 canonical ID
+	FuncName   string   `json:"funcName,omitempty"` // 所属函数短名（函数上下文分组）
+	Conditions []string `json:"conditions,omitempty"` // 路径条件标注（Q92，查询期叠加）
 }
 
 // handleValueTrace 返回数据值全链（函数上下文分组渲染数据）。
@@ -263,6 +264,12 @@ func (s *Server) handleValueTrace(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// 路径条件标注（Q92 查询期叠加）——与 CLI 输出对齐（此前前端缺失）
+	rows, err = s.acts.TraceConditions(rows)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	flows := make([]FlowRowJSON, 0, len(rows))
 	for _, row := range rows {
 		edge := ""
@@ -272,17 +279,18 @@ func (s *Server) handleValueTrace(w http.ResponseWriter, r *http.Request) {
 			edge = row.EdgeKinds
 		}
 		flows = append(flows, FlowRowJSON{
-			ID:       string(row.ID),
-			Name:     row.Name,
-			Depth:    row.Depth,
-			Dir:      row.Dir,
-			EdgeKind: edge,
-			Line:     row.Line,
-			Kind:     string(row.Kind),
-			Access:   row.Access,
-			FuncID:   row.FuncID,
-			FuncName: shortFuncName(row.FuncID),
-			FullPath: row.FullPath,
+			ID:         string(row.ID),
+			Name:       row.Name,
+			Depth:      row.Depth,
+			Dir:        row.Dir,
+			EdgeKind:   edge,
+			Line:       row.Line,
+			Kind:       string(row.Kind),
+			Access:     row.Access,
+			FuncID:     row.FuncID,
+			FuncName:   shortFuncName(row.FuncID),
+			FullPath:   row.FullPath,
+			Conditions: row.Conditions,
 		})
 	}
 	writeJSON(w, map[string]any{"flows": flows})

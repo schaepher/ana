@@ -248,8 +248,9 @@ export function loadValueTrace(nodeId) {
           var label = f.edgeKind ? arrow + ' ' + f.edgeKind : '';
           var acc = f.kind === 'field_access' ? (f.access === 'read' ? ' [读]' : ' [写]') : '';
           var line = f.line ? ':' + f.line : '';
+          var cond = (f.conditions && f.conditions.length) ? ' [条件: ' + f.conditions.join('; ') + ']' : '';
           html.push('<div class="vt-row" style="padding-left:' + (f.depth * 12 + 4) + 'px">' +
-            escapeHtml(label + ' ' + f.name + acc + line) + '</div>');
+            escapeHtml(label + ' ' + f.name + acc + line + cond) + '</div>');
         });
       }
       html.push('</div>');

@@ -190,7 +190,35 @@ if (hasVtBtn) {
     vtText.indexOf('数据流全链') >= 0 && vtText.indexOf('(Manager).Run') >= 0 &&
     vtText.indexOf('(Handler).PageChatSend') >= 0 && vtText.indexOf('[读]') >= 0,
     'vt=' + vtText.slice(0, 120).replace(/\n/g, ' '));
+  check('全链视图显示路径条件标注 [条件:]（Q92 前端回归）',
+    vtText.indexOf('[条件:') >= 0,
+    'vt=' + vtText.slice(0, 200).replace(/\n/g, ' '));
 }
+
+// 13b. 信息栏 receiver 分组：方法节点面板含"接收者（N）"分组
+await page.evaluate((id) => window.__codeintelGraph.emit('node:click', { target: { id } }), FN_ID);
+await page.waitForTimeout(800);
+const recvPanel = await page.evaluate(() => document.getElementById('panel-body').textContent);
+check('信息栏 receiver 独立分组（接收者（N））',
+  recvPanel.indexOf('接收者（') >= 0,
+  'panel=' + recvPanel.slice(0, 80).replace(/\n/g, ' '));
+
+// 13c. ORM 持久化映射：store.Create 的 flows 含 表.列 虚拟节点（gorm）
+const STORE_CREATE = 'symbol:go:github.com/schaepher/radar/internal/store:(sqliteKnowledgeStore).Create';
+const createFlows = await api('/api/flows?id=' + encodeURIComponent(STORE_CREATE));
+const colNode = (createFlows.flows || []).find((f) => f.kind === 'field_access' &&
+  f.name.indexOf('.') >= 0 && f.access === 'write' && f.name.indexOf('ext.') < 0 &&
+  f.name.indexOf('t0') < 0 && f.name.indexOf('t1') < 0);
+check('持久化映射：Create 的 flows 含 表.列 虚拟节点',
+  colNode !== undefined && /^[a-z_]+\.[a-z_]+$/.test(colNode.name),
+  'col=' + (colNode ? colNode.name : 'none'));
+
+// 13d. 动态派发候选：接口节点 expand 返回 dispatch_to 边
+const IFACE_ID = 'symbol:go:github.com/schaepher/radar/internal/store:KnowledgeStore';
+const ifaceExp = await api('/api/expand?id=' + encodeURIComponent(IFACE_ID));
+check('动态派发：接口 expand 返回 dispatch_to 候选边',
+  (ifaceExp.edges || []).some((e) => e.kind === 'dispatch_to'),
+  'edges=' + (ifaceExp.edges || []).map((e) => e.kind).join(','));
 
 // 13. map/slice 元素访问（Q83）：/api/flows 返回元素路径（data["Active"] 等）
 const TRAIN_ID = 'symbol:go:github.com/schaepher/radar/internal/handler:(Handler).PageTrain';
