@@ -1000,3 +1000,32 @@ CLI `update`（全量分析+增量写入）已有；补**自动触发闭环**（
   最新 timestamp 与 `git log -1 --format=%ct`——索引早于 HEAD →
   stderr 提示"⚠ 索引可能过期（构建于 X，HEAD 更新于 Y）；运行
   codeintel update"——无论 hook 是否触发都能发现陈旧（兜底）
+
+### 18.7 HTTP（REST）模块间调用（Q140–Q143，2026-08-15）
+
+- **服务端路由表 = 人工配置文件**（Q140）：仓库根 `routes.yaml`（与
+  modules.yaml/field-summary.yaml 并列）——路由不靠代码注册调用识别，
+  由人维护服务接口清单：
+  ```yaml
+  routes:
+    - path: "/api/orders"
+      handler: "internal/svc_orders:(Handler).ListOrders"  # 符号名，构建期解析
+      method: "GET"                                        # 可选
+  ```
+  构建期读取 → 生成 `http_route` 节点（`symbol:go:<handler包>:route.<path>`，
+  properties 带 handler 函数 ID + path + method）；handler 解析失败
+  （符号不存在）→ 跳过并警告
+- **客户端识别（Q141）**：`http.Get(url)`（URL 第 1 参）/ 
+  `http.NewRequest(method, url, ...)`（URL 第 2 参）——URL 字面量 +
+  一层常量传播（复用 §18.6 的 methodVars/const 机制）；`client.Do(req)`
+  一期盲区（req 对象追踪）；URL 解析出 host + path（query 剥离）
+- **目标模块判定（Q142）**：**仅路由表路径匹配**（无 hosts.yaml——
+  host 由服务部署配置管理，代码不硬编码域名；host 仅记录于 metadata
+  作展示）。路径匹配 = 精确 + 前缀（路由 path 以 `/` 结尾或含 `{id}`
+  通配 → 前缀/通配匹配，Q143）；匹配成功 → `http_call` 边
+  （调用方函数 → http_route 节点，metadata `{url, host, path, method,
+  line_num}`）；匹配失败 → http_call 到外部虚拟节点
+  （`symbol:http:<host>:route.<path>`，handler 空）→ module-calls
+  标 `[外部服务]`（与 gRPC 对称）
+- **module-calls 扩展**：查询合并 grpc_call + http_call，输出带
+  transport 字段（grpc / http）
