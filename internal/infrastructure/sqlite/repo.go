@@ -863,13 +863,14 @@ SELECT id, depth, name, edge_kinds, line FROM def_trace ORDER BY depth, id`
       AND json_extract(n.properties, '$.full_path') = ?
       AND json_extract(n.properties, '$.func_id') = ?
     UNION
-    -- 起点：函数参数（调用方经 argument 进入 callee 对该字段的实际写入，
-    -- 问题①：调用方函数内无该字段直接访问时仍能正向追踪）
+    -- 起点：函数参数与局部对象变量（调用方经 argument 进入 callee 对该
+    -- 字段的实际写入；① param/receiver 传参、⑩ alloc 局部对象传参——
+    -- var c Cfg; fill(&c) 调用方无字段访问时仍能正向追踪）
     SELECT n.id, 0, n.name, '', n.line_start, 0, n.kind
     FROM nodes n
     WHERE n.kind = 'ssa_value'
       AND json_extract(n.properties, '$.func_id') = ?
-      AND json_extract(n.properties, '$.origin_kind') IN ('param','receiver')
+      AND json_extract(n.properties, '$.origin_kind') IN ('param','receiver','alloc')
     UNION
     SELECT e.target_id, d.depth + 1, n_next.name,
            CASE WHEN d.edge_kinds = '' THEN e.kind

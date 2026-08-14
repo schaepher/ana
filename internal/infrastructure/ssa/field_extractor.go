@@ -313,7 +313,7 @@ func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Func
 }
 
 // faUses 扫描 FieldAddr/IndexAddr 的使用方式：是否被 Store 写入、
-// 是否被 UnOp(MUL) 解引用读。
+// 是否被 UnOp(MUL) 解引用读、是否作为调用实参（取址传参）流出。
 func faUses(addr ssa.Value) (hasStore, hasDeref bool) {
 	logger := zap.L()
 	logger.Debug("enter faUses")
@@ -329,8 +329,22 @@ func faUses(addr ssa.Value) (hasStore, hasDeref bool) {
 		if un, ok := u.(*ssa.UnOp); ok && un.Op == token.MUL && un.X == addr {
 			hasDeref = true
 		}
+		// 取址传参（fill(&s.cfg)）：地址作为实参流出——值读语义
+		if call, ok := u.(*ssa.Call); ok && callArg(call, addr) {
+			hasDeref = true
+		}
 	}
 	return hasStore, hasDeref
+}
+
+// callArg 判断指令调用实参（含接收者）是否包含指定值。
+func callArg(call *ssa.Call, v ssa.Value) bool {
+	for _, a := range call.Call.Args {
+		if a == v {
+			return true
+		}
+	}
+	return false
 }
 
 // fieldAddrUse 判定 FieldAddr 的最终读写用途，内层 FieldAddr（仅被其他
@@ -357,6 +371,11 @@ func fieldAddrUse(fa *ssa.FieldAddr) (hasStore, hasDeref bool) {
 			if uu.X == fa {
 				s, d := fieldAddrUse(uu)
 				hasStore, hasDeref = hasStore || s, hasDeref || d
+			}
+		case *ssa.Call:
+			// 取址传参（fill(&s.cfg)）：地址作为实参流出——值读语义
+			if callArg(uu, fa) {
+				hasDeref = true
 			}
 		}
 	}

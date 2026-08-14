@@ -1163,3 +1163,169 @@ func main() {}
 		t.Error("DAO 链式 Update 未生成 session.status 表.列 虚拟节点")
 	}
 }
+
+// TestCrossFunctionTraceSelfContained：⑩ 跨函数追踪复现——多种调用方
+// 形态下 trace-forward 应连到被调函数内的实际字段写入：
+//   A. 调用方参数传递（run2(c *Cfg) → fill(c)）
+//   B. 调用方局部变量传递（var c Cfg; fill(&c)，调用方无字段访问无参数）
+//   C. 调用方字段读后传参（s.c → fill）
+func TestCrossFunctionTraceSelfContained(t *testing.T) {
+	if !scipGoAvailable() {
+		t.Skip("scip-go not found")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/xfn\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "main.go"), `package xfn
+
+type Cfg struct {
+	Key string
+}
+
+// callee：实际写入
+func fill(c *Cfg) {
+	c.Key = "set"
+}
+
+// A. 参数传递
+func run2(c *Cfg) {
+	fill(c)
+}
+
+// B. 局部变量传递（调用方无字段访问、无参数）
+func runLocal() {
+	var c Cfg
+	fill(&c)
+}
+
+// C. 调用方字段读后传参
+type Svc struct {
+	cfg Cfg
+}
+
+func (s *Svc) Run() {
+	fill(&s.cfg)
+}
+
+func main() {}
+`)
+	if code := runCLI(t, "init", "--repo", dir); code != 0 {
+		t.Fatalf("init exit = %d", code)
+	}
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	check := func(t *testing.T, funcID, field string, want string) {
+		t.Helper()
+		code, out := runCLIOut(t, "query", "trace-forward", field,
+			"--func", funcID, "--repo", dir)
+		if code != 0 {
+			t.Fatalf("trace-forward exit = %d (%s)", code, funcID)
+		}
+		if !strings.Contains(out, want) {
+			t.Errorf("trace-forward %s 未连到 %s，output=%q", funcID, want, out[:min(len(out), 400)])
+		}
+	}
+	field := "example.com/xfn.Cfg.Key"
+	// A. 参数传递：run2 → fill → c.Key 写入
+	check(t, "symbol:go:example.com/xfn:run2", field, "c.Key")
+	// B. 局部变量：runLocal → fill → c.Key 写入
+	check(t, "symbol:go:example.com/xfn:runLocal", field, "c.Key")
+	// C. 字段读传参：Run → fill → c.Key 写入
+	check(t, "symbol:go:example.com/xfn:(Svc).Run", field, "c.Key")
+}
+
+// TestORMChainFormsSelfContained：⑪ ORM 链式形态覆盖——结构体 Updates
+// 链式（Model().Where().Updates(&Y{})）与无 Model 的字符串列名 Update
+// （Where().Update("col", v)——表名无法溯源时跳过而非报错）。
+func TestORMChainFormsSelfContained(t *testing.T) {
+	if !scipGoAvailable() {
+		t.Skip("scip-go not found")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/ormf\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "field-summary.yaml"), `summaries:
+  - func: example.com/ormf.(DB).Update
+    orm_write: true
+    param_index: 1
+  - func: example.com/ormf.(DB).Updates
+    orm_write: true
+    param_index: 1
+`)
+	writeFile(t, filepath.Join(dir, "main.go"), `package ormf
+
+type DB struct{}
+
+type Session struct {
+	ID     string
+	Status string
+}
+
+func (d *DB) Model(v any) *DB { return d }
+
+func (d *DB) Where(q string, v any) *DB { return d }
+
+func (d *DB) Update(col string, v any) {}
+
+func (d *DB) Updates(v any) {}
+
+// 结构体 Updates 链式：Model(范围对象).Where(条件).Updates(结构体)
+func UpdateAll(db *DB, id, status string) {
+	db.Model(&Session{ID: id}).Where("id = ?", id).Updates(&Session{Status: status})
+}
+
+// 无 Model 的字符串列名 Update：receiver 链无结构体实参 → 表名不可推导，
+// 应安全跳过（不产节点、不报错）
+func UpdateRaw(db *DB, id, status string) {
+	db.Where("id = ?", id).Update("status", status)
+}
+
+func main() {}
+`)
+	if code := runCLI(t, "init", "--repo", dir); code != 0 {
+		t.Fatalf("init exit = %d", code)
+	}
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := sqlite.NewRepo(db)
+
+	// Updates 结构体链式 → session.status 表.列 节点
+	rows, err := repo.Query(`SELECT name FROM nodes WHERE kind='field_access'
+		AND json_extract(properties, '$.func_id') = 'symbol:go:example.com/ormf:UpdateAll'
+		AND json_extract(properties, '$.type_string') = 'gorm'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	names := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		names[name] = true
+	}
+	if !names["session.status"] {
+		t.Errorf("Updates 结构体链式未生成 session.status: %v", names)
+	}
+	// 无 Model 的 UpdateRaw：无表名信息——安全跳过（UpdateRaw 无 gorm 节点）
+	rows2, err := repo.Query(`SELECT count(*) FROM nodes WHERE kind='field_access'
+		AND json_extract(properties, '$.func_id') = 'symbol:go:example.com/ormf:UpdateRaw'
+		AND json_extract(properties, '$.type_string') = 'gorm'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if rows2.Next() {
+		_ = rows2.Scan(&n)
+	}
+	rows2.Close()
+	if n != 0 {
+		t.Errorf("无 Model 的 Update 不应产表.列节点（表名不可推导），got %d", n)
+	}
+}
