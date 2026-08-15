@@ -610,6 +610,11 @@ func (ext *fieldExtractor) emitValue(v ssa.Value) (domain.CanonicalID, error) {
 	}
 	// 全局变量：跨函数共享节点（Q98 溯源锚点——init 初始化与各引用函数
 	// 指向同一节点，value-trace 才能从使用处反向到初始化表达式）
+	// 元组解包（row, err := QueryRow(...)）：Extract 归一到 tuple 值——
+	// row 使用处（Scan 接收者）与调用点返回值同 ID，表关联链贯通
+	if ex, ok := v.(*ssa.Extract); ok {
+		return ext.emitValue(ex.Tuple)
+	}
 	if g, ok := v.(*ssa.Global); ok && g.Pkg != nil && g.Pkg.Pkg != nil {
 		id := domain.CanonicalID("symbol:go:" + g.Pkg.Pkg.Path() + ":var." + g.Name())
 		ext.values[v] = id
@@ -646,6 +651,32 @@ func (ext *fieldExtractor) emitValue(v ssa.Value) (domain.CanonicalID, error) {
 		if f := ext.indexReads[ia]; f != nil {
 			ext.values[v] = f.id
 			return f.id, nil
+		}
+	}
+	// 局部变量读取（*p 解引用 = go/ssa 的内存读，v0.26 无 Load 指令）：
+	// 归一到源码变量名 ID（find#x）——与 Scan 摘要（表关联）的 out
+	// 实参节点一致，数据流链贯通（Scan(&x) 写入 → x 读取使用处）
+	if uo, ok := v.(*ssa.UnOp); ok && uo.Op == token.MUL {
+		if _, isAlloc := uo.X.(*ssa.Alloc); isAlloc {
+			if name := ext.instancePath(uo); !isSSAName(name) {
+				fid, ok2 := ext.funcIDOf(uo)
+				if ok2 {
+					id := domain.CanonicalID(string(fid) + "#" + name)
+					ext.values[v] = id
+					n := &domain.CodeEntity{
+						ID:   id,
+						Kind: domain.KindSSAValue,
+						Name: name,
+						Properties: map[string]any{
+							"origin_kind": "local",
+							"ssa_op":      "load",
+							"type_string": v.Type().String(),
+							"func_id":     string(fid),
+						},
+					}
+					return id, ext.emit(domain.Item{Node: n})
+				}
+			}
 		}
 	}
 	funcID, ok := ext.funcIDOf(v)

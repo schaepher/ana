@@ -89,6 +89,16 @@ type TableColumn struct {
 	Readers   []TableEndpoint // 虚拟节点出边（消费）；SELECT 读路径未解析时为空
 }
 
+// TableRelation 表间关联（query relations）：本表某列的值沿数据流链
+// 流入另一表的列（A.x 读出 → B.y 过滤/写入——代码层关联，无外键依赖）。
+type TableRelation struct {
+	FromTable string // 本表
+	FromCol   string // 本表列
+	ToTable   string // 关联表
+	ToCol     string // 关联表列
+	Hops      int    // 数据流链长度（边数）
+}
+
 // SinceInfo --since <ref> 的 diff 解析结果（field_trace.md §16.5）。
 type SinceInfo struct {
 	Ref        string             // git ref（--since 参数）

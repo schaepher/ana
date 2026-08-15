@@ -206,7 +206,9 @@ func TestSummaryKey(t *testing.T) {
 
 import "database/sql"
 
-func f(rows *sql.Rows, dest *struct{ A int }) error {
+type Dest struct{ A int }
+
+func f(rows *sql.Rows, dest *Dest) error {
 	return rows.Scan(dest)
 }
 `,
@@ -283,25 +285,32 @@ func TestSnakeCase(t *testing.T) {
 // （parseSQLStmt 此前无直接单测；曾有切片 panic 历史）。
 func TestParseSQLStmt(t *testing.T) {
 	cases := []struct {
-		sql      string
-		table    string
-		cols     []string
+		sql       string
+		table     string
+		cols      []string
+		whereCols []string
 	}{
-		{"INSERT INTO users(name, email) VALUES(?, ?)", "users", []string{"name", "email"}},
-		{"INSERT INTO users VALUES(?, ?)", "users", nil}, // 无列名
-		{"INSERT INTO `users`(`name`) VALUES(?)", "users", []string{"name"}},
-		{"insert into users (name) values (?)", "users", []string{"name"}}, // 小写
-		{"UPDATE users SET name=?, email=? WHERE id = ?", "users", []string{"name", "email"}},
-		{"UPDATE users SET name = ?", "users", []string{"name"}}, // 无 WHERE
-		{"DELETE FROM users WHERE id = ?", "users", nil},
-		{"SELECT name FROM users WHERE id = ?", "users", []string{"name"}}, // P0-2：SELECT 列提取
-		{"SELECT u.name FROM users u JOIN orders o ON u.id = o.uid", "users", []string{"name"}}, // 去表前缀
-		{"SELECT * FROM users", "users", nil}, // SELECT * → 表级
-		{"not sql at all", "", nil},
-		{"", "", nil},
+		{"INSERT INTO users(name, email) VALUES(?, ?)", "users", []string{"name", "email"}, nil},
+		{"INSERT INTO users VALUES(?, ?)", "users", nil, nil}, // 无列名
+		{"INSERT INTO `users`(`name`) VALUES(?)", "users", []string{"name"}, nil},
+		{"insert into users (name) values (?)", "users", []string{"name"}, nil}, // 小写
+		{"UPDATE users SET name=?, email=? WHERE id = ?", "users", []string{"name", "email"}, []string{"id"}},
+		{"UPDATE users SET name = ?", "users", []string{"name"}, nil}, // 无 WHERE
+		{"DELETE FROM users WHERE id = ?", "users", nil, []string{"id"}},
+		{"SELECT name FROM users WHERE id = ?", "users", []string{"name"}, []string{"id"}}, // P0-2：SELECT 列提取
+		{"SELECT u.name FROM users u JOIN orders o ON u.id = o.uid", "users", []string{"name"}, nil}, // 去表前缀
+		{"SELECT * FROM users", "users", nil, nil}, // SELECT * → 表级
+		// 表关联（WHERE 值流）：`列 = ?` 按 ? 顺序提取
+		{"SELECT x FROM table_a WHERE id = ?", "table_a", []string{"x"}, []string{"id"}},
+		{"SELECT * FROM table_b WHERE y = ?", "table_b", nil, []string{"y"}},
+		{"SELECT * FROM table_b WHERE a.y = ? AND z = ?", "table_b", nil, []string{"y", "z"}}, // 去表前缀
+		{"SELECT * FROM t WHERE id = ? ORDER BY id", "t", nil, []string{"id"}},
+		{"UPDATE users SET name = ? WHERE id = ?", "users", []string{"name"}, []string{"id"}}, // UPDATE 的 WHERE 也提取
+		{"not sql at all", "", nil, nil},
+		{"", "", nil, nil},
 	}
 	for _, c := range cases {
-		table, cols := parseSQLStmt(c.sql)
+		table, cols, whereCols := parseSQLStmt(c.sql)
 		if table != c.table {
 			t.Errorf("parseSQLStmt(%q) table = %q, want %q", c.sql, table, c.table)
 		}
@@ -312,6 +321,15 @@ func TestParseSQLStmt(t *testing.T) {
 		for i := range cols {
 			if cols[i] != c.cols[i] {
 				t.Errorf("parseSQLStmt(%q) cols[%d] = %q, want %q", c.sql, i, cols[i], c.cols[i])
+			}
+		}
+		if len(whereCols) != len(c.whereCols) {
+			t.Errorf("parseSQLStmt(%q) whereCols = %v, want %v", c.sql, whereCols, c.whereCols)
+			continue
+		}
+		for i := range whereCols {
+			if whereCols[i] != c.whereCols[i] {
+				t.Errorf("parseSQLStmt(%q) whereCols[%d] = %q, want %q", c.sql, i, whereCols[i], c.whereCols[i])
 			}
 		}
 	}

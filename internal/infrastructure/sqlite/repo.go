@@ -1384,6 +1384,133 @@ func (r *Repo) ResetGraphTables() error {
 	return tx.Commit()
 }
 
+// GetTableRelations 表间关联分析（query relations）：对该表的全部列
+// 虚拟节点沿数据流边（data_flows_to/argument/returns/summary_io/
+// alias/phi_operand）BFS，收集命中其他表的虚拟节点（表.列，is_external）。
+// 无外键依赖——纯代码使用方式推断（A.x 读出值流入 B.y 过滤/写入）。
+func (r *Repo) GetTableRelations(table string) ([]*domain.TableRelation, error) {
+	logger := zap.L()
+	logger.Debug("enter (Repo).GetTableRelations")
+	defer logger.Debug("exit (Repo).GetTableRelations")
+	// 本表全部列虚拟节点
+	rows, err := r.Query(`SELECT id, name FROM nodes
+		WHERE kind = 'field_access' AND json_extract(properties, '$.is_external') = 'true'
+		  AND (name = ? OR name LIKE ?)`, table, table+".%")
+	if err != nil {
+		return nil, err
+	}
+	type colNode struct{ id, name string }
+	var starts []colNode
+	for rows.Next() {
+		var c colNode
+		if err := rows.Scan(&c.id, &c.name); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		starts = append(starts, c)
+	}
+	rows.Close()
+
+	const maxDepth = 12
+	dataKinds := "'data_flows_to','argument','returns','summary_io','alias','phi_operand'"
+	seen := map[string]bool{} // "fromCol|toTable|toCol" 去重
+	var out []*domain.TableRelation
+	for _, st := range starts {
+		// BFS：沿 data 边双向扩展，收集其他表虚拟节点
+		visited := map[string]int{st.id: 0}
+		queue := []string{st.id}
+		for len(queue) > 0 {
+			cur := queue[0]
+			queue = queue[1:]
+			depth := visited[cur]
+			if depth >= maxDepth {
+				continue
+			}
+			// 出边 + 入边（双向：A 读 → 值流向 B；B 的写值也可能来自 A 的读）
+			ns, err := r.Query(`SELECT e.source_id, e.target_id FROM edges e
+				WHERE e.kind IN (`+dataKinds+`) AND (e.source_id = ? OR e.target_id = ?)`, cur, cur)
+			if err != nil {
+				return nil, err
+			}
+			var next []string
+			for ns.Next() {
+				var src, tgt string
+				if err := ns.Scan(&src, &tgt); err != nil {
+					ns.Close()
+					return nil, err
+				}
+				other := src
+				if src == cur {
+					other = tgt
+				}
+				if _, ok := visited[other]; ok {
+					continue
+				}
+				visited[other] = depth + 1
+				next = append(next, other)
+			}
+			ns.Close()
+			queue = append(queue, next...)
+		}
+		// 命中：其他表的虚拟节点（is_external field_access，表名不同）。
+		// 列名 = 节点 Name（表.列）；表名 = 前缀
+		byNode := map[string]string{} // nodeID → Name（预查）
+		if len(visited) > 1 {
+			ids := make([]any, 0, len(visited))
+			idx := map[string]string{}
+			for id := range visited {
+				ids = append(ids, id)
+				idx[id] = id
+			}
+			_ = idx
+			q := `SELECT id, name FROM nodes WHERE id IN (` + strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",") + `)
+			  AND json_extract(properties, '$.type_string') IN ('sql', 'gorm')`
+			ns, err := r.Query(q, ids...)
+			if err != nil {
+				return nil, err
+			}
+			for ns.Next() {
+				var id, name string
+				if err := ns.Scan(&id, &name); err != nil {
+					ns.Close()
+					return nil, err
+				}
+				byNode[id] = name
+			}
+			ns.Close()
+		}
+		for id, d := range visited {
+			if id == st.id || d == 0 {
+				continue
+			}
+			name := byNode[id]
+			if name == "" || !strings.Contains(name, ".") {
+				continue // 非 表.列（ssa_value 等）
+			}
+			dot := strings.Index(name, ".")
+			otherTable, col := name[:dot], name[dot+1:]
+			if otherTable == table {
+				continue // 本表内部列，非关联
+			}
+			key := st.name + "|" + otherTable + "|" + col
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			fromCol := st.name
+			if i := strings.Index(fromCol, "."); i >= 0 {
+				fromCol = fromCol[i+1:]
+			}
+			out = append(out, &domain.TableRelation{
+				FromTable: table, FromCol: fromCol,
+				ToTable: otherTable, ToCol: col,
+				Hops: d,
+			})
+		}
+	}
+	return out, nil
+}
+
 // GetTableColumns 按表名聚合列虚拟节点（query table）：Name=表（整表行）
 // 或 表.列（Q97 持久化映射）；每列带写入方（summary_io 入边 source 值节点
 // 的所属函数与行号）。读取方（出边）通常为空——SELECT 读路径未解析。

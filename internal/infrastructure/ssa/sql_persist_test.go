@@ -112,6 +112,108 @@ func get(db *sql.DB, id int) *User {
 	}
 }
 
+// TestSQLWhereFilter：表关联——SELECT 的 WHERE 值实参按 ? 顺序映射过滤列：
+// 产 filter 虚拟节点（table_b.y）+ 边（值 → 节点），数据流链
+// A.X.read → ... → B.Y.filter 的基础。
+func TestSQLWhereFilter(t *testing.T) {
+	nodes, facts, _ := indexFixtureFull(t, map[string]string{
+		"go.mod":  moduleGoMod,
+		"main.go": `package m
+
+import "database/sql"
+
+func find(db *sql.DB, id int) string {
+	row := db.QueryRow("SELECT x FROM table_a WHERE id = ?", id)
+	var x string
+	row.Scan(&x)
+	row2 := db.QueryRow("SELECT * FROM table_b WHERE y = ?", x)
+	row2.Scan(&x)
+	return x
+}
+`,
+	})
+	funcID := "symbol:go:example.com/mtest:find"
+	// WHERE 过滤列虚拟节点：table_b.y（access=filter）
+	yNode := findVirtualNode(t, nodes, funcID, "table_b.y")
+	if yNode.Property("access_kind") != "filter" {
+		t.Errorf("table_b.y access_kind = %q, want filter", yNode.Property("access_kind"))
+	}
+	// 值 → 过滤列边（x 的值流入 table_b.y）
+	found := false
+	for _, f := range facts {
+		if f.Kind == domain.FactSummaryIO && string(f.TargetID) == string(yNode.ID) {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("WHERE 值 → 过滤列 summary_io 边缺失（表关联数据链断点）")
+	}
+	// table_a.id 的 WHERE 参数（字面量 id）也产过滤节点
+	findVirtualNode(t, nodes, funcID, "table_a.id")
+}
+
+// TestSQLScanOutFlow：表关联链贯通——row.Scan(&x) 后 x 值流入第二次
+// 查询的 WHERE 过滤列：Scan 摘要（接收者 → out 实参）使
+// table_a.x.read → ... → table_b.y.filter 数据流链完整。
+func TestSQLScanOutFlow(t *testing.T) {
+	nodes, facts, _ := indexFixtureFull(t, map[string]string{
+		"go.mod":  moduleGoMod,
+		"main.go": `package m
+
+import "database/sql"
+
+func find(db *sql.DB, id int) string {
+	row := db.QueryRow("SELECT x FROM table_a WHERE id = ?", id)
+	var x string
+	row.Scan(&x)
+	row2 := db.QueryRow("SELECT * FROM table_b WHERE y = ?", x)
+	row2.Scan(&x)
+	return x
+}
+`,
+	})
+	funcID := "symbol:go:example.com/mtest:find"
+	// ① x 局部变量节点（funcID#x）存在——Scan 摘要 emit out 实参（alloc）
+	var xID domain.CanonicalID
+	for _, n := range nodes {
+		if string(n.ID) == funcID+"#x" {
+			xID = n.ID
+		}
+	}
+	if xID == "" {
+		t.Fatal("x 局部变量节点缺失（Scan 摘要未 emit out 实参）")
+	}
+	// ② Scan 边：row 值（table_a.x.read 出边 target）→ x（data_flows_to）
+	rowID := ""
+	for _, f := range facts {
+		if f.Kind == domain.FactSummaryIO && strings.HasSuffix(string(f.SourceID), "#ext.sql.table_a.x.read@6") {
+			rowID = string(f.TargetID)
+		}
+	}
+	if rowID == "" {
+		t.Fatal("table_a.x.read → row 值边缺失")
+	}
+	scanEdge := false
+	for _, f := range facts {
+		if f.Kind == domain.FactDataFlowsTo && string(f.SourceID) == rowID && f.TargetID == xID {
+			scanEdge = true
+		}
+	}
+	if !scanEdge {
+		t.Error("Scan 边缺失（row 值 → x 变量）")
+	}
+	// ③ x（load 归一到 alloc ID）→ table_b.y.filter：链贯通
+	toFilter := false
+	for _, f := range facts {
+		if f.Kind == domain.FactSummaryIO && string(f.SourceID) == string(xID) {
+			toFilter = true
+		}
+	}
+	if !toFilter {
+		t.Error("x → table_b.y.filter 边缺失（x 使用处流入过滤列）")
+	}
+}
+
 // TestSQLSelectStar：SELECT * 无列 → 表级 read 虚拟节点（Name=表）。
 func TestSQLSelectStar(t *testing.T) {
 	nodes, _, _ := indexFixtureFull(t, map[string]string{

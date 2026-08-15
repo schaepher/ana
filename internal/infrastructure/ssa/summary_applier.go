@@ -13,6 +13,7 @@ import (
 	"go/types"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/schaepher/codeintel/internal/domain"
@@ -41,6 +42,7 @@ type summarySpec struct {
 	SQLWrite    bool // Exec 写 / Query 读
 	TxBoundary  string // 事务边界标记（begin/commit/rollback，Q97）
 	ORMWrite    bool // ORM（GORM）写对象：字段→表.列 映射（②）
+	ScanOut     bool // Scan 写 out 实参：接收者值 → 实参指向变量（表关联链）
 }
 
 // userSummaryFile 对应 field-summary.yaml。
@@ -111,8 +113,12 @@ func builtinSummaries() map[string]summarySpec {
 			ReadArgsAll: true, // 读取所有 args 的字段（保守策略）
 		},
 		"database/sql.(Rows).Scan": {
-			Func: "database/sql.(Rows).Scan", ParamIndex: 0,
-			WritesAll: true, // 写入 dest 的指向值（对每个 dest 参数展开）
+			Func: "database/sql.(Rows).Scan", ParamIndex: 1,
+			WritesAll: true, ScanOut: true, // 写入 dest 的指向值 + 接收者 → out 变量（表关联）
+		},
+		"database/sql.(Row).Scan": {
+			Func: "database/sql.(Row).Scan", ParamIndex: 1,
+			WritesAll: true, ScanOut: true, // 单行版（row.Scan(&x) 常见形态）
 		},
 		"net/http.(Request).ParseForm": {
 			Func: "net/http.(Request).ParseForm", ParamIndex: 0,
@@ -214,6 +220,13 @@ func (ext *fieldExtractor) applySummary(cc *ssa.CallCommon, callee *ssa.Function
 	// ORM 写（②）：GORM 对象写 → 字段→表.列 映射
 	if spec.ORMWrite {
 		return true, ext.applyORMWrite(cc, calleeID)
+	}
+	// Scan 写 out 实参（表关联链）：接收者值 → 实参指向的局部变量。
+	// 不 return——继续逐参数应用（WritesAll 展开 dest 字段虚拟节点）
+	if spec.ScanOut {
+		if err := ext.applyScanOut(cc, calleeID); err != nil {
+			return true, err
+		}
 	}
 	// 逐参数应用
 	start := spec.ParamIndex
@@ -481,7 +494,7 @@ func (ext *fieldExtractor) applySQLSummary(cc *ssa.CallCommon, calleeID domain.C
 	if c, ok := cc.Args[1].(*ssa.Const); ok && c.Value != nil {
 		sqlStr = constant.StringVal(c.Value)
 	}
-	table, cols := parseSQLStmt(sqlStr)
+	table, cols, whereCols := parseSQLStmt(sqlStr)
 	line := ext.prog.Fset.PositionFor(cc.Pos(), false).Line
 	// P0-2 读路径（Query/QueryRow/Prepare）：SELECT 列 → read 虚拟节点
 	// （表.列）+ 读边（虚拟节点 → 返回的 rows/row 值）——query table
@@ -524,6 +537,51 @@ func (ext *fieldExtractor) applySQLSummary(cc *ssa.CallCommon, calleeID domain.C
 			if callID != "" {
 				// 方向：表列读出 → 值（rows/row 对象），与写边（值→节点）反向
 				if err := ext.emitEdgeKindLine(id, domain.CanonicalID(callID), domain.FactSummaryIO, line); err != nil {
+					return err
+				}
+			}
+		}
+		// 表关联（WHERE 值流）：值实参按 ? 顺序映射过滤列——产 filter
+		// 虚拟节点（表.列）+ 边（值 → 节点，与写同方向）：A.X 读出的值
+		// 流入 B.Y 过滤列时，数据流链贯通两表
+		if len(whereCols) > 0 {
+			values := []ssa.Value{}
+			for i := 2; i < len(cc.Args); i++ {
+				values = append(values, variadicElems(cc.Args[i])...)
+			}
+			for i, arg := range values {
+				if i >= len(whereCols) {
+					break // 超出 WHERE 列的 ?（如 LIMIT ?）跳过
+				}
+				name := table + "." + whereCols[i]
+				id := domain.CanonicalID(string(ext.funcID) + "#ext.sql." + name + ".filter@" + fmt.Sprintf("%d", line))
+				if err := ext.emit(domain.Item{Node: &domain.CodeEntity{
+					ID:        id,
+					Kind:      domain.KindFieldAccess,
+					Name:      name,
+					FilePath:  ext.currentFile,
+					LineStart: line,
+					Properties: map[string]any{
+						"full_path":     name,
+						"instance_path": name,
+						"access_kind":   "filter",
+						"code_snippet":  sqlStr,
+						"type_string":   "sql",
+						"is_external":   "true",
+						"func_id":       string(ext.funcID),
+					},
+				}}); err != nil {
+					return err
+				}
+				realArg := arg
+				if mi, ok := arg.(*ssa.MakeInterface); ok {
+					realArg = mi.X
+				}
+				argID, err := ext.emitValue(realArg)
+				if err != nil || argID == "" {
+					continue
+				}
+				if err := ext.emitEdgeKindLine(argID, id, domain.FactSummaryIO, line); err != nil {
 					return err
 				}
 			}
@@ -582,6 +640,63 @@ func (ext *fieldExtractor) applySQLSummary(cc *ssa.CallCommon, calleeID domain.C
 	return nil
 }
 
+// applyScanOut 处理 Scan 写 out 实参（表关联链贯通）：
+// row.Scan(&x) —— 接收者（row 值）→ 实参指向的局部变量节点
+// （变量名 ID find#x，与 Load 归一节点一致）。数据流链：
+// table_a.x.read → row → x → table_b.y.filter。
+func (ext *fieldExtractor) applyScanOut(cc *ssa.CallCommon, calleeID domain.CanonicalID) error {
+	logger := zap.L()
+	logger.Debug("enter (fieldExtractor).applyScanOut")
+	defer logger.Debug("exit (fieldExtractor).applyScanOut")
+	if len(cc.Args) < 1 {
+		return nil
+	}
+	recvID, err := ext.emitValue(cc.Args[0]) // 接收者（row 值）
+	if err != nil || recvID == "" {
+		return nil
+	}
+	line := ext.prog.Fset.PositionFor(cc.Pos(), false).Line
+	// Scan 的 dest 是 variadic（...any）：实参打包为 Slice，须解包
+	for i := 1; i < len(cc.Args); i++ {
+		for _, arg := range variadicElems(cc.Args[i]) {
+			// out 实参是 &x（alloc，经 MakeInterface 打包）：解包后
+			// 用源码变量名 ID（与 Load 归一一致）
+			real := arg
+			if mi, ok := arg.(*ssa.MakeInterface); ok {
+				real = mi.X
+			}
+			name := ext.instancePath(real)
+			if isSSAName(name) {
+				continue // 非局部变量（如 &s.Field）跳过
+			}
+			fid, ok := ext.funcIDOf(real)
+			if !ok {
+				continue
+			}
+			id := domain.CanonicalID(string(fid) + "#" + name)
+			if err := ext.emit(domain.Item{Node: &domain.CodeEntity{
+				ID:        id,
+				Kind:      domain.KindSSAValue,
+				Name:      name,
+				FilePath:  ext.currentFile,
+				LineStart: line,
+				Properties: map[string]any{
+					"origin_kind": "local",
+					"ssa_op":      "scan_out",
+					"type_string": arg.Type().String(),
+					"func_id":     string(fid),
+				},
+			}}); err != nil {
+				return err
+			}
+			if err := ext.emitEdgeKindLine(recvID, id, domain.FactDataFlowsTo, line); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // applyTxBoundary 事务边界（Q97）：Begin/Commit/Rollback → 事务虚拟节点
 // （Name=sql.tx.<boundary>），标注事务边界位置。
 func (ext *fieldExtractor) applyTxBoundary(cc *ssa.CallCommon, calleeID domain.CanonicalID, boundary string) error {
@@ -608,13 +723,15 @@ func (ext *fieldExtractor) applyTxBoundary(cc *ssa.CallCommon, calleeID domain.C
 	}})
 }
 
-// parseSQLStmt 从 SQL 语句提取表名与列名（Q97 启发式，不做完整 SQL 解析）：
-//   INSERT INTO t(a, b) VALUES(?, ?)  → t, [a b]
-//   UPDATE t SET a=?, b=?             → t, [a b]
-//   DELETE FROM t                     → t, []
-//   SELECT a, b FROM t                → t, [a b]（P0-2 读路径）
-//   SELECT * FROM t                   → t, []（表级）
-func parseSQLStmt(sql string) (table string, cols []string) {
+// parseSQLStmt 从 SQL 语句提取表名、列名与 WHERE 过滤列（Q97 启发式，
+// 不做完整 SQL 解析）：
+//   INSERT INTO t(a, b) VALUES(?, ?)  → t, [a b], nil
+//   UPDATE t SET a=?, b=?             → t, [a b], nil
+//   DELETE FROM t                     → t, [], nil
+//   SELECT a, b FROM t                → t, [a b], nil（P0-2 读路径）
+//   SELECT * FROM t                   → t, [], nil（表级）
+//   ... WHERE y = ?                   → ..., [], [y]（表关联：值实参按 ? 顺序映射）
+func parseSQLStmt(sql string) (table string, cols []string, whereCols []string) {
 	upper := strings.ToUpper(sql)
 	rest := ""
 	switch {
@@ -648,7 +765,7 @@ func parseSQLStmt(sql string) (table string, cols []string) {
 			}
 		}
 	default:
-		return "", nil
+		return "", nil, nil
 	}
 	rest = strings.TrimSpace(rest)
 	// 表名：到空白 / ( / 结束
@@ -662,7 +779,7 @@ func parseSQLStmt(sql string) (table string, cols []string) {
 	table = strings.TrimSpace(rest[:tableEnd])
 	table = strings.Trim(table, "`\"[]")
 	if table == "" {
-		return "", nil
+		return "", nil, nil
 	}
 	// 列：INSERT 的 (a, b) 或 UPDATE 的 SET a=?
 	after := strings.TrimSpace(rest[tableEnd:])
@@ -699,7 +816,42 @@ func parseSQLStmt(sql string) (table string, cols []string) {
 			}
 		}
 	}
-	return table, cols
+	// WHERE 过滤列（表关联分析）：`列 = ?` 按 ? 顺序提取（去表前缀）
+	whereCols = extractWhereCols(rest)
+	return table, cols, whereCols
+}
+
+var whereColRe = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_.]*)\s*=\s*\?`)
+
+// extractWhereCols 从 SQL 语句剩余部分提取 WHERE 子句的过滤列
+// （`列 = ?` 序列，值实参按 ? 顺序映射——表关联分析的数据基础）。
+// 支持 a.y = ? 表前缀（去前缀）；WHERE 缺失返回 nil。
+func extractWhereCols(rest string) []string {
+	up := strings.ToUpper(rest)
+	wi := strings.Index(up, " WHERE ")
+	if wi < 0 {
+		return nil
+	}
+	wherePart := rest[wi+len(" WHERE "):]
+	upPart := strings.ToUpper(wherePart)
+	for _, stop := range []string{" ORDER BY ", " LIMIT ", " GROUP BY ", " HAVING ", " UNION "} {
+		if j := strings.Index(upPart, stop); j >= 0 {
+			wherePart = wherePart[:j]
+			break
+		}
+	}
+	var out []string
+	for _, m := range whereColRe.FindAllStringSubmatch(wherePart, -1) {
+		c := m[1]
+		if i := strings.LastIndex(c, "."); i >= 0 {
+			c = c[i+1:] // 去表前缀（a.y → y）
+		}
+		c = strings.Trim(c, "`\"[]")
+		if c != "" {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // applyORMWrite 处理 ORM 写调用（②⑦：GORM Create/Save/Updates/Delete/

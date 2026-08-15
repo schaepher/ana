@@ -1087,7 +1087,21 @@ CLI `update`（全量分析+增量写入）已有；补**自动触发闭环**（
 **动机**：理解项目时从"数据库表"反推数据流——表.列虚拟节点（Q97 持久化
 映射 + GORM ②）已有，但无表级聚合查询。
 
-**命令**：`codeintel query table <表名> [--json]`
+**命令**：`codeintel query table <表名> [--json]`；`codeintel query relations <表名> [--json]`（表间关联）
+
+**表间关联（query relations，Q149）**：无外键时从代码使用方式推断——
+该表列虚拟节点沿数据流边（data_flows_to/argument/returns/summary_io/
+alias/phi_operand）BFS（上限 12 跳），收集命中其他表（type_string
+sql/gorm）的列：A.x 读出 → Scan 写入变量 → 变量作为 B 查询的 WHERE
+实参 → B.y 过滤列——数据流链贯通即关联。依赖三块底层：
+- parseSQLStmt 提取 WHERE 过滤列（`列 = ?` 按 ? 顺序）
+- SELECT 读路径产 filter 虚拟节点（值实参 → 过滤列）
+- Scan 摘要（(Row)/(Rows).Scan：接收者值 → out 实参变量，variadic
+  解包 + MakeInterface 解包；局部变量读取归一为变量名 ID）
+- emitValue 的 Extract 归一到 tuple 值（row 与调用点返回值同 ID）
+
+radar 实测：sq_lite_atom ↔ sq_lite_knowledge_graph（140 条列关联，
+6 跳——ingest 同源写入的原子与知识图谱）。
 - 数据源：`kind='field_access' AND is_external=true AND (name=表 OR name LIKE 表.%)`
   （Q97 字符串 SQL + GORM 结构体写路径共用形态）
 - 输出：按列名**聚合**（同列多调用点合并一行），每列列出入写入方

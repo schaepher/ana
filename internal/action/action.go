@@ -34,11 +34,12 @@ type Reader interface {
 	GetIndirectWriteEdges(funcID domain.CanonicalID) ([]*domain.Fact, error)
 	GetDispatchEdges(ifaceID domain.CanonicalID) ([]*domain.Fact, error)
 	FindFieldReads(fullPath string) ([]*domain.CodeEntity, error)
+	GetTableColumns(table string) ([]*domain.TableColumn, error)
+	GetTableRelations(table string) ([]*domain.TableRelation, error)
 	GetUncalledFunctions() ([]*domain.UnusedFunc, error)
 	GetIsolatedChains() ([][]*domain.UnusedFunc, error)
 	GetPath(from, to domain.CanonicalID, maxDepth int, viaCalls bool) ([]*domain.TraceRow, error)
 	GetGrpcCalls() ([]*domain.GrpcCallRow, error)
-	GetTableColumns(table string) ([]*domain.TableColumn, error)
 	Counts() (nodes int, edges int, err error)
 	GetLatest() (*domain.BuildMeta, error)
 	RepoPath() string
@@ -265,6 +266,12 @@ func (a *Actions) Trace(p TraceParams) (*domain.CodeEntity, []*domain.TraceRow, 
 // Table 表级数据流聚合（query table）：表名 → 列虚拟节点 + 写入方。
 func (a *Actions) Table(table string) ([]*domain.TableColumn, error) {
 	return a.repo.GetTableColumns(table)
+}
+
+// Relations 表间关联分析（query relations）：表名 → 沿数据流链关联
+// 的其他表.列（代码层推断，无外键依赖）。
+func (a *Actions) Relations(table string) ([]*domain.TableRelation, error) {
+	return a.repo.GetTableRelations(table)
 }
 
 func (a *Actions) ValueTrace(nodeID domain.CanonicalID, maxDepth int) ([]*domain.TraceRow, error) {
