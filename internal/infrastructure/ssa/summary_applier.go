@@ -531,7 +531,7 @@ func (ext *fieldExtractor) applySQLSummary(cc *ssa.CallCommon, calleeID domain.C
 		}}); err != nil {
 			return err
 		}
-		if err := ext.emitEdgeKind(argID, id, domain.FactSummaryIO); err != nil {
+		if err := ext.emitEdgeKindLine(argID, id, domain.FactSummaryIO, line); err != nil {
 			return err
 		}
 	}
@@ -718,7 +718,7 @@ func (ext *fieldExtractor) applyORMWrite(cc *ssa.CallCommon, calleeID domain.Can
 			return err
 		}
 		if srcID != "" {
-			if err := ext.emitEdgeKind(domain.CanonicalID(srcID), id, domain.FactSummaryIO); err != nil {
+			if err := ext.emitEdgeKindLine(domain.CanonicalID(srcID), id, domain.FactSummaryIO, line); err != nil {
 				return err
 			}
 		}
@@ -758,7 +758,7 @@ func (ext *fieldExtractor) emitORMColumn(cc *ssa.CallCommon, calleeID domain.Can
 	if err != nil || valID == "" {
 		return err
 	}
-	return ext.emitEdgeKind(valID, id, domain.FactSummaryIO)
+	return ext.emitEdgeKindLine(valID, id, domain.FactSummaryIO, line)
 }
 
 // chainScopeObject 溯源链式调用的范围对象（⑦）：Update/Updates 的 receiver

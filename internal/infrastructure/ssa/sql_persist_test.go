@@ -42,11 +42,21 @@ func save(db *sql.DB, u *User) {
 	})
 	funcID := "symbol:go:example.com/mtest:save"
 	vnode := findVirtualNode(t, nodes, funcID, "users.name")
-	// summary_io 边：u.Name 值 → 虚拟节点
+	// summary_io 边：u.Name 值 → 虚拟节点（query table 写入方定位）
 	found := false
 	for _, f := range facts {
 		if f.Kind == domain.FactSummaryIO && string(f.TargetID) == string(vnode.ID) {
 			found = true
+			ln := 0.0
+			switch v := f.Metadata["line_num"].(type) {
+			case float64:
+				ln = v
+			case int:
+				ln = float64(v)
+			}
+			if ln != 10 {
+				t.Errorf("summary_io line_num = %v, want 10（Exec 调用行）", f.Metadata["line_num"])
+			}
 		}
 	}
 	if !found {

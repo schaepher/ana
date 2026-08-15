@@ -73,6 +73,22 @@ type GrpcCallRow struct {
 	Transport  string      // grpc_call / http_call
 }
 
+// TableEndpoint 表列数据流的端点（写入方/读取方，query table）。
+type TableEndpoint struct {
+	FuncID   string // 函数 canonical ID（summary_io 边 source 的值节点所属函数）
+	FuncName string // 函数短名（从 ID 提取）
+	Line     int    // 调用行号
+}
+
+// TableColumn 表的一列虚拟节点及数据流（query table）。
+type TableColumn struct {
+	Name      string // 表.列（无列时为表名）
+	Access    string // read / write
+	LineStart int
+	Writers   []TableEndpoint // summary_io 入边（值 → 虚拟节点）：谁写入该列
+	Readers   []TableEndpoint // 虚拟节点出边（消费）；SELECT 读路径未解析时为空
+}
+
 // SinceInfo --since <ref> 的 diff 解析结果（field_trace.md §16.5）。
 type SinceInfo struct {
 	Ref        string             // git ref（--since 参数）

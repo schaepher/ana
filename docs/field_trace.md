@@ -1079,3 +1079,25 @@ CLI `update`（全量分析+增量写入）已有；补**自动触发闭环**（
 - serve 新增 `/api/module-calls`（HTTP JSON 透出 action.ModuleCalls）
 - 前端新增**模块视图**（assets/web/modules.html + 轻量 G6 渲染：
   模块节点 + grpc/http 边，边标注服务.方法）；serve 首页导航进入
+
+---
+
+## 22. query table 表级数据流聚合（Q148，2026-08-15）
+
+**动机**：理解项目时从"数据库表"反推数据流——表.列虚拟节点（Q97 持久化
+映射 + GORM ②）已有，但无表级聚合查询。
+
+**命令**：`codeintel query table <表名> [--json]`
+- 数据源：`kind='field_access' AND is_external=true AND (name=表 OR name LIKE 表.%)`
+  （Q97 字符串 SQL + GORM 结构体写路径共用形态）
+- 输出：按列名**聚合**（同列多调用点合并一行），每列列出入写入方
+  （summary_io 入边 source 值节点剥 slot → 函数 + 行号）
+- 行号来源：summary_io 边 metadata line_num（Q148 补 emitEdgeKindLine；
+  旧索引缺失时兜底虚拟节点 LineStart）
+- 读取方（出边）：SELECT 读路径未解析，输出空（诚实标注）
+- radar 实测：sq_lite_atom 30 个写节点聚合为 10 列，写入方
+  (sqliteAtomStore).Create:417 / DeleteOrphaned:492/499
+
+**确认（Q148）**：GORM 结构体写映射（②⑦ applyORMWrite）此前已生效
+（radar 216 个 gorm 节点）——早前"radar 无虚拟节点"结论是查询时用
+kind 过滤排除了 field_access 的误判，非功能缺失。

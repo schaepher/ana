@@ -235,6 +235,7 @@ defer logger.Debug("exit <name>")
 - integration：`go:build integration` 标签；`runCLIOut` 跑 CLI；`scipGoAvailable` 跳过
 
 **断言坑**（踩过）：SSA 临时名 tN/lifting 提升不稳定 → 节点 ID/名称用前缀或通配匹配；fixture 行号数错、断言提前 return 会掩盖失败 → 先收集后判断；依赖 map 迭代顺序的不稳定 bug 用 `-count=10` 复现；alias 边 source 是值节点（funcID#slot），expand 函数节点不返回 alias。
+**SQLite 坑**：单连接上外层 rows 迭代中开新 Query 会**挂起死锁**（GetTableColumns 踩过）——先收完外层行、Close 后再开内层查询；Metadata 数字断言注意 int vs float64（emit 用 int，SQLite json_extract 回读是 float）。
 
 - `internal/canonicalizer`：纯单测（SCIP symbol 解析的各种形式）
 - `internal/orchestrator`：端到端测试，临时 Go module → FullBuild → 校验图数据

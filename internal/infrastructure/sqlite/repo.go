@@ -1354,6 +1354,104 @@ func (r *Repo) FindFieldReads(fullPath string) ([]*domain.CodeEntity, error) {
 	return scanNodes(rows)
 }
 
+// GetTableColumns 按表名聚合列虚拟节点（query table）：Name=表（整表行）
+// 或 表.列（Q97 持久化映射）；每列带写入方（summary_io 入边 source 值节点
+// 的所属函数与行号）。读取方（出边）通常为空——SELECT 读路径未解析。
+func (r *Repo) GetTableColumns(table string) ([]*domain.TableColumn, error) {
+	logger := zap.L()
+	logger.Debug("enter (Repo).GetTableColumns")
+	defer logger.Debug("exit (Repo).GetTableColumns")
+	rows, err := r.Query(`SELECT id, name, line_start, properties
+		FROM nodes WHERE kind = 'field_access'
+		  AND json_extract(properties, '$.is_external') = 'true'
+		  AND (name = ? OR name LIKE ?)
+		ORDER BY name, id`, table, table+".%")
+	if err != nil {
+		return nil, err
+	}
+	// 先收完外层行再关（SQLite 单连接：迭代中开新 Query 会挂起）
+	type rowT struct {
+		id, name, access string
+		line             int
+	}
+	var raw []rowT
+	for rows.Next() {
+		var id, name, props string
+		var line int
+		if err := rows.Scan(&id, &name, &line, &props); err != nil {
+			return nil, err
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(props), &m); err != nil {
+			return nil, err
+		}
+		access := ""
+		if a, ok := m["access_kind"].(string); ok {
+			access = a
+		}
+		raw = append(raw, rowT{id: id, name: name, access: access, line: line})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+
+	// 按列名聚合（同列多个调用点合并为一行，Writers 累计）
+	cols := map[string]*domain.TableColumn{}
+	var order []string
+	for _, rt := range raw {
+		col, ok := cols[rt.name]
+		if !ok {
+			col = &domain.TableColumn{Name: rt.name, Access: rt.access, LineStart: rt.line}
+			cols[rt.name] = col
+			order = append(order, rt.name)
+		}
+		// 写入方：summary_io 入边（值节点 → 虚拟节点）
+		ws, err := r.Query(`SELECT source_id, json_extract(metadata, '$.line_num')
+			FROM edges WHERE target_id = ? AND kind = 'summary_io'`, rt.id)
+		if err != nil {
+			return nil, err
+		}
+		for ws.Next() {
+			var src string
+			var ln sql.NullFloat64
+			if err := ws.Scan(&src, &ln); err != nil {
+				ws.Close()
+				return nil, err
+			}
+			// source 是值节点（funcID#slot）：归属函数 = 剥掉 slot 后缀
+			funcID := src
+			if i := strings.LastIndex(src, "#"); i >= 0 {
+				funcID = src[:i]
+			}
+			// 行号：边 metadata 缺失（旧索引）时兜底用虚拟节点 LineStart
+			line := rt.line
+			if ln.Valid {
+				line = int(ln.Float64)
+			}
+			col.Writers = append(col.Writers, domain.TableEndpoint{
+				FuncID:   funcID,
+				FuncName: shortNameFromID(funcID),
+				Line:     line,
+			})
+		}
+		ws.Close()
+	}
+	out := make([]*domain.TableColumn, 0, len(order))
+	for _, name := range order {
+		out = append(out, cols[name])
+	}
+	return out, nil
+}
+
+// shortNameFromID 从 canonical ID 提取函数短名（symbol:go:<pkg>:(T).m → (T).m）。
+func shortNameFromID(id string) string {
+	if i := strings.LastIndex(id, ":"); i >= 0 {
+		return id[i+1:]
+	}
+	return id
+}
+
 // GetUncalledFunctions 返回全部函数/方法（除 main/init）的调用状态
 // （field_trace.md §16.2）：
 //   - Called：有 calls / passes_result 入边（被调用，含嵌套调用）

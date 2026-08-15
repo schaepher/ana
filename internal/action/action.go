@@ -38,6 +38,7 @@ type Reader interface {
 	GetIsolatedChains() ([][]*domain.UnusedFunc, error)
 	GetPath(from, to domain.CanonicalID, maxDepth int, viaCalls bool) ([]*domain.TraceRow, error)
 	GetGrpcCalls() ([]*domain.GrpcCallRow, error)
+	GetTableColumns(table string) ([]*domain.TableColumn, error)
 	Counts() (nodes int, edges int, err error)
 	GetLatest() (*domain.BuildMeta, error)
 	RepoPath() string
@@ -261,6 +262,11 @@ func (a *Actions) Trace(p TraceParams) (*domain.CodeEntity, []*domain.TraceRow, 
 }
 
 // ValueTrace 数据值全链追踪（field_trace.md §14.2）。
+// Table 表级数据流聚合（query table）：表名 → 列虚拟节点 + 写入方。
+func (a *Actions) Table(table string) ([]*domain.TableColumn, error) {
+	return a.repo.GetTableColumns(table)
+}
+
 func (a *Actions) ValueTrace(nodeID domain.CanonicalID, maxDepth int) ([]*domain.TraceRow, error) {
 	return a.repo.GetValueTrace(nodeID, maxDepth)
 }

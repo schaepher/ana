@@ -400,6 +400,22 @@ func structPathOf(fullPath string) string {
 	return fullPath
 }
 
+// emitEdgeKindLine 带行号的边（query table 写入方定位用；SQL/ORM
+// 虚拟节点 summary_io 边的 line_num 此前缺失，聚合时只能兜底节点行号）。
+func (ext *fieldExtractor) emitEdgeKindLine(from, to domain.CanonicalID, kind domain.FactKind, line int) error {
+	logger := zap.L()
+	logger.Debug("enter (fieldExtractor).emitEdgeKindLine")
+	defer logger.Debug("exit (fieldExtractor).emitEdgeKindLine")
+	return ext.emit(domain.Item{Fact: &domain.Fact{
+		SourceID:   from,
+		TargetID:   to,
+		Kind:       kind,
+		ToolSource: domain.ToolSSA,
+		Confidence: 1.0,
+		Metadata:   map[string]any{"line_num": line},
+	}})
+}
+
 // emitEdgeKind 发射指定 kind 的边（tool_source=ssa，conf 1.0，Q69）。
 func (ext *fieldExtractor) emitEdgeKind(from, to domain.CanonicalID, kind domain.FactKind) error {
 	logger := zap.L()

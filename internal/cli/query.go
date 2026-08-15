@@ -99,6 +99,8 @@ func cmdQuery(args []string) int {
 			module = f.positional[0]
 		}
 		return queryModuleCalls(acts, module, opts)
+	case "table":
+		return queryTable(acts, target, opts)
 	case "path":
 		return queryPath(acts, f.positional[0], f.positional[1], f)
 	case "callers", "callees", "impact":

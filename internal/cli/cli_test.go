@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -439,6 +440,56 @@ func TestVersionNoOTLNoise(t *testing.T) {
 	})
 	if strings.Contains(out, `"Name": "codeintel.main"`) || strings.Contains(out, "SpanContext") {
 		t.Errorf("version stdout 不应含 OTel span JSON:\n%s", out[:min(len(out), 200)])
+	}
+}
+
+// TestQueryTable：query table——表级聚合：列虚拟节点 + 写入方（summary_io 入边）。
+func TestQueryTable(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "go.mod"), "module example.com/m\n\ngo 1.21\n")
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	r := sqlite.NewRepo(db)
+	funcID := "symbol:go:example.com/m:save"
+	vn := func(name string, line int) *domain.CodeEntity {
+		return &domain.CodeEntity{
+			ID:   domain.CanonicalID(funcID + "#ext.sql." + name + ".write@" + strconv.Itoa(line)),
+			Kind: domain.KindFieldAccess, Name: name, FilePath: "a.go", LineStart: line,
+			Properties: map[string]any{"full_path": name, "access_kind": "write",
+				"type_string": "sql", "is_external": "true", "func_id": funcID},
+		}
+	}
+	nodes := []*domain.CodeEntity{
+		{ID: domain.CanonicalID(funcID), Kind: domain.KindFunction, Name: "save", FilePath: "a.go"},
+		{ID: domain.CanonicalID(funcID + "#t0"), Kind: domain.KindSSAValue, Name: "t0"},
+		vn("users.name", 5),
+		vn("users.age", 6),
+	}
+	if _, err := r.SaveBatchStats(nodes, []*domain.Fact{
+		{SourceID: domain.CanonicalID(funcID + "#t0"), TargetID: domain.CanonicalID(funcID + "#ext.sql.users.name.write@5"),
+			Kind: domain.FactSummaryIO, ToolSource: domain.ToolSSA, Confidence: 1,
+			Metadata: map[string]any{"line_num": 5}},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	out := captureStdout(func() {
+		if code := cmdQuery([]string{"table", "users", "--repo", dir}); code != 0 {
+			t.Errorf("query table exit = %d", code)
+		}
+	})
+	if !strings.Contains(out, "users.name") || !strings.Contains(out, "users.age") {
+		t.Errorf("table 输出缺列: %s", out)
+	}
+	if !strings.Contains(out, "save") || !strings.Contains(out, ":5") {
+		t.Errorf("table 输出缺写入方: %s", out)
+	}
+	// 无虚拟节点的表 → 空提示不报错
+	if code := cmdQuery([]string{"table", "nope", "--repo", dir}); code != 0 {
+		t.Errorf("empty table exit = %d", code)
 	}
 }
 
