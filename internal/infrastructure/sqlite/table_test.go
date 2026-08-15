@@ -32,6 +32,13 @@ func TestGetTableColumns(t *testing.T) {
 		{ID: domain.CanonicalID(funcID + "#u.Name.write@8"), Kind: domain.KindFieldAccess,
 			Name: "u.Name", FilePath: "a.go", LineStart: 8,
 			Properties: map[string]any{"full_path": "example.com/m.User.Name", "access_kind": "write"}},
+		// P0-2 读虚拟节点（SELECT）：users.name read + 读边（节点 → row 值）
+		{ID: domain.CanonicalID(funcID + "#ext.sql.users.name.read@10"), Kind: domain.KindFieldAccess,
+			Name: "users.name", FilePath: "a.go", LineStart: 10,
+			Properties: map[string]any{"full_path": "users.name", "instance_path": "users.name",
+				"access_kind": "read", "type_string": "sql", "is_external": "true", "func_id": funcID}},
+		{ID: domain.CanonicalID(funcID + "#t1"), Kind: domain.KindSSAValue, Name: "t1",
+			Properties: map[string]any{"func_id": funcID}},
 	}
 	edges := []*domain.Fact{
 		{SourceID: domain.CanonicalID(valID), TargetID: domain.CanonicalID(funcID + "#ext.sql.users.name.write@5"),
@@ -40,6 +47,11 @@ func TestGetTableColumns(t *testing.T) {
 		{SourceID: domain.CanonicalID(valID), TargetID: domain.CanonicalID(funcID + "#ext.sql.users.age.write@6"),
 			Kind: domain.FactSummaryIO, ToolSource: domain.ToolSSA, Confidence: 1,
 			Metadata: map[string]any{"line_num": 6}},
+		// 读边：节点 → 读出的 row 值（P0-2）
+		{SourceID: domain.CanonicalID(funcID + "#ext.sql.users.name.read@10"),
+			TargetID: domain.CanonicalID(funcID + "#t1"),
+			Kind: domain.FactSummaryIO, ToolSource: domain.ToolSSA, Confidence: 1,
+			Metadata: map[string]any{"line_num": 10}},
 	}
 	save(t, r, nodes, edges)
 
@@ -58,6 +70,13 @@ func TestGetTableColumns(t *testing.T) {
 	}
 	if cols[1].Writers[0].FuncID != funcID || cols[1].Writers[0].Line != 5 {
 		t.Errorf("users.name writer = %+v", cols[1].Writers[0])
+	}
+	// P0-2：读取方（读虚拟节点出边的目标函数）
+	if len(cols[1].Readers) != 1 {
+		t.Fatalf("users.name readers = %d, want 1", len(cols[1].Readers))
+	}
+	if cols[1].Readers[0].FuncID != funcID || cols[1].Readers[0].Line != 10 {
+		t.Errorf("users.name reader = %+v", cols[1].Readers[0])
 	}
 
 	// 无虚拟节点的表 → 空不报错

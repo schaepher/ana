@@ -196,7 +196,7 @@ func (ext *fieldExtractor) emitCall(cc *ssa.CallCommon, callVal ssa.Value) error
 	// 摘要优先：外部函数走内置/用户摘要；本地函数经 field-summary.yaml
 	// 自定义条目（如 orm_write 的本地 ORM 层）。无匹配 spec 时 applySummary
 	// 快速返回 false，本地函数继续走 argument/returns 边。
-	handled, err := ext.applySummary(cc, callee)
+	handled, err := ext.applySummary(cc, callee, callVal)
 	if err != nil {
 		return err
 	}

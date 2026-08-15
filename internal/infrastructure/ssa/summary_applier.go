@@ -170,7 +170,7 @@ type summaryApplier struct {
 
 // applySummary 对带摘要的外部函数调用生成虚拟节点与边。
 // 返回 false 表示无摘要（或无需处理）。
-func (ext *fieldExtractor) applySummary(cc *ssa.CallCommon, callee *ssa.Function) (bool, error) {
+func (ext *fieldExtractor) applySummary(cc *ssa.CallCommon, callee *ssa.Function, callVal ssa.Value) (bool, error) {
 	logger := zap.L()
 	logger.Debug("enter (fieldExtractor).applySummary")
 	defer logger.Debug("exit (fieldExtractor).applySummary")
@@ -203,9 +203,9 @@ func (ext *fieldExtractor) applySummary(cc *ssa.CallCommon, callee *ssa.Function
 			return true, err
 		}
 	}
-	// SQL 持久化（Q97）：SQL 字符串解析表列 + 值实参映射
+	// SQL 持久化（Q97）：SQL 字符串解析表列 + 值实参映射（写）/ 读边（P0-2）
 	if spec.SQLStmt {
-		return true, ext.applySQLSummary(cc, calleeID, spec)
+		return true, ext.applySQLSummary(cc, calleeID, spec, callVal)
 	}
 	// 事务边界（Q97）：Begin/Commit/Rollback → 事务虚拟节点
 	if spec.TxBoundary != "" {
@@ -469,7 +469,7 @@ func variadicElems(v ssa.Value) []ssa.Value {
 // applySQLSummary 处理 SQL 语句调用（Q97）：SQL 字符串（第 0 实参）解析
 // 表名与列名 → 虚拟节点（Name=表.列）；后续值实参按 ? 顺序映射列，
 // 发 summary_io 边（字段值 → 虚拟节点）。
-func (ext *fieldExtractor) applySQLSummary(cc *ssa.CallCommon, calleeID domain.CanonicalID, spec summarySpec) error {
+func (ext *fieldExtractor) applySQLSummary(cc *ssa.CallCommon, calleeID domain.CanonicalID, spec summarySpec, callVal ssa.Value) error {
 	logger := zap.L()
 	logger.Debug("enter (fieldExtractor).applySQLSummary")
 	defer logger.Debug("exit (fieldExtractor).applySQLSummary")
@@ -483,11 +483,55 @@ func (ext *fieldExtractor) applySQLSummary(cc *ssa.CallCommon, calleeID domain.C
 	}
 	table, cols := parseSQLStmt(sqlStr)
 	line := ext.prog.Fset.PositionFor(cc.Pos(), false).Line
-	access := "write"
+	// P0-2 读路径（Query/QueryRow/Prepare）：SELECT 列 → read 虚拟节点
+	// （表.列）+ 读边（虚拟节点 → 返回的 rows/row 值）——query table
+	// 读取方闭环的数据基础
 	if !spec.SQLWrite {
-		access = "read"
+		if table == "" {
+			return nil
+		}
+		if len(cols) == 0 {
+			cols = []string{""} // SELECT * → 表级读节点
+		}
+		var callID domain.CanonicalID
+		if callVal != nil {
+			callID, _ = ext.emitValue(callVal)
+		}
+		for _, col := range cols {
+			name := table
+			if col != "" {
+				name = table + "." + col
+			}
+			id := domain.CanonicalID(string(ext.funcID) + "#ext.sql." + name + ".read@" + fmt.Sprintf("%d", line))
+			if err := ext.emit(domain.Item{Node: &domain.CodeEntity{
+				ID:        id,
+				Kind:      domain.KindFieldAccess,
+				Name:      name,
+				FilePath:  ext.currentFile,
+				LineStart: line,
+				Properties: map[string]any{
+					"full_path":     name,
+					"instance_path": name,
+					"access_kind":   "read",
+					"code_snippet":  sqlStr,
+					"type_string":   "sql",
+					"is_external":   "true",
+					"func_id":       string(ext.funcID),
+				},
+			}}); err != nil {
+				return err
+			}
+			if callID != "" {
+				// 方向：表列读出 → 值（rows/row 对象），与写边（值→节点）反向
+				if err := ext.emitEdgeKindLine(id, domain.CanonicalID(callID), domain.FactSummaryIO, line); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
 	}
-	// 虚拟节点：表.列（无列时表）；值实参（variadic 解包）按 ? 顺序映射列
+	// 写路径：虚拟节点：表.列（无列时表）；值实参（variadic 解包）按 ? 顺序映射列
+	access := "write"
 	values := []ssa.Value{}
 	for i := 2; i < len(cc.Args); i++ {
 		values = append(values, variadicElems(cc.Args[i])...)
@@ -567,7 +611,9 @@ func (ext *fieldExtractor) applyTxBoundary(cc *ssa.CallCommon, calleeID domain.C
 // parseSQLStmt 从 SQL 语句提取表名与列名（Q97 启发式，不做完整 SQL 解析）：
 //   INSERT INTO t(a, b) VALUES(?, ?)  → t, [a b]
 //   UPDATE t SET a=?, b=?             → t, [a b]
-//   DELETE FROM t / SELECT ... FROM t → t, []
+//   DELETE FROM t                     → t, []
+//   SELECT a, b FROM t                → t, [a b]（P0-2 读路径）
+//   SELECT * FROM t                   → t, []（表级）
 func parseSQLStmt(sql string) (table string, cols []string) {
 	upper := strings.ToUpper(sql)
 	rest := ""
@@ -579,7 +625,28 @@ func parseSQLStmt(sql string) (table string, cols []string) {
 	case strings.Contains(upper, "DELETE FROM"):
 		rest = sql[strings.Index(upper, "DELETE FROM")+len("DELETE FROM"):]
 	case strings.Contains(upper, " FROM "):
-		rest = sql[strings.Index(upper, " FROM ")+len(" FROM "):]
+		// SELECT ... FROM t：列在 SELECT 与 FROM 之间（P0-2）
+		fromIdx := strings.Index(upper, " FROM ")
+		rest = sql[fromIdx+len(" FROM "):]
+		if strings.Contains(upper, "SELECT ") {
+			selPart := strings.TrimSpace(sql[strings.Index(upper, "SELECT ")+len("SELECT "):fromIdx])
+			if selPart != "" && !strings.Contains(strings.ToUpper(selPart), "*") {
+				// 逗号分隔列（可能带表前缀 a.name、别名 a.name AS n——取末段）
+				for _, c := range strings.Split(selPart, ",") {
+					c = strings.TrimSpace(c)
+					if i := strings.Index(c, " "); i >= 0 {
+						c = c[:i] // 去掉 AS 别名
+					}
+					if i := strings.LastIndex(c, "."); i >= 0 {
+						c = c[i+1:] // 去掉表前缀
+					}
+					c = strings.Trim(c, "`\"[]")
+					if c != "" {
+						cols = append(cols, c)
+					}
+				}
+			}
+		}
 	default:
 		return "", nil
 	}

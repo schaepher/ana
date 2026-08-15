@@ -294,8 +294,9 @@ func TestParseSQLStmt(t *testing.T) {
 		{"UPDATE users SET name=?, email=? WHERE id = ?", "users", []string{"name", "email"}},
 		{"UPDATE users SET name = ?", "users", []string{"name"}}, // 无 WHERE
 		{"DELETE FROM users WHERE id = ?", "users", nil},
-		{"SELECT name FROM users WHERE id = ?", "users", nil},
-		{"SELECT u.name FROM users u JOIN orders o ON u.id = o.uid", "users", nil},
+		{"SELECT name FROM users WHERE id = ?", "users", []string{"name"}}, // P0-2：SELECT 列提取
+		{"SELECT u.name FROM users u JOIN orders o ON u.id = o.uid", "users", []string{"name"}}, // 去表前缀
+		{"SELECT * FROM users", "users", nil}, // SELECT * → 表级
 		{"not sql at all", "", nil},
 		{"", "", nil},
 	}

@@ -64,6 +64,74 @@ func save(db *sql.DB, u *User) {
 	}
 }
 
+// TestSQLSelectRead：P0-2——SELECT 读路径：QueryRow 的 SQL 解析出列 →
+// read 虚拟节点（表.列）+ 读边（虚拟节点 → 读出的 Row 值）。
+// query table 读取方闭环的数据基础。
+func TestSQLSelectRead(t *testing.T) {
+	nodes, facts, _ := indexFixtureFull(t, map[string]string{
+		"go.mod":  moduleGoMod,
+		"main.go": `package m
+
+import "database/sql"
+
+type User struct {
+	Name string
+	Age  int
+}
+
+func get(db *sql.DB, id int) *User {
+	row := db.QueryRow("SELECT name, age FROM users WHERE id = ?", id)
+	var u User
+	row.Scan(&u.Name, &u.Age)
+	return &u
+}
+`,
+	})
+	funcID := "symbol:go:example.com/mtest:get"
+	// 每列一个 read 虚拟节点（access_kind=read）
+	nameNode := findVirtualNode(t, nodes, funcID, "users.name")
+	if nameNode.Property("access_kind") != "read" {
+		t.Errorf("users.name access_kind = %q, want read", nameNode.Property("access_kind"))
+	}
+	ageNode := findVirtualNode(t, nodes, funcID, "users.age")
+	if ageNode.Property("access_kind") != "read" {
+		t.Errorf("users.age access_kind = %q, want read", ageNode.Property("access_kind"))
+	}
+	// 读边：虚拟节点 → 读出的 Row 值（source=节点, kind=summary_io）
+	seen := map[string]bool{}
+	for _, f := range facts {
+		if f.Kind == domain.FactSummaryIO && string(f.SourceID) == string(nameNode.ID) {
+			seen["name->row"] = true
+		}
+		if f.Kind == domain.FactSummaryIO && string(f.SourceID) == string(ageNode.ID) {
+			seen["age->row"] = true
+		}
+	}
+	if !seen["name->row"] || !seen["age->row"] {
+		t.Errorf("读边缺失（虚拟节点 → Row 值）: %v", seen)
+	}
+}
+
+// TestSQLSelectStar：SELECT * 无列 → 表级 read 虚拟节点（Name=表）。
+func TestSQLSelectStar(t *testing.T) {
+	nodes, _, _ := indexFixtureFull(t, map[string]string{
+		"go.mod":  moduleGoMod,
+		"main.go": `package m
+
+import "database/sql"
+
+func list(db *sql.DB) {
+	rows, _ := db.Query("SELECT * FROM users")
+	rows.Close()
+}
+`,
+	})
+	vnode := findVirtualNode(t, nodes, "symbol:go:example.com/mtest:list", "users")
+	if vnode.Property("access_kind") != "read" {
+		t.Errorf("users access_kind = %q, want read", vnode.Property("access_kind"))
+	}
+}
+
 // TestSQLUpdatePersist：UPDATE 的表列提取。
 func TestSQLUpdatePersist(t *testing.T) {
 	nodes, _, _ := indexFixtureFull(t, map[string]string{

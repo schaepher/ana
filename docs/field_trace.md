@@ -1094,7 +1094,11 @@ CLI `update`（全量分析+增量写入）已有；补**自动触发闭环**（
   （summary_io 入边 source 值节点剥 slot → 函数 + 行号）
 - 行号来源：summary_io 边 metadata line_num（Q148 补 emitEdgeKindLine；
   旧索引缺失时兜底虚拟节点 LineStart）
-- 读取方（出边）：SELECT 读路径未解析，输出空（诚实标注）
+- 读取方（P0-2 已实现）：**SELECT 读路径解析**——parseSQLStmt 提取
+  SELECT 列（去表前缀/AS 别名；`SELECT *` → 表级）；Query/QueryRow/
+  Prepare 调用点产 read 虚拟节点（access_kind=read）+ 读边
+  （**虚拟节点 → 返回的 rows/row 值**，与写边值→节点反向）；query
+  table 输出每列读取方（读虚拟节点出边的目标函数 + 行号）
 - radar 实测：sq_lite_atom 30 个写节点聚合为 10 列，写入方
   (sqliteAtomStore).Create:417 / DeleteOrphaned:492/499
 

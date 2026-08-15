@@ -21,18 +21,25 @@ func queryTable(acts *action.Actions, table string, opts outputOpts) int {
 		return printTableJSON(cols)
 	}
 	if len(cols) == 0 {
-		fmt.Printf("表 %s：无列虚拟节点（Q97 持久化映射仅覆盖字符串 SQL 写路径）\n", table)
+		fmt.Printf("表 %s：无列虚拟节点（持久化映射覆盖字符串 SQL 写/读路径 + GORM 结构体写）\n", table)
 		return 0
 	}
-	fmt.Printf("表 %s（%d 列，Q97 持久化映射）:\n", table, len(cols))
+	fmt.Printf("表 %s（%d 列，持久化映射）:\n", table, len(cols))
 	for _, c := range cols {
 		fmt.Printf("  %s [%s] :%d\n", c.Name, c.Access, c.LineStart)
 		if len(c.Writers) == 0 {
 			fmt.Println("    写入: （无 summary_io 边）")
-			continue
 		}
 		for _, w := range c.Writers {
 			fmt.Printf("    写入: %s %s :%d\n", w.FuncName, w.FuncID, w.Line)
+		}
+		if len(c.Readers) == 0 {
+			if c.Access == "read" {
+				fmt.Println("    读取: （无出边）")
+			}
+		}
+		for _, rd := range c.Readers {
+			fmt.Printf("    读取: %s %s :%d\n", rd.FuncName, rd.FuncID, rd.Line)
 		}
 	}
 	return 0

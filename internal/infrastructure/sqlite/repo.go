@@ -1436,6 +1436,36 @@ func (r *Repo) GetTableColumns(table string) ([]*domain.TableColumn, error) {
 			})
 		}
 		ws.Close()
+		// P0-2 读取方：读虚拟节点（access=read）的出边（节点 → 读出的值）
+		if rt.access == "read" {
+			rs, err := r.Query(`SELECT target_id, json_extract(metadata, '$.line_num')
+				FROM edges WHERE source_id = ? AND kind = 'summary_io'`, rt.id)
+			if err != nil {
+				return nil, err
+			}
+			for rs.Next() {
+				var tgt string
+				var ln sql.NullFloat64
+				if err := rs.Scan(&tgt, &ln); err != nil {
+					rs.Close()
+					return nil, err
+				}
+				funcID := tgt
+				if i := strings.LastIndex(tgt, "#"); i >= 0 {
+					funcID = tgt[:i]
+				}
+				line := rt.line
+				if ln.Valid {
+					line = int(ln.Float64)
+				}
+				col.Readers = append(col.Readers, domain.TableEndpoint{
+					FuncID:   funcID,
+					FuncName: shortNameFromID(funcID),
+					Line:     line,
+				})
+			}
+			rs.Close()
+		}
 	}
 	out := make([]*domain.TableColumn, 0, len(order))
 	for _, name := range order {
