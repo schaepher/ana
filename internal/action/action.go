@@ -45,8 +45,8 @@ type Reader interface {
 
 // Actions 是 CLI 与 HTTP 共享的查询用例集合。
 type Actions struct {
-	repo    Reader
-	modName string // go.mod module 路径（moduleName 缓存）
+	repo     Reader
+	modNames []string // 全部 module 路径缓存（P2-3 多 go.mod；modules() 填充）
 }
 
 // New 创建 Actions。

@@ -745,10 +745,15 @@ TestOutputNoiseFree、TestServerEndToEnd）。
 
 - **永不报告**：main() / init()（运行时入口）
 - **exported 函数**（首字母大写）：报告但标注 `[exported]`（单模块分析看不到外部 caller，用户自行判断）
-- **盲区标注**：函数值赋值（`f := g; f()`）无边——命中时报告中标注"函数值引用未追踪"；
-  外部调用实参中的嵌套调用（`fmt.Errorf("%v", joinIDs(x))`——外层 callee 非模块内
-  时不建 passes_result）、嵌入提升方法（`db.Exec` → `(DB).Exec` 声明无调用者）——
-  同类误报，报告中不特别标注（实测 codeintel 自身：joinIDs/version 属此盲区）
+- **盲区（2026-08-15 P2 收敛后）**：
+  - 函数值赋值（`f := g; f()`）——**已解决**（P2-1：AssignStmt 追踪
+    varFuncs，f() 调用点解析到 g 建 calls 边；方法值 `fn := obj.M; fn()`
+    同）；跨函数函数值传递仍盲区
+  - 外部实参嵌套调用（`fmt.Errorf("%v", joinIDs(x))`）——**已解决**
+    （P2-2：外层外部 callee 也建轻量节点 + passes_result，joinIDs 有
+    入边不误报）
+  - 嵌入提升方法（`db.Exec` → `(DB).Exec`）——**已解决**（Selection
+    解析正确处理提升，calls 边直达声明方法；有测试固化）
 - **嵌套调用**（`A(B(C()))`）：B/C 无 calls 边但有 passes_result 入边 → 不误报（纳入"被调用"）
 - **接口实现**：实现方法无 calls 入边但有 dispatch_to 入边 → 不算孤立（有引用）
 - **构建改动（Q108）**：AST 适配器补**包级 var 初始化调用边**——`var x = NewFoo()` 的 rhs 为模块内函数调用时建 calls 边（消除构造函数"写了没人调"的最大误报源；此前 AGENTS.md 已知限制"包级初始化中的调用不建 CALLS 边"）
@@ -910,8 +915,15 @@ codeintel export graph --type modules [--format mermaid] --repo <path>
   （实参→形参关联客户端对象）——Q125 盲区
 - **ServiceDesc 动态注册**（grpc 反射服务）：当前标"未知实现"——
   需识别 `grpc.ServiceDesc` 注册表——Q127 盲区
-- **多 go.mod 大仓**：当前仅单 module 构建（多个 go.mod 需构建期
-  扩展加载与模块归属）——Q121 备注
+- **多 go.mod 大仓（2026-08-15 P2-3 已实现）**：递归扫描仓库根下所有
+  go.mod（跳过 .git/.codeintel/vendor/node_modules；module 目录内不再
+  嵌套扫描）→ `Repository.Modules`/`ModuleDirs`（根在前）；orchestrator
+  每 module 单独 packages.Load（按 PkgPath 去重合并）+ scip-go 每 module
+  独立索引（index-N.scip）；isInModule 改多前缀判定（任一匹配即项目内）；
+  action.ModuleOf 剥离所在 module 前缀（最长前缀匹配 modules.yaml）。
+  发现方式：`orchestrator.DiscoverModules`（cli init/update/serve 经
+  buildRepo 构造 Repository）。仍不支持：go.work 根（无根 go.mod 时报错
+  提示进入模块目录）
 - **模块图进前端图探索**（serve 页面模块视图）：当前仅 CLI/export
   输出，无 module 节点落库——Q129 备注
 

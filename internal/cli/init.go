@@ -47,13 +47,13 @@ func cmdInit(ctx context.Context, args []string) int {
 			return 1
 		}
 	}
-	module, err := readGoModule(abs)
+	repo, err := buildRepo(abs)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
 
-	fmt.Printf("构建索引: %s (module=%s)\n", abs, module)
+	fmt.Printf("构建索引: %s (module=%s, %d 个 go.mod)\n", abs, repo.Module, len(repo.Modules))
 	// 日志切换到 .codeintel/codeintel.log（stdout 只留查询结果，Q88）
 	if err := logging.ToFile(abs); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: 日志切换失败: %v\n", err)
@@ -65,7 +65,7 @@ func cmdInit(ctx context.Context, args []string) int {
 	}
 	defer db.Close()
 
-	orch := orchestrator.New(&domain.Repository{Path: abs, Module: module}, db)
+	orch := orchestrator.New(repo, db)
 	result, err := orch.FullBuild(ctx)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -108,6 +108,21 @@ func cmdInit(ctx context.Context, args []string) int {
 	}
 	fmt.Printf("数据库: %s/.codeintel/codeintel.db\n", abs)
 	return 0
+}
+
+// buildRepo 解析仓库的 module 信息（P2-3 多 go.mod monorepo）：
+// 递归扫描根下所有 go.mod，构造 Repository（根 module 在前）。
+func buildRepo(repoPath string) (*domain.Repository, error) {
+	modules, dirs, err := orchestrator.DiscoverModules(repoPath)
+	if err != nil {
+		return nil, err
+	}
+	return &domain.Repository{
+		Path:       repoPath,
+		Module:     modules[0],
+		Modules:    modules,
+		ModuleDirs: dirs,
+	}, nil
 }
 
 // readGoModule 读取 go.mod 的 module 行。

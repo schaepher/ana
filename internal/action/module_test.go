@@ -39,6 +39,48 @@ func TestModuleOf(t *testing.T) {
 	}
 }
 
+// TestModuleOfMultiGoMod：P2-3——多 go.mod monorepo：包路径匹配子 module
+// 前缀时剥离子 module 前缀再匹配 modules.yaml 配置。
+func TestModuleOfMultiGoMod(t *testing.T) {
+	dir := t.TempDir()
+	// 根 module + 子 module（app/）
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"),
+		[]byte("module example.com/root\n\ngo 1.21\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "app"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "app", "go.mod"),
+		[]byte("module example.com/app\n\ngo 1.21\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeModuleYAML(t, dir, `modules:
+  - prefix: "internal/svc"
+    name: "svc"
+  - prefix: "internal/order"
+    name: "order"
+`)
+	// 自建 Actions（newModuleActions 会覆盖根 go.mod，破坏双 module 结构）
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	a := New(sqlite.NewRepo(db))
+	cases := []struct{ pkg, want string }{
+		{"example.com/root/internal/svc/client", "svc"},     // 根 module 前缀剥离
+		{"example.com/app/internal/order/handler", "order"}, // 子 module 前缀剥离（P2-3）
+		{"example.com/app/other", "_root"},                  // 子 module 未匹配配置
+		{"example.com/external/pkg", "_root"},               // 外部包
+	}
+	for _, c := range cases {
+		if got := a.ModuleOf(c.pkg); got != c.want {
+			t.Errorf("ModuleOf(%s) = %q, want %q", c.pkg, got, c.want)
+		}
+	}
+}
+
 // TestModuleCalls：grpc_call/grpc_impl 边 → 模块级调用表（18.4）。
 func TestModuleCalls(t *testing.T) {
 	dir := t.TempDir()

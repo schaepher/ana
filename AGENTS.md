@@ -214,7 +214,9 @@ defer logger.Debug("exit <name>")
 
 ## 已知限制
 
-- 仅单 module 仓库；包级初始化（var x = NewFoo()）中的调用不建 CALLS 边
+- **多 go.mod 已支持**（2026-08-15 P2-3）：递归扫描根下所有 go.mod，
+  每 module 独立加载/独立 scip-go；go.work 根（无根 go.mod）仍不支持
+  （报错提示进入模块目录）
 - sqlite-vec 向量表未创建（Semble 未接入）；schema 版本由 PRAGMA user_version=2 管理，
   版本不匹配时报错提示 `codeintel clean` 重建
 - 未实现：LLM 摘要、Semble；**MCP serve 已取消**（2026-08-15 Q135：AI 直接

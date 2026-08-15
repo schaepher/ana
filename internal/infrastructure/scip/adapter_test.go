@@ -27,7 +27,7 @@ func processFixture(t *testing.T, doc *scip.Document) ([]*domain.CodeEntity, []*
 	var nodes []*domain.CodeEntity
 	var facts []*domain.Fact
 	adapter := &Adapter{}
-	repo := &domain.Repository{Module: "example.com/m"}
+	repo := &domain.Repository{Module: "example.com/m", Modules: []string{"example.com/m"}}
 	err := adapter.processDocument(repo, doc, func(item domain.Item) error {
 		if item.Node != nil {
 			nodes = append(nodes, item.Node)
@@ -203,8 +203,20 @@ func TestIsInModule(t *testing.T) {
 		"example.com/m/extra":  true,
 	}
 	for p, want := range cases {
-		if got := isInModule(p, "example.com/m"); got != want {
+		if got := isInModule(p, []string{"example.com/m"}); got != want {
 			t.Errorf("isInModule(%q) = %v, want %v", p, got, want)
+		}
+	}
+	// 多 module（P2-3）：任一前缀匹配即项目内
+	multi := []string{"example.com/m", "example.com/svc2"}
+	for p, want := range map[string]bool{
+		"example.com/svc2":     true,
+		"example.com/svc2/sub": true,
+		"example.com/svc3":     false,
+		"example.com/m/svc":    true, // 根 module 子包仍命中
+	} {
+		if got := isInModule(p, multi); got != want {
+			t.Errorf("isInModule(%q, multi) = %v, want %v", p, got, want)
 		}
 	}
 }

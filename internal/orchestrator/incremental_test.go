@@ -32,7 +32,7 @@ func TestNewAndGetRepo(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	defer db.Close()
-	orch := New(&domain.Repository{Path: t.TempDir(), Module: "example.com/m"}, db)
+	orch := New(&domain.Repository{Path: t.TempDir(), Module: "example.com/m", Modules: []string{"example.com/m"}}, db)
 	if len(orch.Adapters) != 4 {
 		t.Errorf("adapters = %d, want 4 (scip/ast/git/ssa)", len(orch.Adapters))
 	}
@@ -62,7 +62,7 @@ func TestIncrementalBuildKeepsUnchangedFiles(t *testing.T) {
 			FieldPath: "example.com/inc.T.A", InstancePath: "t.A", LineStart: 3, CodeSnippet: "t.A = v"}},
 	}}
 	o, repo := newTestOrchestrator(t, []domain.IndexerPort{a})
-	o.Repo = &domain.Repository{Path: dir, Module: "example.com/inc"}
+	o.Repo = &domain.Repository{Path: dir, Module: "example.com/inc", Modules: []string{"example.com/inc"}}
 
 	// 预置：未变更文件的节点 + 变更文件中的旧内容（stale）及其出边
 	otherID := domain.CanonicalID("symbol:go:example.com/inc:other")

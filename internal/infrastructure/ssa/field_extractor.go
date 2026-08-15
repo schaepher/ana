@@ -1055,7 +1055,7 @@ func emitGlobalInit(repo *domain.Repository, prog *ssa.Program, emit domain.Emit
 	}
 	// 运行时写入（Store→Global）：任意模块函数（含 init 的初始化 Store）
 	for fn := range ssautil.AllFunctions(prog) {
-		if !isModuleFunction(fn, repo.Module) {
+		if !isModuleFunction(fn, repo.Modules) {
 			continue
 		}
 		// 程序级值（Const 等）归属：函数所在包的 init 命名空间

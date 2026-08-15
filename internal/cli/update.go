@@ -43,7 +43,7 @@ func cmdUpdate(ctx context.Context, args []string) int {
 		fmt.Fprintf(os.Stderr, "error: %s is not a directory\n", abs)
 		return 1
 	}
-	module, err := readGoModule(abs)
+	repo, err := buildRepo(abs)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
@@ -82,7 +82,7 @@ func cmdUpdate(ctx context.Context, args []string) int {
 	}
 	defer db.Close()
 
-	orch := orchestrator.New(&domain.Repository{Path: abs, Module: module}, db)
+	orch := orchestrator.New(repo, db)
 	result, err := orch.IncrementalBuild(ctx, changed)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

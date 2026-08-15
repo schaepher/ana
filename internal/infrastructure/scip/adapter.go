@@ -41,6 +41,8 @@ func (a *Adapter) Name() string {
 }
 
 // Index 在仓库上执行全量 SCIP 索引并流式产出节点与边。
+// P2-3 多 go.mod：每个 module 单独跑 scip-go（scip-go 一次索引一个
+// module；在各自目录执行，输出独立 .scip 文件）。
 func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, _ []*packages.Package, emit domain.EmitFunc) error {
 	logger := logging.FromContext(ctx)
 	logger.Debug("enter (Adapter).Index")
@@ -49,31 +51,38 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, _ []*packa
 	if err != nil {
 		return err
 	}
-	indexPath := filepath.Join(repo.Path, ".codeintel", "index.scip")
-	if err := os.MkdirAll(filepath.Dir(indexPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(repo.Path, ".codeintel"), 0o755); err != nil {
 		return fmt.Errorf("create .codeintel: %w", err)
 	}
-
-	// --skip-tests：不索引 _test.go 测试文件（测试符号不入图）
-	cmd := exec.CommandContext(ctx, bin, "index", "-o", indexPath, "-q", "--skip-tests")
-	cmd.Dir = repo.Path
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("scip-go index failed: %v: %s", err, string(out))
-	}
-	defer os.Remove(indexPath)
-
-	data, err := os.ReadFile(indexPath)
-	if err != nil {
-		return fmt.Errorf("read scip index: %w", err)
-	}
-	idx := &scip.Index{}
-	if err := proto.Unmarshal(data, idx); err != nil {
-		return fmt.Errorf("parse scip index: %w", err)
+	dirs := []string{repo.Path}
+	for i, d := range repo.ModuleDirs {
+		if i == 0 {
+			continue
+		}
+		dirs = append(dirs, filepath.Join(repo.Path, d))
 	}
 
-	for _, doc := range idx.Documents {
-		if err := a.processDocument(repo, doc, emit); err != nil {
-			return err
+	for i, dir := range dirs {
+		indexPath := filepath.Join(repo.Path, ".codeintel", fmt.Sprintf("index-%d.scip", i))
+		// --skip-tests：不索引 _test.go 测试文件（测试符号不入图）
+		cmd := exec.CommandContext(ctx, bin, "index", "-o", indexPath, "-q", "--skip-tests")
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("scip-go index failed (%s): %v: %s", dir, err, string(out))
+		}
+		data, err := os.ReadFile(indexPath)
+		os.Remove(indexPath)
+		if err != nil {
+			return fmt.Errorf("read scip index: %w", err)
+		}
+		idx := &scip.Index{}
+		if err := proto.Unmarshal(data, idx); err != nil {
+			return fmt.Errorf("parse scip index: %w", err)
+		}
+		for _, doc := range idx.Documents {
+			if err := a.processDocument(repo, doc, emit); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -206,7 +215,7 @@ func (a *Adapter) processDocument(repo *domain.Repository, doc *scip.Document, e
 			if iface.IsInterfaceMethod {
 				continue // 方法级 implements（接口方法→实现方法）不建
 			}
-			if !isInModule(iface.ImportPath, repo.Module) {
+			if !isInModule(iface.ImportPath, repo.Modules) {
 				continue // 外部接口无节点（外键约束）
 			}
 			if err := emit(domain.Item{Fact: &domain.Fact{
@@ -223,10 +232,19 @@ func (a *Adapter) processDocument(repo *domain.Repository, doc *scip.Document, e
 	return nil
 }
 
-// isInModule 判断 importPath 是否属于被索引 module（自身或子包）。
-func isInModule(importPath, module string) bool {
+// isInModule 判断 importPath 是否属于任一被索引 module（自身或子包；
+// P2-3 多 go.mod——任一 module 前缀匹配即项目内）。
+func isInModule(importPath string, modules []string) bool {
 	logger := zap.L()
 	logger.Debug("enter isInModule")
 	defer logger.Debug("exit isInModule")
-	return importPath == module || strings.HasPrefix(importPath, module+"/")
+	for _, m := range modules {
+		if m == "" {
+			continue
+		}
+		if importPath == m || strings.HasPrefix(importPath, m+"/") {
+			return true
+		}
+	}
+	return false
 }

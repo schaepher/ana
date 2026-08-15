@@ -110,7 +110,7 @@ func (ext *fieldExtractor) emitCall(cc *ssa.CallCommon, callVal ssa.Value) error
 		// 具体实现（此前动态调用不产边，字段链路断在接口调用点）
 		if cc.Method != nil {
 			if iface := interfaceNamedOf(cc.Value.Type()); iface != nil {
-				for _, implFn := range implMethodsFor(ext.pkgs, ext.repo.Module, iface, cc.Method.Name()) {
+				for _, implFn := range implMethodsFor(ext.pkgs, ext.repo.Modules, iface, cc.Method.Name()) {
 					implSSA := ext.prog.FuncValue(implFn)
 					if implSSA == nil {
 						continue
@@ -203,7 +203,7 @@ func (ext *fieldExtractor) emitCall(cc *ssa.CallCommon, callVal ssa.Value) error
 	if handled {
 		return nil
 	}
-	if !isModuleFunction(callee, ext.repo.Module) {
+	if !isModuleFunction(callee, ext.repo.Modules) {
 		return nil // 外部函数无摘要：不产调用边
 	}
 	calleeID, ok := ext.funcIDOf(callee)

@@ -32,7 +32,7 @@ func indexFixture(t *testing.T, files map[string]string) ([]*domain.CodeEntity, 
 	var nodes []*domain.CodeEntity
 	var facts []*domain.Fact
 	adapter := &Adapter{}
-	repo := &domain.Repository{Path: dir, Module: "example.com/mtest"}
+	repo := &domain.Repository{Path: dir, Module: "example.com/mtest", Modules: []string{"example.com/mtest"}}
 	pkgs, err := astLoadTestPackages(dir)
 	if err != nil {
 		t.Fatalf("load: %v", err)
@@ -106,7 +106,7 @@ func TestSetChangedFilesSkipsUnchanged(t *testing.T) {
 		var facts []*domain.Fact
 		adapter := &Adapter{}
 		adapter.SetChangedFiles(withChanged)
-		repo := &domain.Repository{Path: dir, Module: "example.com/mtest"}
+		repo := &domain.Repository{Path: dir, Module: "example.com/mtest", Modules: []string{"example.com/mtest"}}
 		if err := adapter.Index(context.Background(), repo, pkgs, func(item domain.Item) error {
 			if item.Node != nil {
 				nodes = append(nodes, item.Node)
@@ -748,6 +748,84 @@ func (h *Handler) ListOrders() {}
 	if len(gotCall["symbol:go:example.com/mtest/svc_a:callReqDo"]) != 1 {
 		t.Errorf("callReqDo http_call = %d 条, want 1（Do 处重复建边）: %v", len(gotCall["symbol:go:example.com/mtest/svc_a:callReqDo"]), gotCall["symbol:go:example.com/mtest/svc_a:callReqDo"])
 	}
+}
+
+// TestNestedArgExternalCallee：P2-2——外层 callee 是外部包函数时，
+// 参数位置的嵌套调用仍建 passes_result（fmt.Errorf("%v", joinIDs(x))
+// → joinIDs 有入边，unused 不误报）。
+func TestNestedArgExternalCallee(t *testing.T) {
+	_, facts := indexFixture(t, map[string]string{
+		"go.mod": fixtureGoMod,
+		"a.go": `package m
+
+import "fmt"
+
+func joinIDs(ids []int) []int { return ids }
+
+func callNested() {
+	_ = fmt.Errorf("%v", joinIDs([]int{1}))
+}
+`,
+	})
+	// 接收者是外部 callee（fmt.Errorf 轻量节点）：持有返回参数语义
+	findFact(t, facts, "symbol:go:fmt:Errorf", "symbol:go:example.com/mtest:joinIDs", string(domain.FactPassesResult))
+}
+
+// TestEmbeddedPromotedMethodCalled：P2-2 固化——嵌入提升方法调用
+// （a.Exec，Exec 由嵌入字段提升）建 calls 边到声明方法 (DB).Exec，
+// unused 不误报（§16.2 旧盲区，Selection 解析已解决）。
+func TestEmbeddedPromotedMethodCalled(t *testing.T) {
+	_, facts := indexFixture(t, map[string]string{
+		"go.mod": fixtureGoMod,
+		"db/db.go": `package db
+
+type DB struct{}
+
+func (d *DB) Exec(q string) {}
+`,
+		"a.go": `package m
+
+import "example.com/mtest/db"
+
+type App struct {
+	*db.DB
+}
+
+func (a *App) Run() {
+	a.Exec("select 1")
+}
+`,
+	})
+	findFact(t, facts, "symbol:go:example.com/mtest:(App).Run", "symbol:go:example.com/mtest/db:(DB).Exec", string(domain.FactCalls))
+}
+
+// TestFuncValueCall：P2-1——函数值赋值盲区收敛：
+// f := g; f() 建 calls 边（h→g）；方法值 fn := obj.M; fn() 建边（m→(T).M）。
+func TestFuncValueCall(t *testing.T) {
+	_, facts := indexFixture(t, map[string]string{
+		"go.mod": fixtureGoMod,
+		"a.go": `package m
+
+type T struct{}
+
+func (t *T) M() {}
+
+func g() {}
+
+func h() {
+	f := g
+	f()
+}
+
+func callMethodValue() {
+	obj := &T{}
+	fn := obj.M
+	fn()
+}
+`,
+	})
+	findFact(t, facts, "symbol:go:example.com/mtest:h", "symbol:go:example.com/mtest:g", string(domain.FactCalls))
+	findFact(t, facts, "symbol:go:example.com/mtest:callMethodValue", "symbol:go:example.com/mtest:(T).M", string(domain.FactCalls))
 }
 
 // TestGrpcClientCrossFunction：§21.1 跨函数客户端——形参类型是

@@ -30,7 +30,7 @@ func emitDispatches(repo *domain.Repository, prog *ssa.Program, pkgs []*types.Pa
 	logger := zap.L()
 	logger.Debug("enter emitDispatches")
 	defer logger.Debug("exit emitDispatches")
-	regs := collectDispatchRegistrations(prog, repo.Module) // 可为空：枚举兜底独立
+	regs := collectDispatchRegistrations(prog, repo.Modules) // 可为空：枚举兜底独立
 
 	// 接口方法调用集合：接口类型 → 方法名（map 去重；UNIQUE 边合并）
 	type callKey struct {
@@ -39,7 +39,7 @@ func emitDispatches(repo *domain.Repository, prog *ssa.Program, pkgs []*types.Pa
 	}
 	calls := map[callKey]bool{}
 	for fn := range ssautil.AllFunctions(prog) {
-		if !isModuleFunction(fn, repo.Module) {
+		if !isModuleFunction(fn, repo.Modules) {
 			continue
 		}
 		for _, b := range fn.Blocks {
@@ -82,7 +82,7 @@ func emitDispatches(repo *domain.Repository, prog *ssa.Program, pkgs []*types.Pa
 				candidates[candidateKey(fn)] = dispatchCandidate{fn: fn, origin: "register", confidence: 0.9, site: site}
 			}
 		}
-		for _, fn := range implMethodsFor(pkgs, repo.Module, ck.iface, ck.method) {
+		for _, fn := range implMethodsFor(pkgs, repo.Modules, ck.iface, ck.method) {
 			key := candidateKey(fn)
 			if _, ok := candidates[key]; ok {
 				continue // 注册点优先
@@ -119,10 +119,10 @@ func emitDispatches(repo *domain.Repository, prog *ssa.Program, pkgs []*types.Pa
 
 // implMethodsFor 枚举模块内实现接口方法的具名类型方法（值与指针方法集
 // 都查）；接口自身（Implements 自反）排除。⑮ 动态派发追踪复用。
-func implMethodsFor(pkgs []*types.Package, module string, iface *types.Named, method string) []*types.Func {
+func implMethodsFor(pkgs []*types.Package, modules []string, iface *types.Named, method string) []*types.Func {
 	var out []*types.Func
 	for _, pkg := range pkgs {
-		if !isInModule(pkg.Path(), module) {
+		if !isInModule(pkg.Path(), modules) {
 			continue
 		}
 		scope := pkg.Scope()
@@ -161,13 +161,13 @@ type dispatchCandidate struct {
 
 // collectDispatchRegistrations 收集模块内 MakeInterface 注册点：
 // 具体值 → 接口值的转换指令（SSA 中注册/注入点的标准形态）。
-func collectDispatchRegistrations(prog *ssa.Program, module string) dispatchReg {
+func collectDispatchRegistrations(prog *ssa.Program, modules []string) dispatchReg {
 	logger := zap.L()
 	logger.Debug("enter collectDispatchRegistrations")
 	defer logger.Debug("exit collectDispatchRegistrations")
 	regs := dispatchReg{}
 	for fn := range ssautil.AllFunctions(prog) {
-		if !isModuleFunction(fn, module) {
+		if !isModuleFunction(fn, modules) {
 			continue
 		}
 		for _, b := range fn.Blocks {

@@ -56,7 +56,7 @@ func (s *Service) TestHelper() {
 	}
 	defer db.Close()
 
-	orch := New(&domain.Repository{Path: dir, Module: "example.com/e2e"}, db)
+	orch := New(&domain.Repository{Path: dir, Module: "example.com/e2e", Modules: []string{"example.com/e2e"}}, db)
 	res, err := orch.FullBuild(context.Background())
 	if err != nil {
 		t.Fatalf("full build: %v", err)
@@ -123,6 +123,102 @@ func (s *Service) TestHelper() {
 	}
 }
 
+// TestDiscoverModules：P2-3——递归扫描 go.mod（根在前）；跳过
+// .git/.codeintel/vendor；module 目录内不再嵌套扫描。
+func TestDiscoverModules(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/root\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "app", "go.mod"), "module example.com/app\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "vendor", "go.mod"), "module vendor.example\n") // 应跳过
+	writeFile(t, filepath.Join(dir, ".codeintel", "go.mod"), "module hidden.example\n")
+	writeFile(t, filepath.Join(dir, "lib", "sub", "go.mod"), "module example.com/lib\n\ngo 1.21\n")
+	// module 目录内的嵌套 go.mod 不扫（Go 语义：嵌套 module 独立）
+	writeFile(t, filepath.Join(dir, "app", "inner", "go.mod"), "module example.com/appinner\n")
+
+	modules, dirs, err := DiscoverModules(dir)
+	if err != nil {
+		t.Fatalf("DiscoverModules: %v", err)
+	}
+	want := []string{"example.com/root", "example.com/app", "example.com/lib"}
+	if len(modules) != len(want) {
+		t.Fatalf("modules = %v, want %v", modules, want)
+	}
+	for i := range want {
+		if modules[i] != want[i] {
+			t.Fatalf("modules[%d] = %s, want %s", i, modules[i], want[i])
+		}
+	}
+	wantDirs := []string{".", "app", "lib/sub"}
+	for i, d := range dirs {
+		if d != wantDirs[i] {
+			t.Errorf("dirs[%d] = %s, want %s", i, d, wantDirs[i])
+		}
+	}
+}
+
+// TestFullBuildMultiModule：P2-3 端到端——双 go.mod monorepo：
+// 根 module 的 main 调用子 module（app/）的函数，跨 module calls 边成立。
+func TestFullBuildMultiModule(t *testing.T) {
+	if _, err := exec.LookPath("scip-go"); err != nil {
+		t.Skip("scip-go not found in PATH")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/root\n\ngo 1.21\n\nrequire example.com/app v0.0.0\n\nreplace example.com/app => ./app\n")
+	writeFile(t, filepath.Join(dir, "main.go"), `package main
+
+import "example.com/app"
+
+func main() {
+	app.Hello()
+}
+`)
+	writeFile(t, filepath.Join(dir, "app", "go.mod"), "module example.com/app\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "app", "app.go"), `package app
+
+func Hello() {}
+`)
+
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	orch := New(&domain.Repository{
+		Path:       dir,
+		Module:     "example.com/root",
+		Modules:    []string{"example.com/root", "example.com/app"},
+		ModuleDirs: []string{".", "app"},
+	}, db)
+	res, err := orch.FullBuild(context.Background())
+	if err != nil {
+		t.Fatalf("full build: %v", err)
+	}
+	if res.Status == domain.BuildFailed {
+		t.Fatalf("build failed: %+v", res.Adapter)
+	}
+
+	repo := orch.GetRepo()
+	// 跨 module 调用：root main → app.Hello
+	callees, err := repo.GetCallees("symbol:go:example.com/root:main", 1, 0.8)
+	if err != nil {
+		t.Fatalf("GetCallees: %v", err)
+	}
+	found := false
+	for _, f := range callees {
+		if f.TargetID == "symbol:go:example.com/app:Hello" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("main callees 缺跨 module 调用: %+v", callees)
+	}
+	// 子 module 符号存在（scip 独立索引）
+	if _, err := repo.GetSymbol("symbol:go:example.com/app:Hello"); err != nil {
+		t.Errorf("app.Hello 节点缺失: %v", err)
+	}
+}
+
 // mockAdapter 记录 SetChangedFiles 注入（P1-1 AST 文件级跳过），
 // Index 产出固定节点避免空构建。
 type mockAdapter struct {
@@ -154,7 +250,7 @@ func TestInjectChangedFiles(t *testing.T) {
 
 	mock := &mockAdapter{}
 	orch := &Orchestrator{
-		Repo:     &domain.Repository{Path: dir, Module: "example.com/e2e"},
+		Repo:     &domain.Repository{Path: dir, Module: "example.com/e2e", Modules: []string{"example.com/e2e"}},
 		RepoImpl: sqlite.NewRepo(db),
 		Adapters: []domain.IndexerPort{mock},
 	}

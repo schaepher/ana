@@ -103,7 +103,7 @@ func computeAliases(repo *domain.Repository, prog *ssa.Program,
 	// 项目内函数（FuncDecl 过滤，与 emitFunction 一致）
 	var funcs []*ssa.Function
 	for fn := range ssautil.AllFunctions(prog) {
-		if !isModuleFunction(fn, repo.Module) {
+		if !isModuleFunction(fn, repo.Modules) {
 			continue
 		}
 		if _, ok := fn.Syntax().(*ast.FuncDecl); !ok {

@@ -80,7 +80,7 @@ func TestBenchmarkFullBuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	repo := &domain.Repository{Path: abs, Module: moduleNameOf(abs)}
+	repo := &domain.Repository{Path: abs, Module: moduleNameOf(abs), Modules: []string{moduleNameOf(abs)}}
 	orch := orchestrator.New(repo, db)
 	res, err := orch.FullBuild(context.Background())
 	if err != nil {

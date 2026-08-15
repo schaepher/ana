@@ -53,7 +53,7 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 	// 仅构建项目内包的函数体（依赖函数保持 stub，按需惰性创建）；
 	// 全程序 prog.Build() 会把依赖体也构建出来，成本高（field_trace.md §9）
 	for i, p := range pkgs {
-		if !isInModule(p.PkgPath, repo.Module) {
+		if !isInModule(p.PkgPath, repo.Modules) {
 			continue
 		}
 		if sp := ssaPkgs[i]; sp != nil {
@@ -62,10 +62,10 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 	}
 	// 源码标识符索引（token.Pos → 标识符名）：go/ssa v0.26 的 Alloc 名为 tN，
 	// 实例路径（x.A）需从 AST 恢复源码变量名
-	idents := buildIdentIndex(pkgs, repo.Module)
+	idents := buildIdentIndex(pkgs, repo.Modules)
 	// 赋值目标索引（表达式起点 → 目标变量名）：lifting 后 map/slice 字面量
 	// 是 MakeMap/MakeSlice 寄存器，容器名从此恢复
-	assignTargets := buildAssignTargets(pkgs, repo.Module)
+	assignTargets := buildAssignTargets(pkgs, repo.Modules)
 
 	// 外部函数摘要（内置 + 用户 field-summary.yaml，§7）
 	specs, warnings := loadSummaries(repo.Path)
@@ -83,7 +83,7 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 		}
 	}
 	for fn := range ssautil.AllFunctions(prog) {
-		if !isModuleFunction(fn, repo.Module) {
+		if !isModuleFunction(fn, repo.Modules) {
 			continue // 外部依赖走摘要（Phase 5）
 		}
 		if err := emitFunction(repo, prog, fn, idents, assignTargets, a.fd, specs, &fallbackTotal, emit, typePkgs); err != nil {
@@ -111,13 +111,13 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 }
 
 // buildIdentIndex 收集项目内文件的所有标识符（位置 → 名字），供 Alloc 反查源码变量名。
-func buildIdentIndex(pkgs []*packages.Package, module string) map[token.Pos]string {
+func buildIdentIndex(pkgs []*packages.Package, modules []string) map[token.Pos]string {
 	logger := zap.L()
 	logger.Debug("enter buildIdentIndex")
 	defer logger.Debug("exit buildIdentIndex")
 	idents := map[token.Pos]string{}
 	for _, p := range pkgs {
-		if !isInModule(p.PkgPath, module) {
+		if !isInModule(p.PkgPath, modules) {
 			continue
 		}
 		for _, f := range p.Syntax {
@@ -133,8 +133,8 @@ func buildIdentIndex(pkgs []*packages.Package, module string) map[token.Pos]stri
 }
 
 // isModuleFunction 判断 SSA 函数是否属于项目内包。
-func isModuleFunction(fn *ssa.Function, module string) bool {
-	return fn.Pkg != nil && fn.Pkg.Pkg != nil && isInModule(fn.Pkg.Pkg.Path(), module)
+func isModuleFunction(fn *ssa.Function, modules []string) bool {
+	return fn.Pkg != nil && fn.Pkg.Pkg != nil && isInModule(fn.Pkg.Pkg.Path(), modules)
 }
 
 // emitFunction 发射单个函数的全部产出：
@@ -373,9 +373,18 @@ func relPath(repoPath, abs string) string {
 	return filepath.ToSlash(rel)
 }
 
-// isInModule 判断包路径是否在 go.mod module 前缀内。
-func isInModule(pkgPath, module string) bool {
-	return pkgPath == module || strings.HasPrefix(pkgPath, module+"/")
+// isInModule 判断包路径是否属于任一被索引 module（自身或子包；P2-3
+// 多 go.mod——任一 module 前缀匹配即项目内）。
+func isInModule(pkgPath string, modules []string) bool {
+	for _, m := range modules {
+		if m == "" {
+			continue
+		}
+		if pkgPath == m || strings.HasPrefix(pkgPath, m+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // assignTarget 赋值表达式区间 → 目标变量名。
@@ -388,13 +397,13 @@ type assignTarget struct {
 // buildAssignTargets 构建 赋值表达式区间 → 目标变量名（Q83：lifting 后
 // map/slice 字面量为 MakeMap/MakeSlice 寄存器，其 Pos 落在字面量内部，
 // 用区间匹配恢复容器名）。按 start 排序返回，供二分查找。
-func buildAssignTargets(pkgs []*packages.Package, module string) []assignTarget {
+func buildAssignTargets(pkgs []*packages.Package, modules []string) []assignTarget {
 	logger := zap.L()
 	logger.Debug("enter buildAssignTargets")
 	defer logger.Debug("exit buildAssignTargets")
 	targets := []assignTarget{}
 	for _, p := range pkgs {
-		if !isInModule(p.PkgPath, module) {
+		if !isInModule(p.PkgPath, modules) {
 			continue
 		}
 		for _, f := range p.Syntax {

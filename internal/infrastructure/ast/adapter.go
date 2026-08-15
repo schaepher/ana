@@ -83,9 +83,9 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 	// 预收集 .pb.go 中定义的 RegisterXxxServer（gRPC 注册函数）。
 	// 注意：不能用调用点所在包的 Fset 解析被调用函数的位置（跨包偏移
 	// 不匹配），须在各自包内收集。
-	registerServers := collectRegisterServers(pkgs, repo.Module)
+	registerServers := collectRegisterServers(pkgs, repo.Modules)
 	// §18：protoc 生成的 NewXxxClient 客户端构造器（key: "pkgPath:funcName" → 服务名）
-	newClients := collectNewClients(pkgs, repo.Module)
+	newClients := collectNewClients(pkgs, repo.Modules)
 	// §18.7：HTTP 路由表（routes.yaml）→ http_route 节点（handler 解析）
 	a.routes = nil
 	routes, routeWarns := loadRoutes(repo.Path)
@@ -116,7 +116,7 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 	}
 
 	for _, pkg := range pkgs {
-		if !isInModule(pkg.PkgPath, repo.Module) {
+		if !isInModule(pkg.PkgPath, repo.Modules) {
 			continue // 仅处理项目内包
 		}
 		if err := a.processPackage(repo, pkg, emit, serviceFlags, registerServers, newClients); err != nil {
@@ -128,10 +128,10 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 
 // collectRegisterServers 遍历项目内包，收集定义在 .pb.go 中、函数名匹配
 // RegisterXxxServer 的注册函数（key: "pkgPath:funcName"）。
-func collectRegisterServers(pkgs []*packages.Package, module string) map[string]bool {
+func collectRegisterServers(pkgs []*packages.Package, modules []string) map[string]bool {
 	out := map[string]bool{}
 	for _, pkg := range pkgs {
-		if !isInModule(pkg.PkgPath, module) {
+		if !isInModule(pkg.PkgPath, modules) {
 			continue
 		}
 		for _, f := range pkg.Syntax {
@@ -155,10 +155,10 @@ func collectRegisterServers(pkgs []*packages.Package, module string) map[string]
 
 // collectNewClients 遍历 .pb.go 收集 protoc 生成的 NewXxxClient 客户端
 // 构造器（field_trace.md §18.2；key: "pkgPath:funcName" → 服务名）。
-func collectNewClients(pkgs []*packages.Package, module string) map[string]string {
+func collectNewClients(pkgs []*packages.Package, modules []string) map[string]string {
 	out := map[string]string{}
 	for _, pkg := range pkgs {
-		if !isInModule(pkg.PkgPath, module) {
+		if !isInModule(pkg.PkgPath, modules) {
 			continue
 		}
 		for _, f := range pkg.Syntax {
@@ -222,7 +222,7 @@ func (a *Adapter) processPackage(repo *domain.Repository, pkg *packages.Package,
 
 	// IMPORTS 边：直接依赖的项目内包
 	for importPath := range pkg.Imports {
-		if !isInModule(importPath, repo.Module) {
+		if !isInModule(importPath, repo.Modules) {
 			continue
 		}
 		if err := emit(domain.Item{Fact: &domain.Fact{
@@ -280,6 +280,9 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 	reqVars := map[string]string{}
 	// 本函数已 emit http_call 的 URL（NewRequest 建边后，Do(req) 不重复）
 	httpURLsSeen := map[string]bool{}
+	// 函数值变量（P2-1）：f := g / f := obj.Method → f 名 → *types.Func
+	// （f() 调用点 callee 解析失败时查此表，unused 误报收敛）
+	varFuncs := map[string]*types.Func{}
 
 	ast.Inspect(f, func(n ast.Node) bool {
 		if n == nil {
@@ -305,7 +308,7 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 				if !ok || named.Obj() == nil || named.Obj().Pkg() == nil {
 					continue
 				}
-				if !isInModule(named.Obj().Pkg().Path(), repo.Module) {
+				if !isInModule(named.Obj().Pkg().Path(), repo.Modules) {
 					continue
 				}
 				if svc, ok2 := clientTypeService(named.Obj().Name()); ok2 {
@@ -366,6 +369,10 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 				if objID, ok := a.createObject(pkg, assign.Rhs[0], stack, emit, repo, objCache); ok {
 					objVars[id.Name] = objID
 				}
+				// P2-1：f := g / f := obj.Method → 函数值变量（f() 调用解析用）
+				if fnRef, isFn := funcValueRef(pkg, assign.Rhs[0]); isFn {
+					varFuncs[id.Name] = fnRef
+				}
 				// §18：c := pb.NewXxxClient(conn) → gRPC 客户端对象（服务名）
 				if call, isCall := assign.Rhs[0].(*ast.CallExpr); isCall {
 					if cc, ok2 := resolveCallee(pkg.TypesInfo, call.Fun); ok2 {
@@ -400,7 +407,7 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 				// source = 包节点（保证端点存在；语义：包级初始化调用）
 				if call, isCall := vs.Values[0].(*ast.CallExpr); isCall {
 					if callee, ok2 := resolveCallee(pkg.TypesInfo, call.Fun); ok2 &&
-						callee.Pkg() != nil && isInModule(callee.Pkg().Path(), repo.Module) {
+						callee.Pkg() != nil && isInModule(callee.Pkg().Path(), repo.Modules) {
 						calleeID, calleeKind := fnID(callee)
 						if calleeID != "" {
 							_ = emit(domain.Item{Node: nodeFor(repo, pkg, callee, calleeID, calleeKind, nil)})
@@ -429,14 +436,7 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 			}
 			return true
 		}
-		// 内建 new(T)：callee 解析失败（builtin 无 Pkg）时单独处理
-		callee, ok := resolveCallee(pkg.TypesInfo, call.Fun)
-		if !ok {
-			if id, isID := call.Fun.(*ast.Ident); isID && id.Name == "new" && len(call.Args) == 1 {
-				a.createObject(pkg, call, stack, emit, repo, objCache)
-			}
-			return true
-		}
+		// 调用者上下文（callee 解析失败的分支也要用）
 		callerDecl := findCallerDecl(stack)
 		if callerDecl == nil {
 			return true // 包级初始化中的调用，MVP 不建边
@@ -447,6 +447,32 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 		}
 		callerID, callerKind := fnID(caller)
 		if callerID == "" {
+			return true
+		}
+		// 内建 new(T)：callee 解析失败（builtin 无 Pkg）时单独处理
+		callee, ok := resolveCallee(pkg.TypesInfo, call.Fun)
+		if !ok {
+			if id, isID := call.Fun.(*ast.Ident); isID {
+				// P2-1：函数值调用 f()——f 由本函数 f := g 赋值
+				// （callee 是局部变量无法解析），查 varFuncs 建 calls
+				if fnRef, hasF := varFuncs[id.Name]; hasF {
+					if fid, fkind := fnID(fnRef); fid != "" {
+						_ = emit(domain.Item{Node: nodeFor(repo, pkg, caller, callerID, callerKind, serviceFlags[callerID])})
+						_ = emit(domain.Item{Node: nodeFor(repo, pkg, fnRef, fid, fkind, nil)})
+						_ = emit(domain.Item{Fact: &domain.Fact{
+							SourceID:   callerID,
+							TargetID:   fid,
+							Kind:       domain.FactCalls,
+							ToolSource: domain.ToolCodeGraph,
+							Confidence: 0.8,
+							Metadata:   map[string]any{"line_num": pkg.Fset.PositionFor(call.Pos(), false).Line},
+						}})
+					}
+				}
+				if id.Name == "new" && len(call.Args) == 1 {
+					a.createObject(pkg, call, stack, emit, repo, objCache)
+				}
+			}
 			return true
 		}
 		// 参数位置的调用（如 A(B(C())) 里的 B(C())）：由外层调用处理为
@@ -585,15 +611,20 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 				}
 			}
 		}
-		// 对象去处：f(x) / f(&T{}) → passes_to 边（对象 → 接收函数）
-		if callee.Pkg() != nil && isInModule(callee.Pkg().Path(), repo.Module) {
-			calleeID, calleeKind := fnID(callee)
-			// 参数位置的嵌套调用：接收者持有返回参数（A(B(C)) → A→B、B→C）
+		// 参数位置的嵌套调用：接收者持有返回参数（A(B(C)) → A→B、B→C）。
+		// P2-2：外部接收者（如 fmt.Errorf("%v", joinIDs(x))）也处理——
+		// 否则 joinIDs 无入边被 unused 误报。
+		if callee.Pkg() != nil {
+			calleeID, _ := fnID(callee)
 			for _, arg := range call.Args {
 				if inner, isCall := arg.(*ast.CallExpr); isCall {
 					a.handleNestedArg(pkg, inner, calleeID, emit, repo)
 				}
 			}
+		}
+		// 对象去处：f(x) / f(&T{}) → passes_to 边（对象 → 接收函数）
+		if callee.Pkg() != nil && isInModule(callee.Pkg().Path(), repo.Modules) {
+			calleeID, calleeKind := fnID(callee)
 			for _, arg := range call.Args {
 				var objID domain.CanonicalID
 				var ok2 bool
@@ -691,11 +722,11 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 		// calls 边——"允许展开一层外部包"：从调用链（如 New）展开即可见
 		// 外部接收者（HandleFunc），进而展开它的持有参数关系。仅限"函数
 		// 作为参数"场景（普通外部调用如 fmt.Println 不建边，避免图爆炸）。
-		externalCallee := callee.Pkg() != nil && !isInModule(callee.Pkg().Path(), repo.Module)
+		externalCallee := callee.Pkg() != nil && !isInModule(callee.Pkg().Path(), repo.Modules)
 		if calleeID != "" && calleeID != callerID {
 			for _, arg := range call.Args {
 				fn := argFuncRef(pkg, arg)
-				if fn == nil || fn.Pkg() == nil || !isInModule(fn.Pkg().Path(), repo.Module) {
+				if fn == nil || fn.Pkg() == nil || !isInModule(fn.Pkg().Path(), repo.Modules) {
 					continue // 参数函数必须是项目内符号（有节点）
 				}
 				paramID, paramKind := fnID(fn)
@@ -724,7 +755,7 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 				}
 			}
 		}
-		if callee.Pkg() == nil || !isInModule(callee.Pkg().Path(), repo.Module) {
+		if callee.Pkg() == nil || !isInModule(callee.Pkg().Path(), repo.Modules) {
 			return true // 内建/外部函数不建边
 		}
 		if calleeID == "" || calleeID == callerID {
@@ -774,6 +805,24 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 		return true
 	})
 	return nil
+}
+
+// funcValueRef 解析函数值引用（P2-1）：g（函数名 Ident）或 obj.M
+// （方法值 SelectorExpr）；非函数值返回 ok=false。
+func funcValueRef(pkg *packages.Package, expr ast.Expr) (*types.Func, bool) {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		if fn, ok := pkg.TypesInfo.ObjectOf(e).(*types.Func); ok {
+			return fn, true
+		}
+	case *ast.SelectorExpr:
+		if sel := pkg.TypesInfo.Selections[e]; sel != nil {
+			if fn, ok := sel.Obj().(*types.Func); ok {
+				return fn, true
+			}
+		}
+	}
+	return nil, false
 }
 
 // argFuncRef 将调用参数解析为函数引用（作为参数传入的回调）：
@@ -839,7 +888,7 @@ func (a *Adapter) markHTTPHandlers(repo *domain.Repository, pkg *packages.Packag
 			continue
 		}
 		obj := named.Obj()
-		if obj.Pkg() == nil || !isInModule(obj.Pkg().Path(), repo.Module) {
+		if obj.Pkg() == nil || !isInModule(obj.Pkg().Path(), repo.Modules) {
 			continue
 		}
 		pos := pkg.Fset.PositionFor(obj.Pos(), false)
@@ -885,7 +934,7 @@ func (a *Adapter) emitStructFields(repo *domain.Repository, pkg *packages.Packag
 			if !ok {
 				continue // 别名（type T = struct{...}）无具名类型
 			}
-			if named.Obj().Pkg() == nil || !isInModule(named.Obj().Pkg().Path(), repo.Module) {
+			if named.Obj().Pkg() == nil || !isInModule(named.Obj().Pkg().Path(), repo.Modules) {
 				continue
 			}
 			fields := []map[string]any{}
@@ -971,7 +1020,7 @@ func (a *Adapter) emitMethodReceiver(repo *domain.Repository, pkg *packages.Pack
 		if !ok {
 			continue // 匿名结构体上的方法
 		}
-		if named.Obj().Pkg() == nil || !isInModule(named.Obj().Pkg().Path(), repo.Module) {
+		if named.Obj().Pkg() == nil || !isInModule(named.Obj().Pkg().Path(), repo.Modules) {
 			continue
 		}
 		recvID := canonicalizer.GoSymbolID(named.Obj().Pkg().Path(), named.Obj().Name())
@@ -1048,7 +1097,7 @@ func (a *Adapter) createObject(pkg *packages.Package, expr ast.Expr, stack []ast
 	if _, ok := named.Underlying().(*types.Struct); !ok {
 		return "", false // 仅 struct（排除 map/slice 等复合字面量）
 	}
-	if named.Obj().Pkg() == nil || !isInModule(named.Obj().Pkg().Path(), repo.Module) {
+	if named.Obj().Pkg() == nil || !isInModule(named.Obj().Pkg().Path(), repo.Modules) {
 		return "", false
 	}
 	structID := canonicalizer.GoSymbolID(named.Obj().Pkg().Path(), named.Obj().Name())
@@ -1111,7 +1160,7 @@ func handlerFuncNode(pkg *packages.Package, call *ast.CallExpr, repo *domain.Rep
 		obj = pkg.TypesInfo.Defs[id]
 	}
 	fn, ok := obj.(*types.Func)
-	if !ok || fn.Pkg() == nil || !isInModule(fn.Pkg().Path(), repo.Module) {
+	if !ok || fn.Pkg() == nil || !isInModule(fn.Pkg().Path(), repo.Modules) {
 		return nil
 	}
 	fnID, fnKind := fnID(fn)
@@ -1145,7 +1194,7 @@ func serviceImplNode(pkg *packages.Package, call *ast.CallExpr, repo *domain.Rep
 		return nil // 匿名/接口类型无法定位到具体实现
 	}
 	obj := named.Obj()
-	if obj.Pkg() == nil || !isInModule(obj.Pkg().Path(), repo.Module) {
+	if obj.Pkg() == nil || !isInModule(obj.Pkg().Path(), repo.Modules) {
 		return nil
 	}
 	pos := pkg.Fset.PositionFor(obj.Pos(), false)
@@ -1230,9 +1279,11 @@ func (a *Adapter) handleNestedArg(pkg *packages.Package, call *ast.CallExpr, rec
 	if !ok {
 		return
 	}
-	if callee.Pkg() == nil || !isInModule(callee.Pkg().Path(), repo.Module) {
-		return
+	if callee.Pkg() == nil {
+		return // 内建（无 Pkg）：不建
 	}
+	// P2-2：外部接收者（fmt.Errorf）也建轻量节点 + passes_result——
+	// 嵌套调用链（joinIDs）须有入边，unused 不误报
 	calleeID, calleeKind := fnID(callee)
 	if calleeID == "" || calleeID == receiverID {
 		return
@@ -1252,7 +1303,7 @@ func (a *Adapter) handleNestedArg(pkg *packages.Package, call *ast.CallExpr, rec
 			continue
 		}
 		fn := argFuncRef(pkg, inner)
-		if fn == nil || fn.Pkg() == nil || !isInModule(fn.Pkg().Path(), repo.Module) {
+		if fn == nil || fn.Pkg() == nil || !isInModule(fn.Pkg().Path(), repo.Modules) {
 			continue
 		}
 		paramID, paramKind := fnID(fn)
@@ -1544,11 +1595,21 @@ func relPath(repoPath, abs string) string {
 	return filepath.ToSlash(rel)
 }
 
-func isInModule(pkgPath, module string) bool {
+// isInModule 判断包路径是否属于任一被索引 module（自身或子包；P2-3
+// 多 go.mod——任一 module 前缀匹配即项目内）。
+func isInModule(pkgPath string, modules []string) bool {
 	logger := zap.L()
 	logger.Debug("enter isInModule")
 	defer logger.Debug("exit isInModule")
-	return pkgPath == module || strings.HasPrefix(pkgPath, module+"/")
+	for _, m := range modules {
+		if m == "" {
+			continue
+		}
+		if pkgPath == m || strings.HasPrefix(pkgPath, m+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // unquoteMethodPath 校验并还原字符串字面量为 gRPC 方法路径

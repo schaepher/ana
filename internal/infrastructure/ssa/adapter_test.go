@@ -40,7 +40,7 @@ func indexFixtureFull(t *testing.T, files map[string]string) ([]*domain.CodeEnti
 	var facts []*domain.Fact
 	var summaries []*domain.FunctionFieldSummary
 	adapter := &Adapter{}
-	repo := &domain.Repository{Path: dir, Module: "example.com/mtest"}
+	repo := &domain.Repository{Path: dir, Module: "example.com/mtest", Modules: []string{"example.com/mtest"}}
 	pkgs, err := loadTestPackages(dir)
 	if err != nil {
 		t.Fatalf("load: %v", err)

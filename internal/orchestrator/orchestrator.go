@@ -165,18 +165,108 @@ func (o *Orchestrator) IncrementalBuild(ctx context.Context, changedFiles []stri
 
 // loadPackages 统一加载仓库 go/packages（内存优化：AST/SSA 适配器共享
 // 一次类型检查，避免各自 Load 翻倍）。返回共享结果供适配器复用。
+// loadPackages 统一加载仓库 go/packages（内存优化：AST/SSA 适配器共享
+// 一次类型检查，避免各自 Load 翻倍）。返回共享结果供适配器复用。
+// P2-3 多 go.mod：每个 module 单独 Load（go/packages 不能跨 module），
+// 按 PkgPath 去重合并（同一包路径只属于一个 module，Go 语义保证）。
 func (o *Orchestrator) loadPackages(ctx context.Context) ([]*packages.Package, error) {
-	cfg := &packages.Config{
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
-			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps,
-		Dir: o.Repo.Path,
-		// Tests 默认 false：不加载 _test.go（与适配器既有语义一致）
+	dirs := []string{o.Repo.Path}
+	for i, d := range o.Repo.ModuleDirs {
+		if i == 0 {
+			continue // 根 module 目录即仓库根
+		}
+		dirs = append(dirs, filepath.Join(o.Repo.Path, d))
 	}
-	pkgs, err := packages.Load(cfg, "./...")
+	seen := map[string]bool{}
+	var out []*packages.Package
+	for _, dir := range dirs {
+		cfg := &packages.Config{
+			Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
+				packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps,
+			Dir: dir,
+			// Tests 默认 false：不加载 _test.go（与适配器既有语义一致）
+		}
+		pkgs, err := packages.Load(cfg, "./...")
+		if err != nil {
+			return nil, fmt.Errorf("go/packages load (%s): %w", dir, err)
+		}
+		for _, p := range pkgs {
+			if seen[p.PkgPath] {
+				continue
+			}
+			seen[p.PkgPath] = true
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
+// DiscoverModules 递归扫描仓库根下的 go.mod（跳过 .git/.codeintel/vendor/
+// node_modules），返回 module 路径与相对仓库根的目录（根 go.mod 在前）。
+// P2-3 多 go.mod monorepo。
+func DiscoverModules(repoPath string) (modules []string, dirs []string, err error) {
+	rootMod, err := readGoModModule(filepath.Join(repoPath, "go.mod"))
 	if err != nil {
-		return nil, fmt.Errorf("go/packages load: %w", err)
+		return nil, nil, err
 	}
-	return pkgs, nil
+	modules = append(modules, rootMod)
+	dirs = append(dirs, ".")
+	var walk func(dir string) error
+	walk = func(dir string) error {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return err
+		}
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			switch e.Name() {
+			case ".git", ".codeintel", "vendor", "node_modules":
+				continue
+			}
+			sub := filepath.Join(dir, e.Name())
+			if _, err := os.Stat(filepath.Join(sub, "go.mod")); err == nil {
+				m, err := readGoModModule(filepath.Join(sub, "go.mod"))
+				if err != nil {
+					continue // 无法解析的 go.mod 跳过
+				}
+				rel, _ := filepath.Rel(repoPath, sub)
+				modules = append(modules, m)
+				dirs = append(dirs, filepath.ToSlash(rel))
+				continue // module 目录内不再嵌套扫描（Go 语义：嵌套 module 独立）
+			}
+			if err := walk(sub); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := walk(repoPath); err != nil {
+		return nil, nil, err
+	}
+	return modules, dirs, nil
+}
+
+// readGoModModule 解析 go.mod 的 module 指令。
+func readGoModModule(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read go.mod: %w", err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if rest, ok := strings.CutPrefix(line, "module "); ok {
+			m := strings.TrimSpace(rest)
+			if i := strings.Index(m, " "); i >= 0 {
+				m = m[:i]
+			}
+			if m != "" {
+				return m, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("go.mod 无 module 指令: %s", path)
 }
 
 // deleteFiles 删除指定文件的节点（级联删边与摘要行）；分批避免 SQLite

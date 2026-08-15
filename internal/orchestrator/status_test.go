@@ -38,7 +38,7 @@ func newTestOrchestrator(t *testing.T, adapters []domain.IndexerPort) (*Orchestr
 	}
 	t.Cleanup(func() { db.Close() })
 	o := &Orchestrator{
-		Repo:     &domain.Repository{Path: t.TempDir(), Module: "example.com/m"},
+		Repo:     &domain.Repository{Path: t.TempDir(), Module: "example.com/m", Modules: []string{"example.com/m"}},
 		Adapters: adapters,
 		RepoImpl: sqlite.NewRepo(db),
 	}

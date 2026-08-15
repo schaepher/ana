@@ -73,7 +73,12 @@ func cmdServe(ctx context.Context, args []string) int {
 	srv := server.New(ctx, acts, webFS, abs)
 	// 增量构建自动触发（field_trace.md §20.1）：POST /incremental →
 	// 变更检测（复用 update 的 git 逻辑）+ IncrementalBuild 异步执行
-	orch := orchestrator.New(&domain.Repository{Path: abs, Module: ""}, db)
+	repo, err := buildRepo(abs)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: 模块解析失败（增量更新不可用）: %v\n", err)
+		repo = &domain.Repository{Path: abs}
+	}
+	orch := orchestrator.New(repo, db)
 	srv.SetBuildFunc(func() (string, error) {
 		changed, err := detectChangedGoFiles(abs)
 		if err != nil {

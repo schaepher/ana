@@ -19,12 +19,21 @@ type moduleConfig struct {
 }
 
 // ModuleOf 包路径 → 模块名（modules.yaml 前缀匹配，最长前缀优先；
-// 配置前缀为 module 相对路径——先去掉 go.mod 的 module 前缀；
-// 未匹配归 _root）。
+// 配置前缀为 module 相对路径——先去掉所在 go.mod 的 module 前缀
+// （P2-3 多 go.mod：任一 module 前缀匹配即剥离）；未匹配归 _root）。
 func (a *Actions) ModuleOf(pkgPath string) string {
-	rel := strings.TrimPrefix(pkgPath, a.moduleName()+"/")
+	rel := pkgPath
+	for _, m := range a.modules() {
+		if m == "" {
+			continue
+		}
+		if r, ok := strings.CutPrefix(pkgPath, m+"/"); ok {
+			rel = r
+			break
+		}
+	}
 	if rel == pkgPath {
-		rel = pkgPath // 不在 module 下（外部包）：按原路径匹配
+		rel = pkgPath // 不在任何 module 下（外部包）：按原路径匹配
 	}
 	cfg := a.moduleConfig()
 	best := ""
@@ -41,20 +50,59 @@ func (a *Actions) ModuleOf(pkgPath string) string {
 	return "_root"
 }
 
-// moduleName 从 <repo>/go.mod 解析 module 路径（缓存）。
-func (a *Actions) moduleName() string {
-	if a.modName != "" {
-		return a.modName
+// modules 从仓库根递归扫描 go.mod 解析全部 module 路径（P2-3 多 go.mod；
+// 缓存；根 module 在前）。
+func (a *Actions) modules() []string {
+	if len(a.modNames) > 0 {
+		return a.modNames
 	}
-	data, err := os.ReadFile(filepath.Join(a.repo.RepoPath(), "go.mod"))
+	var out []string
+	var walk func(dir string)
+	walk = func(dir string) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return
+		}
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			switch e.Name() {
+			case ".git", ".codeintel", "vendor", "node_modules":
+				continue
+			}
+			sub := filepath.Join(dir, e.Name())
+			if m := readGoModModule(sub); m != "" {
+				out = append(out, m)
+				continue // module 目录内不再嵌套扫描
+			}
+			walk(sub)
+		}
+	}
+	walk(a.repo.RepoPath())
+	// 根 go.mod（若存在）
+	root := readGoModModule(a.repo.RepoPath())
+	if root != "" {
+		out = append([]string{root}, out...)
+	}
+	a.modNames = out
+	return out
+}
+
+// readGoModModule 读取目录下 go.mod 的 module 行（无 go.mod 返回空）。
+func readGoModModule(dir string) string {
+	data, err := os.ReadFile(filepath.Join(dir, "go.mod"))
 	if err != nil {
 		return ""
 	}
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if rest, ok := strings.CutPrefix(line, "module "); ok {
-			a.modName = strings.TrimSpace(rest)
-			return a.modName
+			m := strings.TrimSpace(rest)
+			if i := strings.Index(m, " "); i >= 0 {
+				m = m[:i]
+			}
+			return m
 		}
 	}
 	return ""

@@ -153,5 +153,11 @@ const (
 // Repository 描述被索引的代码仓库。
 type Repository struct {
 	Path   string // 绝对路径
-	Module string // go.mod 中的 module 路径
+	Module string // 根 go.mod 中的 module 路径（主 module）
+	// Modules 全部 module 路径（P2-3 多 go.mod monorepo）：含根 module，
+	// 按发现顺序（根在前）；单 module 仓库与 Module 相同
+	Modules []string
+	// ModuleDirs 与 Modules 对齐的 module 目录（相对仓库根，根为 "."）——
+	// 加载与 scip-go 需要按目录定位 module
+	ModuleDirs []string
 }
