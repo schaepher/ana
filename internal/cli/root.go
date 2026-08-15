@@ -22,6 +22,8 @@ func Main(ctx context.Context, args []string) int {
 		return cmdInit(ctx, args[1:])
 	case "update":
 		return cmdUpdate(ctx, args[1:])
+	case "reindex":
+		return cmdReindex(ctx, args[1:])
 	case "query":
 		return cmdQuery(args[1:])
 	case "export":

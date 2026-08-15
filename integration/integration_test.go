@@ -51,6 +51,46 @@ func scipGoAvailable() bool {
 	return false
 }
 
+// TestReindexRestores：reindex 一步重建——破坏索引数据后 reindex
+// 恢复完整索引（删除旧库 + 全量 init）。
+func TestReindexRestores(t *testing.T) {
+	if !scipGoAvailable() {
+		t.Skip("scip-go not found (install: go install github.com/scip-code/scip-go/cmd/scip-go@latest)")
+	}
+	dir := fixtureRepo(t)
+
+	if code := runCLI(t, "init", "--repo", dir); code != 0 {
+		t.Fatalf("init exit = %d", code)
+	}
+	// 破坏库：清空 nodes（模拟损坏或旧 schema）
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, err := db.Exec("DELETE FROM nodes"); err != nil {
+		t.Fatalf("破坏库失败: %v", err)
+	}
+	db.Close()
+
+	// reindex 重建
+	if code := runCLI(t, "reindex", "--repo", dir); code != 0 {
+		t.Fatalf("reindex exit = %d, want 0", code)
+	}
+	db2, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatalf("reindex 后 Open: %v", err)
+	}
+	defer db2.Close()
+	repo := sqlite.NewRepo(db2)
+	if _, err := repo.GetSymbol("symbol:go:example.com/app:main"); err != nil {
+		t.Errorf("reindex 后 main 符号缺失: %v", err)
+	}
+	nodes, edges, err := repo.Counts()
+	if err != nil || nodes == 0 || edges == 0 {
+		t.Errorf("reindex 后图为空: nodes=%d edges=%d err=%v", nodes, edges, err)
+	}
+}
+
 // fixtureRepo 建真实 Go 模块仓库（覆盖：跨包方法调用/接口/回调/普通函数）。
 func fixtureRepo(t *testing.T) string {
 	t.Helper()

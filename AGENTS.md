@@ -17,8 +17,9 @@ go build ./...                      # 编译
 go test ./...                       # 测试（需要 scip-go 在 PATH 或 go bin）
 go build -o codeintel ./cmd/codeintel
 # 对任意 Go 仓库构建索引并查询：
-#   codeintel init --repo <path>
-#   codeintel query symbol|callers|callees|impact ...
+#   codeintel init --repo <path>          # 全量构建
+#   codeintel reindex --repo <path>       # 重建（删旧库绕过 schema 检查 + init）
+#   codeintel query symbol|callers|callees|impact|table ...
 ```
 
 ## 架构与目录
