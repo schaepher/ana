@@ -1354,6 +1354,36 @@ func (r *Repo) FindFieldReads(fullPath string) ([]*domain.CodeEntity, error) {
 	return scanNodes(rows)
 }
 
+// ResetGraphTables 清空图数据表（DROP + 重建）——全量重建语义
+// （orchestrator.FullBuild 用）。比 DELETE 全表快（无逐行 WAL/索引
+// 维护）且释放文件空间；build_metadata（构建记录）与未来配置表
+// 保留。FK 顺序：先 DROP 子表（edges/function_field_summary）
+// 再 DROP 父表（nodes）。
+func (r *Repo) ResetGraphTables() error {
+	logger := zap.L()
+	logger.Debug("enter (Repo).ResetGraphTables")
+	defer logger.Debug("exit (Repo).ResetGraphTables")
+	tx, err := r.Begin()
+	if err != nil {
+		return fmt.Errorf("begin reset tx: %w", err)
+	}
+	defer tx.Rollback()
+	for _, stmt := range []string{
+		"DROP TABLE IF EXISTS edges",
+		"DROP TABLE IF EXISTS function_field_summary",
+		"DROP TABLE IF EXISTS nodes",
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("reset %s: %w", stmt, err)
+		}
+	}
+	// 重建全部表（build_metadata 已存在则 IF NOT EXISTS 跳过）
+	if _, err := tx.Exec(schema); err != nil {
+		return fmt.Errorf("rebuild schema: %w", err)
+	}
+	return tx.Commit()
+}
+
 // GetTableColumns 按表名聚合列虚拟节点（query table）：Name=表（整表行）
 // 或 表.列（Q97 持久化映射）；每列带写入方（summary_io 入边 source 值节点
 // 的所属函数与行号）。读取方（出边）通常为空——SELECT 读路径未解析。

@@ -84,12 +84,10 @@ func (o *Orchestrator) FullBuild(ctx context.Context) (*BuildResult, error) {
 	defer logger.Debug("exit (Orchestrator).FullBuild")
 	start := time.Now()
 
-	// 清空旧数据（全量重建语义）
-	if _, err := o.RepoImpl.Exec("DELETE FROM edges"); err != nil {
-		return nil, fmt.Errorf("clear edges: %w", err)
-	}
-	if _, err := o.RepoImpl.Exec("DELETE FROM nodes"); err != nil {
-		return nil, fmt.Errorf("clear nodes: %w", err)
+	// 清空旧数据（全量重建语义）：DROP+CREATE 图数据表（比 DELETE 全表
+	// 快且释放空间；build_metadata 与配置表保留）
+	if err := o.RepoImpl.ResetGraphTables(); err != nil {
+		return nil, fmt.Errorf("reset graph tables: %w", err)
 	}
 	pkgs, err := o.loadPackages(ctx)
 	if err != nil {
