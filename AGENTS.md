@@ -6,7 +6,9 @@
 
 `codeintel` 是一个 Go 代码库智能索引系统：对 Go module 仓库做静态分析，
 产出 SQLite 代码图（`.codeintel/codeintel.db`），通过 CLI 提供符号与调用关系查询。
-设计权威是 [`docs/TD.md`](docs/TD.md)（v2.0，22 个决策点均已确认）。
+设计权威是 [`docs/TD.md`](docs/TD.md)（v2.0，22 个决策点均已确认）；
+**图数据模型总表（节点/边/属性/置信度/表结构）见 [`docs/data-model.md`](docs/data-model.md)**——
+理解本项目优先读它，再读 field_trace.md 各功能 §。
 
 ## 常用命令
 
