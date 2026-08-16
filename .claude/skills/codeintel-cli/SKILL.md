@@ -21,7 +21,7 @@ make install
 
 ```bash
 codeintel init --repo <path> [--workers N] # 全量构建索引（--workers N：SSA 按包并发数，默认 1=串行；内存充足可调 4/8——须有 go.mod；go.work 根目录会提示进模块目录）
-codeintel update --repo <path>             # 增量更新（git 检测变更文件，全量分析+增量写入）
+codeintel update --repo <path> [--workers N] # 增量更新（git 检测变更文件，全量分析+增量写入；--workers 同 init）
 codeintel serve --repo <path> --addr :8096 # 启动图探索 Web 服务（前端 AntV G6，端口默认 :8090）
 codeintel query <sub> ... --repo <path>    # 查询（见下；默认加 --json 取结构化输出）
 codeintel export --repo <path> [--out x.json]  # 导出字段双层索引 JSON（字段→产生者/消费者）
@@ -30,7 +30,7 @@ codeintel export graph --type value-trace|callees|lifecycle --target <节点> [-
                                            # 图导出：value-trace 默认 mermaid（函数分组）、callees 默认 dot、
                                            # lifecycle 生命周期图（[存储]/[观测]/[读]/[写]+条件标注）
 codeintel clean --repo <path> --force      # 删除索引（schema 变更后必须 clean + init 重建）
-codeintel reindex --repo <path>            # 一步重建索引（FullBuild 清空图数据表 DROP+CREATE 重建，不删库文件——配置表保留）
+codeintel reindex --repo <path> [--workers N] # 一步重建索引（FullBuild 清空图数据表 DROP+CREATE 重建，不删库文件；--workers 同 init）
 codeintel version
 ```
 
