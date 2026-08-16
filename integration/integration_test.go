@@ -1216,9 +1216,10 @@ func main() {}
 
 // TestCrossFunctionTraceSelfContained：⑩ 跨函数追踪复现——多种调用方
 // 形态下 trace-forward 应连到被调函数内的实际字段写入：
-//   A. 调用方参数传递（run2(c *Cfg) → fill(c)）
-//   B. 调用方局部变量传递（var c Cfg; fill(&c)，调用方无字段访问无参数）
-//   C. 调用方字段读后传参（s.c → fill）
+//
+//	A. 调用方参数传递（run2(c *Cfg) → fill(c)）
+//	B. 调用方局部变量传递（var c Cfg; fill(&c)，调用方无字段访问无参数）
+//	C. 调用方字段读后传参（s.c → fill）
 func TestCrossFunctionTraceSelfContained(t *testing.T) {
 	if !scipGoAvailable() {
 		t.Skip("scip-go not found")
@@ -2749,5 +2750,194 @@ func (h *Handler) ListOrders() {}
 	if !strings.Contains(out, "svc_a → svc_orders") || !strings.Contains(out, "[http]") ||
 		!strings.Contains(out, "api/orders") {
 		t.Errorf("module-calls 应输出 http 调用 svc_a → svc_orders，output=%q", out)
+	}
+}
+
+// TestInterfaceDispatchIndirectWriteSelfContained：Q154 集成固化——接口
+// 动态分派候选实现内的字段写回传为 wrapper/上游调用方的 indirect_write
+// （实现 → wrapper → 上游逐层传播，INDIRECT_WRITE 边指向每个候选实现）。
+func TestInterfaceDispatchIndirectWriteSelfContained(t *testing.T) {
+	if !scipGoAvailable() {
+		t.Skip("scip-go not found")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/dw\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "main.go"), `package dw
+
+type Order struct {
+	FinalFee int
+}
+
+type FeeCalculator interface {
+	Calculate(o *Order)
+}
+
+type StdCalc struct{}
+
+func (c *StdCalc) Calculate(o *Order) { o.FinalFee = 100 }
+
+type ExpCalc struct{}
+
+func (c *ExpCalc) Calculate(o *Order) { o.FinalFee = 200 }
+
+// wrapper：经接口调用分派（动态 invoke，无静态 callee）
+func Process(fc FeeCalculator, o *Order) {
+	fc.Calculate(o)
+}
+
+// 上游：静态调用 wrapper，间接写闭包传播到
+func Run() {
+	Process(&StdCalc{}, &Order{})
+}
+
+func main() { Run() }
+`)
+	if code := runCLI(t, "init", "--repo", dir); code != 0 {
+		t.Fatalf("init exit = %d", code)
+	}
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := sqlite.NewRepo(db)
+
+	// 实现：direct_write
+	for _, impl := range []string{"(StdCalc).Calculate", "(ExpCalc).Calculate"} {
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM function_field_summary
+			WHERE function_id = ? AND access_kind = 'direct_write'
+			  AND field_path = 'example.com/dw.Order.FinalFee'`,
+			"symbol:go:example.com/dw:"+impl).Scan(&n); err != nil {
+			t.Fatalf("direct_write 查询: %v", err)
+		}
+		if n != 1 {
+			t.Errorf("%s direct_write FinalFee = %d, want 1", impl, n)
+		}
+	}
+	// wrapper：两个实现的写都回传为 indirect_write
+	for _, fn := range []string{"Process", "Run"} {
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM function_field_summary
+			WHERE function_id = ? AND access_kind = 'indirect_write'
+			  AND field_path = 'example.com/dw.Order.FinalFee'`,
+			"symbol:go:example.com/dw:"+fn).Scan(&n); err != nil {
+			t.Fatalf("indirect_write 查询: %v", err)
+		}
+		if n != 1 {
+			t.Errorf("%s indirect_write FinalFee = %d, want 1（动态分派回传）", fn, n)
+		}
+	}
+	// INDIRECT_WRITE 边：wrapper → 每个候选实现（动态派发语义）
+	for _, impl := range []string{"(StdCalc).Calculate", "(ExpCalc).Calculate"} {
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM edges
+			WHERE source_id = 'symbol:go:example.com/dw:Process'
+			  AND target_id = ? AND kind = 'indirect_write'`,
+			"symbol:go:example.com/dw:"+impl).Scan(&n); err != nil {
+			t.Fatalf("indirect_write 边查询: %v", err)
+		}
+		if n != 1 {
+			t.Errorf("INDIRECT_WRITE 边 Process → %s = %d, want 1", impl, n)
+		}
+	}
+	_ = repo
+}
+
+// TestValueTraceDedupSelfContained：Q155 集成固化——value-trace 递归
+// CTE 按 (id, dir) 去重。phi 汇聚（x = phi(a, b)，两分支 alloc 汇入）：
+// 从 FinalFee.write 反向，每个节点恰好一行、深度正确，两分支都出现。
+func TestValueTraceDedupSelfContained(t *testing.T) {
+	if !scipGoAvailable() {
+		t.Skip("scip-go not found")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/vtdup\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "main.go"), `package vtdup
+
+type Rec struct {
+	FinalFee float64
+}
+
+// phi 汇聚：x = phi(a, b)，两分支 alloc 写入同一字段
+func join(flag bool) {
+	var x *Rec
+	if flag {
+		x = &Rec{}
+	} else {
+		x = &Rec{}
+	}
+	x.FinalFee = 5
+}
+
+func main() { join(true) }
+`)
+	if code := runCLI(t, "init", "--repo", dir); code != 0 {
+		t.Fatalf("init exit = %d", code)
+	}
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := sqlite.NewRepo(db)
+	// x 被 SSA 寄存器化（t1.FinalFee）——instance_path 用 LIKE 匹配
+	var writeID string
+	if err := db.QueryRow(`SELECT id FROM nodes
+		WHERE kind = 'field_access'
+		  AND json_extract(properties, '$.func_id') = 'symbol:go:example.com/vtdup:join'
+		  AND json_extract(properties, '$.instance_path') LIKE '%.FinalFee'
+		  AND json_extract(properties, '$.access_kind') = 'write'
+		LIMIT 1`).Scan(&writeID); err != nil {
+		t.Fatalf("x.FinalFee.write 节点缺失: %v", err)
+	}
+	rows, err := repo.GetValueTrace(domain.CanonicalID(writeID), 8)
+	if err != nil {
+		t.Fatalf("GetValueTrace: %v", err)
+	}
+	// 每 (id, dir) 恰好一行
+	seen := map[string]int{}
+	for _, row := range rows {
+		key := string(row.ID) + "|" + string(rune('0'+row.Dir))
+		seen[key]++
+	}
+	for key, n := range seen {
+		if n != 1 {
+			t.Errorf("节点重复: %s 出现 %d 次", key, n)
+		}
+	}
+	// 锚点 write depth 0；depth1 = phi 汇聚值 t1 + 常量 5（两条入边）；
+	// depth2 = 两分支 alloc（t0/t3，phi_operand 汇聚）
+	depthOf := map[string]int{}
+	for _, row := range rows {
+		depthOf[string(row.ID)] = row.Depth
+	}
+	if d, ok := depthOf[writeID]; !ok || d != 0 {
+		t.Errorf("锚点 write depth = %d, want 0", d)
+	}
+	countAt := func(d int) int {
+		n := 0
+		for _, v := range depthOf {
+			if v == d {
+				n++
+			}
+		}
+		return n
+	}
+	if n := countAt(1); n != 2 {
+		t.Errorf("depth1 节点数 = %d, want 2（phi 值 t1 + 常量 5）", n)
+	}
+	if n := countAt(2); n != 2 {
+		t.Errorf("depth2 节点数 = %d, want 2（两分支 alloc 汇聚入 phi）", n)
+	}
+	// 汇聚点 phi（t1）恰好一行且双向可见：反向链含两分支，正向链到 write
+	phiSeen := false
+	for _, row := range rows {
+		if strings.Contains(string(row.ID), "#t1") {
+			phiSeen = true
+		}
+	}
+	if !phiSeen {
+		t.Errorf("phi 汇聚值 t1 未出现在反向链")
 	}
 }
