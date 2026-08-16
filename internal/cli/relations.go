@@ -24,6 +24,9 @@ func queryRelations(acts *action.Actions, table, format string, opts outputOpts)
 		return printRelationsMermaid(table, rels)
 	}
 	if opts.json {
+		if rels == nil {
+			rels = []*domain.TableRelation{} // nil slice 会输出 null——无关联时输出 []
+		}
 		data, err := json.MarshalIndent(rels, "", "  ")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
