@@ -89,14 +89,24 @@ func (o *Orchestrator) FullBuild(ctx context.Context) (*BuildResult, error) {
 	if err := o.RepoImpl.ResetGraphTables(); err != nil {
 		return nil, fmt.Errorf("reset graph tables: %w", err)
 	}
+	// Q168 诊断：orchestrator 级阶段耗时（loadPackages/写库为 ssa 阶段
+	// 日志盲区——大仓库 20 分钟定位）
+	orchestraStart := time.Now()
+	orchStage := func(name string) {
+		logger.Info("orchestrator stage",
+			zap.String("stage", name), zap.Duration("elapsed", time.Since(orchestraStart)))
+		orchestraStart = time.Now()
+	}
 	pkgs, err := o.loadPackages(ctx)
 	if err != nil {
 		return nil, err
 	}
+	orchStage("loadPackages")
 	results, skipped, err := o.runAdapters(ctx, pkgs, nil, nil)
 	if err != nil {
 		return nil, err
 	}
+	orchStage("runAdapters")
 	return o.finishBuild(start, results, skipped, "all")
 }
 
@@ -293,6 +303,8 @@ func deleteFiles(repo *sqlite.Repo, files []string) error {
 // keep(item) 为 true 的条目）。pkgs 为共享加载的 go/packages 结果
 // （AST/SSA 复用，避免重复类型检查）。返回各适配器结果与跳过的 FK 冲突边数。
 func (o *Orchestrator) runAdapters(ctx context.Context, pkgs []*packages.Package, keep func(domain.Item) bool, changedFiles []string) ([]AdapterResult, int, error) {
+	logger := logging.FromContext(ctx)
+	runStart := time.Now()
 	// 增量更新：AST 适配器文件级跳过（§20.3 唯一真实加速点）；nil = 全量。
 	// 每次运行重置，避免上次增量残留影响后续全量构建。
 	for _, a := range o.Adapters {
@@ -311,6 +323,8 @@ func (o *Orchestrator) runAdapters(ctx context.Context, pkgs []*packages.Package
 
 	// 写库协程：分批提交（1000 条/事务）
 	batch := newBatch()
+	consumeStart := time.Now()
+	consumeCount := 0
 	go func() {
 		defer close(flushed)
 		for item := range ch {
@@ -329,10 +343,19 @@ func (o *Orchestrator) runAdapters(ctx context.Context, pkgs []*packages.Package
 			if item.Origins != nil {
 				batch.origins = append(batch.origins, item.Origins...)
 			}
+			consumeCount++
+			if consumeCount%500 == 0 {
+				logger.Info("consume progress", zap.Int("items", consumeCount),
+					zap.Duration("elapsed", time.Since(consumeStart)))
+			}
 			if len(batch.nodes) >= BatchSize || len(batch.edges) >= BatchSize || len(batch.summaries) >= BatchSize || len(batch.origins) >= BatchSize {
 				if err := o.flush(batch, &mu, &skipped); err != nil {
 					fmt.Fprintf(os.Stderr, "write batch: %v\n", err)
 				}
+				// Q168 修复：flush 后重置 batch——否则 batch 一旦某维度
+				// ≥ BatchSize，后续每个 item 都触发一次 flush（每 item
+				// 一个事务，13000 条 → 35s 写库瓶颈）
+				batch = newBatch()
 			}
 		}
 		if err := o.flush(batch, &mu, &skipped); err != nil {
@@ -365,8 +388,12 @@ func (o *Orchestrator) runAdapters(ctx context.Context, pkgs []*packages.Package
 		}(a)
 	}
 	wg.Wait()
+	logger.Info("orchestrator stage", zap.String("stage", "adapters done"),
+		zap.Duration("elapsed", time.Since(runStart)))
 	close(ch)
 	<-flushed // 等待写库协程排空
+	logger.Info("orchestrator stage", zap.String("stage", "flush done"),
+		zap.Duration("elapsed", time.Since(runStart)))
 	return results, skipped, nil
 }
 
@@ -440,7 +467,14 @@ func (o *Orchestrator) flush(b *batchT, mu *sync.Mutex, skipped *int) error {
 	if len(b.nodes) == 0 && len(b.edges) == 0 && len(b.summaries) == 0 {
 		return nil
 	}
+	// Q168 诊断：flush 每次耗时（写库协程慢时定位）
+	flushStart := time.Now()
 	res, err := o.RepoImpl.SaveBatchStats(b.nodes, b.edges, b.summaries, b.origins)
+	if time.Since(flushStart) > 100*time.Millisecond {
+		logger.Info("flush slow", zap.Duration("elapsed", time.Since(flushStart)),
+			zap.Int("nodes", len(b.nodes)), zap.Int("edges", len(b.edges)),
+			zap.Int("summaries", len(b.summaries)), zap.Int("origins", len(b.origins)))
+	}
 	if err != nil {
 		return err
 	}

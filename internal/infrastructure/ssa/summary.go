@@ -27,48 +27,73 @@ func emitSummaries(data map[domain.CanonicalID]*funcData, alias *aliasResult, em
 	logger := zap.L()
 	logger.Debug("enter emitSummaries")
 	defer logger.Debug("exit emitSummaries")
-	// 间接写闭包：迭代至稳定（有向调用图，最坏 O(V·E)）
+	// 间接写闭包：增量传播（Q168 动态规划/工作列表）——callee 新增写
+	// 条目经反向调用索引只传播给调用者一次：每 (调用边, 写条目) 组合
+	// 至多处理一次 O(E×W)，消除原"迭代至稳定"的轮数因子（调用图深/
+	// 环多时原算法每轮全图遍历 O(D×V×E)，D=传播深度）。
+	// 单调性保证收敛到与迭代版本相同的不动点（传播条件只依赖 callee
+	// 写条目集合，与轮次无关）；调用点级回连（Q90/Q157）语义不变：
+	// 每层覆盖为当前调用点（callLine/callArg）。
 	indirect := map[domain.CanonicalID]map[indirectKey]fieldEntry{}
 	for id := range data {
 		indirect[id] = map[indirectKey]fieldEntry{}
 	}
-	changed := true
-	// Q166：迭代轮次打点——间接写闭包每轮全图遍历，轮数多时定位
+	// 反向调用索引：calleeID → 调用点（caller + callInfo）
+	callers := map[domain.CanonicalID][]indirectSite{}
+	for fID, fd := range data {
+		for _, c := range fd.calls {
+			callers[c.calleeID] = append(callers[c.calleeID], indirectSite{fID, c})
+		}
+	}
+	// pending[g] = g 的新增写条目（direct 初始 + 后续 indirect 增量）
+	pending := map[domain.CanonicalID][]fieldEntry{}
+	var queue []domain.CanonicalID
+	for id, fd := range data {
+		if len(fd.directWrites) > 0 {
+			pending[id] = append(pending[id], fd.directWrites...)
+			queue = append(queue, id)
+		}
+	}
 	roundStart := time.Now()
 	addedTotal := 0
-	for round := 1; changed; round++ {
-		changed = false
-		added := 0
-		for fID, fd := range data {
-			for _, c := range fd.calls {
-				for _, e := range calleeWrites(data, indirect, c.calleeID) {
-					key := indirectKey{e.fieldPath, c.callLine}
-					if _, ok := indirect[fID][key]; ok {
-						continue
-					}
-					// 别名排除（Q80）：确认该调用点无别名 → 不算间接写
-					if alias != nil && alias.excluded[fID][c.calleeID][e.fieldPath] {
-						continue
-					}
-					if !contains(c.argStructPaths, structPathOf(e.fieldPath)) {
-						continue
-					}
-					// 调用点级回连（Q90/Q157）：fID 视角的调用点 = fID 直接
-					// 调用该 callee 的位置与实参（多层闭包传播时覆盖为当前层；
-					// 每 (字段, 调用点) 一条——边发射按边取回连）
-					e.callLine = c.callLine
-					e.callArg = strings.Join(c.argNames, ", ")
-					indirect[fID][key] = e
-					changed = true
-					added++
+	rounds := 0
+	for len(queue) > 0 {
+		g := queue[0]
+		queue = queue[1:]
+		newEntries := pending[g]
+		pending[g] = nil
+		if len(newEntries) == 0 {
+			continue
+		}
+		for _, site := range callers[g] {
+			for _, e := range newEntries {
+				key := indirectKey{e.fieldPath, site.c.callLine}
+				if _, ok := indirect[site.caller][key]; ok {
+					continue
 				}
+				// 别名排除（Q80）：确认该调用点无别名 → 不算间接写
+				if alias != nil && alias.excluded[site.caller][g][e.fieldPath] {
+					continue
+				}
+				if !contains(site.c.argStructPaths, structPathOf(e.fieldPath)) {
+					continue
+				}
+				// 调用点级回连（Q90/Q157）：每 (字段, 调用点) 一条，
+				// 多层闭包传播时覆盖为当前层
+				e.callLine = site.c.callLine
+				e.callArg = strings.Join(site.c.argNames, ", ")
+				indirect[site.caller][key] = e
+				pending[site.caller] = append(pending[site.caller], e)
+				queue = append(queue, site.caller)
+				addedTotal++
 			}
 		}
-		addedTotal += added
-		logger.Info("indirect round",
-			zap.Int("round", round), zap.Int("added", added),
-			zap.Duration("elapsed", time.Since(roundStart)))
-		roundStart = time.Now()
+		rounds++
+		if rounds%50 == 0 {
+			logger.Info("indirect progress",
+				zap.Int("funcs", rounds), zap.Int("added", addedTotal),
+				zap.Duration("elapsed", time.Since(roundStart)))
+		}
 	}
 	logger.Debug("indirect settled", zap.Int("total", addedTotal))
 
@@ -150,6 +175,12 @@ func emitSummaries(data map[domain.CanonicalID]*funcData, alias *aliasResult, em
 		}
 	}
 	return nil
+}
+
+// indirectSite 间接写传播的调用点（Q168 worklist：calleeID → 调用者）。
+type indirectSite struct {
+	caller domain.CanonicalID
+	c      callInfo
 }
 
 // emitSummaryRows 发射单个 access_kind 的摘要行（同字段路径去重，取首条）。

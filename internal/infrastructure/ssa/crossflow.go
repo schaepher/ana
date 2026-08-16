@@ -316,19 +316,34 @@ func (ext *fieldExtractor) emitCall(cc *ssa.CallCommon, callVal ssa.Value) error
 // dispatchOriginOf 判定候选实现的派发来源（Q161）：注册点命中
 // （MakeInterface 具体值 → 接口，见 emitDispatches）→ register 0.9；
 // 否则枚举兜底 enum 0.7。注册点收集一次缓存（全 prog 扫描开销大）。
+// Q168：注册命中按 (iface, candidateKey) 预处理成 map——原逐调用点
+// 线性扫描注册点（动态调用点多时 O(调用点×注册点)）→ O(1) 查找。
 func (ext *fieldExtractor) dispatchOriginOf(iface *types.Named, method string, implFn *types.Func) (string, float64) {
 	if ext.dispatchRegs == nil {
 		ext.dispatchRegs = collectDispatchRegistrations(ext.prog, ext.repo.Modules)
 	}
-	for dyn, site := range ext.dispatchRegs[iface] {
-		t := dynamicTypeOf(dyn, ext.prog)
-		if t == nil {
-			continue
+	if ext.regHits == nil {
+		ext.regHits = map[string]map[string]bool{}
+		for ifc, regs := range ext.dispatchRegs {
+			hits := map[string]bool{}
+			for dyn := range regs {
+				t := dynamicTypeOf(dyn, ext.prog)
+				if ptr, ok := t.(*types.Pointer); ok {
+					t = ptr.Elem() // 注册点多为 &T（指针）；方法查找解指针
+				}
+				named, ok := t.(*types.Named)
+				if !ok {
+					continue
+				}
+				for i := 0; i < named.NumMethods(); i++ {
+					hits[candidateKey(named.Method(i))] = true
+				}
+			}
+			ext.regHits[ifc.String()] = hits
 		}
-		if fn := findMethod(t, method); fn != nil && candidateKey(fn) == candidateKey(implFn) {
-			_ = site // 注册行号保留位（当前仅用于 dispatch_to 边）
-			return "register", 0.9
-		}
+	}
+	if ext.regHits[iface.String()][candidateKey(implFn)] {
+		return "register", 0.9
 	}
 	return "enum", 0.7
 }

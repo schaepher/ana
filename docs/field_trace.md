@@ -1512,3 +1512,23 @@ e2e 27 项。
 可达且标注）；CLI 单测 TestValueTraceIncludeContainerCLI（flag 解析 +
 默认剪枝/显式开启）；ssa 单测 TestDispatchOriginsMultiField（三字段
 origins 全保留）。
+
+## 34. 构建管线复杂度优化（Q168，2026-08-17）
+
+**动态规划/增量传播思想的三处优化 + 一个关键写库 bug 修复**：
+
+1. **emitSummaries worklist 化**（O(D×V×E) → O(E×W)）：原"迭代至稳定"
+   每轮全图遍历（D=传播深度，调用图深/环多时轮数爆炸）；改为反向
+   调用索引 + pending 增量队列——callee 新增写只传播给调用者一次，
+   单调性保证收敛到相同不动点（语义等价，全部间接写测试通过）
+2. **dispatchOriginOf O(1) 判定**：注册命中按 (iface, candidateKey)
+   预处理 map（原逐调用点线性扫描注册点）
+3. **细粒度进度日志**：按包/按轮次/按函数计数 + 总量百分比
+4. **★ 关键 bug：flush 后 batch 未重置**——batch 一旦某维度 ≥1000，
+   后续每个 item 都触发一次 flush（每 item 一个事务）——13000 条 →
+   35s 写库事务风暴；**这大概率就是用户大仓库 20 分钟 + 14G 内存的
+   主因**（go2o 4:40 里写库占大头）。修复：flush 后 batch = newBatch()
+   ——500 函数 fixture 39.5s → 122ms（320 倍）；5000 函数 × 10 字段
+   1.34s
+
+验证：12 包 + it + e2e 27 项全绿；自建 fixture（深链/宽×深）对比。
