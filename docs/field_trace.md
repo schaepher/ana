@@ -1538,3 +1538,21 @@ GOMAXPROCS=1 可退串行）——包间无共享可变状态：a.fd 由互斥�
 （读写 funcData）、fallbackTotal 改 atomic、emit 走 channel 并发安全、
 dispatchRegs/idents/specs 只读共享。自建 20 包 × 1000 函数 fixture：
 并发 187ms vs 串行 322ms（1.7 倍），符号数一致。
+
+## 35. trace-backward --follow-indirect（Q172，2026-08-17）
+
+**根因**（review）：trace-backward 反向起点限定当前函数内真实 field_access
+节点——对只有 indirect_write（无本函数字段访问）的函数起点为空，结果必空；
+indirect_write 是函数级 caller→callee 摘要，不能直接进 CTE。
+
+**实现**（按 review 方案，不改变默认语义）：
+- `trace-backward <field> --func <f> --follow-indirect`：先沿
+  summary_origins 递归解析调用链（outer → inner → 真实写者，BFS 集合），
+  收集链上函数的 field_access 写节点作起点，再执行反向 data_flows_to
+  遍历（赋值来源）
+- 默认（无 flag）：行为不变（当前函数内产生链）
+- 链解析在 Go 侧（summary_origins 查询），多起点反向 CTE 一次遍历
+
+**验证**：outer(t)→inner(t)→fill(t.A=100)：默认空、--follow-indirect
+返回 fill 写点 t.A (9) + 赋值来源 100:int；sqlite/CLI 单测 + 12 包 +
+it + e2e 27 项全绿。

@@ -24,6 +24,7 @@ type Reader interface {
 	GetImpact(id domain.CanonicalID, depth int) ([]*domain.CodeEntity, error)
 	GetFunctionFields(funcID domain.CanonicalID) ([]*domain.FunctionFieldSummary, error)
 	TraceBackward(field string, funcID domain.CanonicalID, maxDepth int) ([]*domain.TraceRow, error)
+	TraceBackwardIndirect(field string, funcID domain.CanonicalID, maxDepth int) ([]*domain.TraceRow, error) // Q172 --follow-indirect
 	TraceForward(field string, funcID domain.CanonicalID, maxDepth int) ([]*domain.TraceRow, error)
 	GetValueTrace(nodeID domain.CanonicalID, maxDepth int, minConf float64, includeContainer bool) ([]*domain.TraceRow, error) // Q161/Q163
 	GetValueTraceMulti(anchors []domain.CanonicalID, ctxField string, maxDepth int) ([]*domain.TraceRow, error)
@@ -260,6 +261,7 @@ type TraceParams struct {
 	Func     string // 函数符号输入（canonical ID 或名称）
 	MaxDepth int
 	Forward  bool // true=trace-forward（S3 后续使用），false=trace-backward（S2 产生点）
+	FollowIndirect bool // Q172：trace-backward --follow-indirect（跨函数间接写链）
 }
 
 // Trace 字段产生点反向追溯 / 后续使用正向追踪；返回解析后的函数符号
@@ -271,6 +273,10 @@ func (a *Actions) Trace(p TraceParams) (*domain.CodeEntity, []*domain.TraceRow, 
 	}
 	if p.Forward {
 		rows, err := a.repo.TraceForward(p.Field, n.ID, p.MaxDepth)
+		return n, rows, err
+	}
+	if p.FollowIndirect {
+		rows, err := a.repo.TraceBackwardIndirect(p.Field, n.ID, p.MaxDepth)
 		return n, rows, err
 	}
 	rows, err := a.repo.TraceBackward(p.Field, n.ID, p.MaxDepth)

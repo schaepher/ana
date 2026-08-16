@@ -87,7 +87,7 @@ func cmdQuery(args []string) int {
 	case "fields":
 		return queryFields(acts, target, opts, since)
 	case "trace-backward", "trace-forward":
-		return queryTraceDir(acts, target, f.funcPath, f.maxDepth, sub == "trace-forward", opts)
+		return queryTraceDir(acts, target, f.funcPath, f.maxDepth, sub == "trace-forward", f.followIndirect, opts)
 	case "value-trace":
 		// Q163：默认剪候选边（minConf=1.0）——从字段锚点追踪不进入
 		// 其他接口候选实现（RefundSource 越界）；显式 --min-conf 开启
@@ -148,6 +148,7 @@ type queryFlags struct {
 	minConf    float64 // value-trace --min-conf：候选边置信度剪枝（Q161）
 	minConfSet bool     // --min-conf 显式设置（Q163 默认 1.0）
 	includeContainer bool // value-trace --include-container：父容器扩展（Q163）
+	followIndirect  bool // trace-backward --follow-indirect：跨函数间接写链（Q172）
 }
 
 // parseQueryFlags 手动解析 query 子命令的参数，支持 flags 与位置参数任意顺序。
@@ -198,6 +199,8 @@ func parseQueryFlags(args []string) queryFlags {
 			f.minConfSet = true
 		case a == "--include-container":
 			f.includeContainer = true
+		case a == "--follow-indirect":
+			f.followIndirect = true
 		case a == "--all":
 			f.all = true
 		case a == "--json":
@@ -311,7 +314,7 @@ func queryFields(acts *action.Actions, input string, opts outputOpts, since *dom
 
 // queryTraceDir 输出字段追溯路径（S2/S3，field_trace.md §6.3/6.4）。
 // 树形渲染：缩进 + 边类型 + 节点名 + (行号)（Q28）；--compact 去缩进。
-func queryTraceDir(acts *action.Actions, field, funcPath string, maxDepth int, forward bool, opts outputOpts) int {
+func queryTraceDir(acts *action.Actions, field, funcPath string, maxDepth int, forward, followIndirect bool, opts outputOpts) int {
 	logger := zap.L()
 	logger.Debug("enter queryTraceDir")
 	defer logger.Debug("exit queryTraceDir")
@@ -319,7 +322,7 @@ func queryTraceDir(acts *action.Actions, field, funcPath string, maxDepth int, f
 		fmt.Fprintln(os.Stderr, "error: trace 需要 --func <函数>（canonical ID 或名称）")
 		return 2
 	}
-	n, rows, err := acts.Trace(action.TraceParams{Field: field, Func: funcPath, MaxDepth: maxDepth, Forward: forward})
+	n, rows, err := acts.Trace(action.TraceParams{Field: field, Func: funcPath, MaxDepth: maxDepth, Forward: forward, FollowIndirect: followIndirect})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1

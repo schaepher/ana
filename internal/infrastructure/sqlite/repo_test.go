@@ -1656,3 +1656,70 @@ func TestGetValueTraceContainerBoundary(t *testing.T) {
 		t.Error("includeContainer 模式容器读节点应放行")
 	}
 }
+
+// TestTraceBackwardIndirect：Q172——trace-backward --follow-indirect。
+// outer 对 T.A 只有 indirect_write（经 inner 间接写），链解析：
+// summary_origins outer→inner→fill（真实写 t.A + 赋值来源 v）。
+// 断言返回 fill 的写节点与赋值来源值节点。
+func TestTraceBackwardIndirect(t *testing.T) {
+	r := newTestRepo(t)
+	outerID := "symbol:go:example.com/m:outer"
+	innerID := "symbol:go:example.com/m:inner"
+	fillID := "symbol:go:example.com/m:fill"
+	nodes := []*domain.CodeEntity{
+		{ID: domain.CanonicalID(outerID), Kind: domain.KindFunction, Name: "outer"},
+		{ID: domain.CanonicalID(innerID), Kind: domain.KindFunction, Name: "inner"},
+		{ID: domain.CanonicalID(fillID), Kind: domain.KindFunction, Name: "fill"},
+		// fill 的真实写节点 + 赋值来源
+		{ID: domain.CanonicalID(fillID + "#t.A.write@9"), Kind: domain.KindFieldAccess,
+			Name: "t.A", FilePath: "f.go", LineStart: 9,
+			Properties: map[string]any{"full_path": "example.com/m.T.A",
+				"instance_path": "t.A", "access_kind": "write", "func_id": fillID}},
+		{ID: domain.CanonicalID(fillID + "#v"), Kind: domain.KindSSAValue, Name: "v",
+			Properties: map[string]any{"func_id": fillID}},
+	}
+	if _, err := r.SaveBatchStats(nodes, []*domain.Fact{
+		{SourceID: domain.CanonicalID(fillID + "#v"), TargetID: domain.CanonicalID(fillID + "#t.A.write@9"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+	}, []*domain.FunctionFieldSummary{
+		{FunctionID: domain.CanonicalID(outerID), AccessKind: domain.SummaryIndirectWrite,
+			FieldPath: "example.com/m.T.A", LineStart: 2},
+		{FunctionID: domain.CanonicalID(innerID), AccessKind: domain.SummaryIndirectWrite,
+			FieldPath: "example.com/m.T.A", LineStart: 5},
+	}, []*domain.SummaryOrigin{
+		{FunctionID: domain.CanonicalID(outerID), AccessKind: domain.SummaryIndirectWrite,
+			FieldPath: "example.com/m.T.A", CallLine: 3, CalleeID: domain.CanonicalID(innerID)},
+		{FunctionID: domain.CanonicalID(innerID), AccessKind: domain.SummaryIndirectWrite,
+			FieldPath: "example.com/m.T.A", CallLine: 6, CalleeID: domain.CanonicalID(fillID)},
+	}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	rows, err := r.TraceBackwardIndirect("example.com/m.T.A", domain.CanonicalID(outerID), 8)
+	if err != nil {
+		t.Fatalf("TraceBackwardIndirect: %v", err)
+	}
+	var writeSeen, valSeen bool
+	for _, row := range rows {
+		if row.ID == domain.CanonicalID(fillID+"#t.A.write@9") {
+			writeSeen = true
+		}
+		if row.ID == domain.CanonicalID(fillID+"#v") {
+			valSeen = true
+		}
+	}
+	if !writeSeen {
+		t.Error("--follow-indirect 应返回 fill 的真实写节点 t.A.write")
+	}
+	if !valSeen {
+		t.Error("--follow-indirect 应返回赋值来源值节点 v")
+	}
+	// 默认（无 follow）：起点在 outer 内匹配 field_access——无真实节点 → 空
+	plain, err := r.TraceBackward("example.com/m.T.A", domain.CanonicalID(outerID), 8)
+	if err != nil {
+		t.Fatalf("TraceBackward: %v", err)
+	}
+	if len(plain) != 0 {
+		t.Errorf("默认 trace-backward 应为空（outer 无真实 field_access），got %d", len(plain))
+	}
+}

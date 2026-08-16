@@ -327,3 +327,58 @@ func TestValueTraceIncludeContainerCLI(t *testing.T) {
 		t.Error("--include-container --min-conf 0 后候选路径应可达")
 	}
 }
+
+// TestTraceBackwardIndirectCLI：Q172——trace-backward --follow-indirect
+// 经 summary_origins 链到达下游真实写者；默认（无 flag）为空。
+func TestTraceBackwardIndirectCLI(t *testing.T) {
+	dir := seedRepo(t)
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	r := sqlite.NewRepo(db)
+	outerID := "symbol:go:example.com/m:outer"
+	fillID := "symbol:go:example.com/m:fill"
+	if _, err := r.SaveBatchStats([]*domain.CodeEntity{
+		{ID: domain.CanonicalID(outerID), Kind: domain.KindFunction, Name: "outer"},
+		{ID: domain.CanonicalID(fillID), Kind: domain.KindFunction, Name: "fill"},
+		{ID: domain.CanonicalID(fillID + "#t.A.write@9"), Kind: domain.KindFieldAccess,
+			Name: "t.A", FilePath: "f.go", LineStart: 9,
+			Properties: map[string]any{"full_path": "example.com/m.T.A",
+				"instance_path": "t.A", "access_kind": "write", "func_id": fillID}},
+		{ID: domain.CanonicalID(fillID + "#v"), Kind: domain.KindSSAValue, Name: "v",
+			Properties: map[string]any{"func_id": fillID}},
+	}, []*domain.Fact{
+		{SourceID: domain.CanonicalID(fillID + "#v"), TargetID: domain.CanonicalID(fillID + "#t.A.write@9"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+	}, []*domain.FunctionFieldSummary{
+		{FunctionID: domain.CanonicalID(outerID), AccessKind: domain.SummaryIndirectWrite,
+			FieldPath: "example.com/m.T.A", LineStart: 2},
+	}, []*domain.SummaryOrigin{
+		{FunctionID: domain.CanonicalID(outerID), AccessKind: domain.SummaryIndirectWrite,
+			FieldPath: "example.com/m.T.A", CallLine: 3, CalleeID: domain.CanonicalID(fillID)},
+	}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	// 默认：无结果
+	out := captureStdout(func() {
+		if code := cmdQuery([]string{"trace-backward", "example.com/m.T.A", "--func", "outer", "--repo", dir}); code != 0 {
+			t.Errorf("trace-backward exit = %d", code)
+		}
+	})
+	if strings.Contains(out, "t.A (9)") {
+		t.Error("默认 trace-backward 不应跨函数间接写")
+	}
+	// --follow-indirect：到达 fill 写点 + 赋值来源
+	out = captureStdout(func() {
+		if code := cmdQuery([]string{"trace-backward", "example.com/m.T.A", "--func", "outer", "--repo", dir, "--follow-indirect"}); code != 0 {
+			t.Errorf("trace-backward --follow-indirect exit = %d", code)
+		}
+	})
+	for _, want := range []string{"t.A (9)", "v"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("--follow-indirect 输出缺 %q:\n%s", want, out)
+		}
+	}
+}

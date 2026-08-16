@@ -40,7 +40,7 @@ codeintel version
 |---|---|---|
 | `symbol <sym>` | 符号详情（含调用者/被调用者） | |
 | `fields <func>` | 函数字段读写摘要（direct_read/write + indirect_write） | | `--json` 行带 `origins`（Q161 间接写多来源：调用点/被调函数/候选 origin+置信度） |
-| `trace-backward <field> --func <func>` | 字段产生点反向追溯 | `--max-depth N` 默认 8 |
+| `trace-backward <field> --func <func>` | 字段产生点反向追溯 | `--max-depth N` 默认 8、`--follow-indirect`（Q172：跨函数间接写链——沿 summary_origins 到下游真实写者再反向 data_flows_to） |
 | `trace-forward <field> --func <func>` | 字段后续使用正向追踪 | `--max-depth N` |
 | `value-trace <nodeID>` | 数据值全链（跨函数，函数上下文分组） | `--max-depth N`、`--min-conf N`（默认 1.0——Q163 候选边默认剪枝，从字段锚点追踪不进入其他接口候选实现；显式 `--min-conf 0` 展开候选并标注 `[动态候选 enum 0.7 接口]` 路径累计标记）、`--include-container`（显式父容器路径扩展） |
 | `callers/callees <sym>` | 调用者/被调用者 | `--depth N` 默认 1 |
