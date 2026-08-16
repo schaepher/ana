@@ -32,7 +32,7 @@ import (
 // 常量
 const (
 	AdapterTimeout = 10 * time.Minute // 适配器级超时（TD.md 9.1）
-	BatchSize      = 1000             // 分批事务大小（TD.md 5.2）
+	BatchSize      = 5000             // 分批事务大小（TD.md 5.2；Q171 双缓冲后加大摊薄事务）
 )
 
 // AdapterResult 记录单个适配器的执行结果。
@@ -326,16 +326,31 @@ func (o *Orchestrator) runAdapters(ctx context.Context, pkgs []*packages.Package
 		skipped int
 		mu      sync.Mutex
 	)
-	// 适配器 → 数据通道 → 写库 goroutine（单写者）
+	// 适配器 → 数据通道 → 消费协程 → flushCh（双缓冲）→ flush 协程（单写者）。
+	// Q171：flush 与消费解耦——SQLite 并发写无收益（同连接写锁串行化），
+	// 但 flush 慢时（大仓库百万行单批 ~300ms）双缓冲让消费/emit 不阻塞
 	ch := make(chan domain.Item, 4096)
+	flushCh := make(chan *batchT, 2) // 消费填一个、flush 写一个
 	flushed := make(chan struct{})
 
-	// 写库协程：分批提交（1000 条/事务）
-	batch := newBatch()
+	// flush 协程（单写者：SQLite 写锁串行）
+	var flushWg sync.WaitGroup
+	flushWg.Add(1)
+	go func() {
+		defer flushWg.Done()
+		for b := range flushCh {
+			if err := o.flush(b, &mu, &skipped); err != nil {
+				fmt.Fprintf(os.Stderr, "write batch: %v\n", err)
+			}
+		}
+	}()
+
+	// 消费协程：填 batch → 满则交给 flushCh，换新 batch 继续
 	consumeStart := time.Now()
 	consumeCount := 0
 	go func() {
 		defer close(flushed)
+		batch := newBatch()
 		for item := range ch {
 			if keep != nil && !keep(item) {
 				continue
@@ -358,18 +373,12 @@ func (o *Orchestrator) runAdapters(ctx context.Context, pkgs []*packages.Package
 					zap.Duration("elapsed", time.Since(consumeStart)))
 			}
 			if len(batch.nodes) >= BatchSize || len(batch.edges) >= BatchSize || len(batch.summaries) >= BatchSize || len(batch.origins) >= BatchSize {
-				if err := o.flush(batch, &mu, &skipped); err != nil {
-					fmt.Fprintf(os.Stderr, "write batch: %v\n", err)
-				}
-				// Q168 修复：flush 后重置 batch——否则 batch 一旦某维度
-				// ≥ BatchSize，后续每个 item 都触发一次 flush（每 item
-				// 一个事务，13000 条 → 35s 写库瓶颈）
+				flushCh <- batch
 				batch = newBatch()
 			}
 		}
-		if err := o.flush(batch, &mu, &skipped); err != nil {
-			fmt.Fprintf(os.Stderr, "write final batch: %v\n", err)
-		}
+		flushCh <- batch // 最后一批（空批 flush 内部跳过）
+		close(flushCh)
 	}()
 
 	// 并行跑适配器（独立超时，失败不中断他人）
@@ -400,7 +409,8 @@ func (o *Orchestrator) runAdapters(ctx context.Context, pkgs []*packages.Package
 	logger.Info("orchestrator stage", zap.String("stage", "adapters done"),
 		zap.Duration("elapsed", time.Since(runStart)))
 	close(ch)
-	<-flushed // 等待写库协程排空
+	<-flushed // 等待消费协程排空（含最后一批入 flushCh）
+	flushWg.Wait() // 等待 flush 协程写完
 	logger.Info("orchestrator stage", zap.String("stage", "flush done"),
 		zap.Duration("elapsed", time.Since(runStart)))
 	return results, skipped, nil
