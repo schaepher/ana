@@ -383,3 +383,87 @@ func f(t *T) {
 		t.Errorf("相对路径未补全为类型限定路径: id=%v name=%v", idPath, namePath)
 	}
 }
+
+// TestWhereColDollar：Q158——$N 占位符（PostgreSQL 风格）的 WHERE 过滤
+// 列提取（go2o memberRepo 用 gof Connector 的 "level= $1" 形态）。
+func TestWhereColDollar(t *testing.T) {
+	nodes, _, _ := indexFixtureFull(t, map[string]string{
+		"go.mod": moduleGoMod,
+		"main.go": `package m
+
+import "database/sql"
+
+func f(db *sql.DB) {
+	db.QueryRow("SELECT id FROM mm_member WHERE level= $1", 2)
+}
+`,
+	})
+	found := false
+	for _, n := range nodes {
+		if n.Kind == domain.KindFieldAccess && n.Property("type_string") == "sql" &&
+			n.Name == "mm_member.level" && n.Property("access_kind") == "filter" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("$N 占位符的 WHERE 过滤列未提取（mm_member.level filter 缺失）")
+	}
+}
+
+// TestInterfaceSQLSummary：Q158——接口摘要 SQL 形态（gof Connector 接口：
+// SQL 字符串在 Args[0]，无接收者）。ExecScalar=读（SELECT 列 read + filter）、
+// ExecNonQuery=写（SET 列 write + filter）。
+func TestInterfaceSQLSummary(t *testing.T) {
+	nodes, _, _ := indexFixtureFull(t, map[string]string{
+		"go.mod": moduleGoMod,
+		"field-summary.yaml": `summaries:
+  - iface: example.com/mtest.Connector
+    method: ExecScalar
+    kind: sql
+    where_arg: 0
+  - iface: example.com/mtest.Connector
+    method: ExecNonQuery
+    kind: sql
+    where_arg: 0
+    sql_write: true
+`,
+		"main.go": `package m
+
+type Connector interface {
+	ExecScalar(s string, result interface{}, args ...interface{}) error
+	ExecNonQuery(sql string, args ...interface{}) (int, error)
+}
+
+func use(c Connector, id int64) {
+	var n int64
+	_ = c.ExecScalar("SELECT COUNT(1) FROM mm_member WHERE level= $1", &n, id)
+	_, _ = c.ExecNonQuery("UPDATE mm_member SET level = $1 WHERE id = $2", 3, id)
+}
+`,
+	})
+	funcID := "symbol:go:example.com/mtest:use"
+	find := func(name, access string) bool {
+		for _, n := range nodes {
+			if n.Kind == domain.KindFieldAccess && n.Property("func_id") == funcID &&
+				n.Property("type_string") == "sql" && n.Name == name &&
+				n.Property("access_kind") == access {
+				return true
+			}
+		}
+		return false
+	}
+	// ExecScalar 读：mm_member 表级 read（COUNT(1) 无列）+ level filter
+	if !find("mm_member", "read") {
+		t.Error("ExecScalar 未生成 mm_member 表级 read 节点")
+	}
+	if !find("mm_member.level", "filter") {
+		t.Error("ExecScalar 未生成 mm_member.level filter 节点（$1 占位符）")
+	}
+	// ExecNonQuery 写：level write + id filter（WHERE id = $2）
+	if !find("mm_member.level", "write") {
+		t.Error("ExecNonQuery 未生成 mm_member.level write 节点")
+	}
+	if !find("mm_member.id", "filter") {
+		t.Error("ExecNonQuery 未生成 mm_member.id filter 节点")
+	}
+}

@@ -63,6 +63,7 @@ type userSummaryFile struct {
 		WhereArg   int      `yaml:"where_arg"` // where 字符串实参下标
 		ObjArg     int      `yaml:"obj_arg"`   // write 对象实参下标
 		IDArg      int      `yaml:"id_arg"`    // read 主键实参下标
+		SQLWrite   bool     `yaml:"sql_write"` // kind=sql 时为写（ExecNonQuery）
 		Reads      []string `yaml:"reads"`
 		Writes     []string `yaml:"writes"`
 		ParamIndex int      `yaml:"param_index"`
@@ -121,6 +122,7 @@ func loadSummaries(repoPath string) (map[string]summarySpec, []string) {
 			WhereArg:   s.WhereArg,
 			ObjArg:     s.ObjArg,
 			IDArg:      s.IDArg,
+			SQLWrite:   s.SQLWrite,
 			Reads:      s.Reads,
 			Writes:     s.Writes,
 			ParamIndex: s.ParamIndex,
@@ -231,6 +233,25 @@ func builtinSummaries() map[string]summarySpec {
 				Method: fn, Kind: "filter", WhereArg: 0}
 		}
 	}
+	// gof db.Connector（Q158）：原生 SQL 接口（ExecScalar/ExecNonQuery/
+	// Query/QueryRow）——SQL 字符串在第 0 实参（无 receiver 的接口调用）
+	for _, fn := range []string{"ExecScalar", "Query", "QueryRow"} {
+		specs["iface:github.com/ixre/gof/db.Connector."+fn] = summarySpec{
+			Interface: "github.com/ixre/gof/db.Connector",
+			Method:    fn, Kind: "sql", WhereArg: 0, SQLWrite: false}
+	}
+	specs["iface:github.com/ixre/gof/db.Connector.ExecNonQuery"] = summarySpec{
+		Interface: "github.com/ixre/gof/db.Connector",
+		Method:    "ExecNonQuery", Kind: "sql", WhereArg: 0, SQLWrite: true}
+	// gof db/orm 包级函数（Q158）：orm.Save(o, entity, pk) 静态调用——
+	// 对象实参（第 1 实参）字段 → 表.列 write（go2o payment.Order 保存入口）
+	specs["github.com/ixre/gof/db/orm.Save"] = summarySpec{
+		Func: "github.com/ixre/gof/db/orm.Save", ParamIndex: 1, ORMWrite: true}
+	// gof db/orm.Orm 接口（Q158）：Get(id, &e) 主键读——对象读出 + 主键
+	// filter（memberId → mm_member.id，支付单 buyer_id 链的关键一环）
+	specs["iface:github.com/ixre/gof/db/orm.Orm.Get"] = summarySpec{
+		Interface: "github.com/ixre/gof/db/orm.Orm",
+		Method:    "Get", Kind: "read", ObjArg: 1, IDArg: 0}
 	return specs
 }
 
@@ -280,7 +301,7 @@ func (ext *fieldExtractor) applySummary(cc *ssa.CallCommon, callee *ssa.Function
 	}
 	// SQL 持久化（Q97）：SQL 字符串解析表列 + 值实参映射（写）/ 读边（P0-2）
 	if spec.SQLStmt {
-		return true, ext.applySQLSummary(cc, calleeID, spec, callVal)
+		return true, ext.applySQLSummary(cc, calleeID, spec, callVal, 1)
 	}
 	// 事务边界（Q97）：Begin/Commit/Rollback → 事务虚拟节点
 	if spec.TxBoundary != "" {
@@ -555,16 +576,18 @@ func variadicElems(v ssa.Value) []ssa.Value {
 // applySQLSummary 处理 SQL 语句调用（Q97）：SQL 字符串（第 0 实参）解析
 // 表名与列名 → 虚拟节点（Name=表.列）；后续值实参按 ? 顺序映射列，
 // 发 summary_io 边（字段值 → 虚拟节点）。
-func (ext *fieldExtractor) applySQLSummary(cc *ssa.CallCommon, calleeID domain.CanonicalID, spec summarySpec, callVal ssa.Value) error {
+// applySQLSummary 处理 SQL 语句摘要：SQL 字符串在 Args[sqlArg]（database/sql
+// 的 receiver 后 Args[1]；gof Connector 接口无 receiver 在 Args[0]，Q158），
+// 值实参在 sqlArg+1 起（variadic 解包按 ?/$N 顺序映射）。
+func (ext *fieldExtractor) applySQLSummary(cc *ssa.CallCommon, calleeID domain.CanonicalID, spec summarySpec, callVal ssa.Value, sqlArg int) error {
 	logger := zap.L()
 	logger.Debug("enter (fieldExtractor).applySQLSummary")
 	defer logger.Debug("exit (fieldExtractor).applySQLSummary")
-	// args[0] 为接收者（db）；SQL 字符串在 args[1]，值实参（...any）在 args[2:]
-	if len(cc.Args) < 2 {
+	if sqlArg < 0 || sqlArg >= len(cc.Args) {
 		return nil
 	}
 	sqlStr := ""
-	if c, ok := cc.Args[1].(*ssa.Const); ok && c.Value != nil {
+	if c, ok := cc.Args[sqlArg].(*ssa.Const); ok && c.Value != nil {
 		sqlStr = constant.StringVal(c.Value)
 	}
 	table, cols, whereCols := parseSQLStmt(sqlStr)
@@ -619,7 +642,7 @@ func (ext *fieldExtractor) applySQLSummary(cc *ssa.CallCommon, calleeID domain.C
 		// 流入 B.Y 过滤列时，数据流链贯通两表
 		if len(whereCols) > 0 {
 			values := []ssa.Value{}
-			for i := 2; i < len(cc.Args); i++ {
+			for i := sqlArg + 1; i < len(cc.Args); i++ {
 				values = append(values, variadicElems(cc.Args[i])...)
 			}
 			for i, arg := range values {
@@ -664,7 +687,7 @@ func (ext *fieldExtractor) applySQLSummary(cc *ssa.CallCommon, calleeID domain.C
 	// 写路径：虚拟节点：表.列（无列时表）；值实参（variadic 解包）按 ? 顺序映射列
 	access := "write"
 	values := []ssa.Value{}
-	for i := 2; i < len(cc.Args); i++ {
+	for i := sqlArg + 1; i < len(cc.Args); i++ {
 		values = append(values, variadicElems(cc.Args[i])...)
 	}
 	for i, arg := range values {
@@ -708,6 +731,47 @@ func (ext *fieldExtractor) applySQLSummary(cc *ssa.CallCommon, calleeID domain.C
 		}
 		if err := ext.emitEdgeKindLine(argID, id, domain.FactSummaryIO, line); err != nil {
 			return err
+		}
+	}
+	// WHERE 过滤列（表关联键）：SET 列之后的值实参映射 whereCols
+	// （UPDATE t SET a=$1 WHERE b=$2——第 2 个值 → b filter）
+	if len(whereCols) > 0 {
+		for i, col := range whereCols {
+			vi := len(cols) + i
+			if vi >= len(values) {
+				break
+			}
+			name := table + "." + col
+			id := domain.CanonicalID(string(ext.funcID) + "#ext.sql." + name + ".filter@" + fmt.Sprintf("%d", line))
+			if err := ext.emit(domain.Item{Node: &domain.CodeEntity{
+				ID:        id,
+				Kind:      domain.KindFieldAccess,
+				Name:      name,
+				FilePath:  ext.currentFile,
+				LineStart: line,
+				Properties: map[string]any{
+					"full_path":     name,
+					"instance_path": name,
+					"access_kind":   "filter",
+					"code_snippet":  sqlStr,
+					"type_string":   "sql",
+					"is_external":   "true",
+					"func_id":       string(ext.funcID),
+				},
+			}}); err != nil {
+				return err
+			}
+			realArg := values[vi]
+			if mi, ok := realArg.(*ssa.MakeInterface); ok {
+				realArg = mi.X
+			}
+			argID, err := ext.emitValue(realArg)
+			if err != nil || argID == "" {
+				continue
+			}
+			if err := ext.emitEdgeKindLine(argID, id, domain.FactSummaryIO, line); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -833,7 +897,9 @@ func parseSQLStmt(sql string) (table string, cols []string, whereCols []string) 
 					}
 					c = strings.Trim(c, "`\"[]")
 					if c != "" {
-						cols = append(cols, c)
+						if c != "" && !strings.Contains(c, "(") {
+							cols = append(cols, c)
+						}
 					}
 				}
 			}
@@ -895,7 +961,7 @@ func parseSQLStmt(sql string) (table string, cols []string, whereCols []string) 
 	return table, cols, whereCols
 }
 
-var whereColRe = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_.]*)\s*=\s*\?`)
+var whereColRe = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_.]*)\s*=\s*(\?|\$\d+)`)
 
 // extractWhereCols 从 SQL 语句剩余部分提取 WHERE 子句的过滤列
 // （`列 = ?` 序列，值实参按 ? 顺序映射——表关联分析的数据基础）。
@@ -960,12 +1026,16 @@ func (ext *fieldExtractor) applyORMRead(cc *ssa.CallCommon, calleeID domain.Cano
 	if !ok {
 		return nil // 非对象读（如 Count(&n) 无字段展开）
 	}
-	// 表名：Model(&X{}) 链式溯源优先，否则对象类型名
-	table := ""
-	if scope := chainScopeObject(cc.Args[0]); scope != nil {
-		table = snakeCase(scope.Obj().Name())
-	} else {
-		table = snakeCase(named.Obj().Name())
+	// 表名：实体 TableName() 常量优先（Q158：go2o 实体带 TableName——
+	// payment.Order → pay_order 而非 snake 类型名 order），否则
+	// Model(&X{}) 链式溯源 / 对象类型名
+	table := ext.tableNameOf(named)
+	if table == "" {
+		if scope := chainScopeObject(cc.Args[0]); scope != nil {
+			table = snakeCase(scope.Obj().Name())
+		} else {
+			table = snakeCase(named.Obj().Name())
+		}
 	}
 	st, ok := named.Underlying().(*types.Struct)
 	if !ok {
@@ -1066,7 +1136,11 @@ func (ext *fieldExtractor) applyORMWrite(cc *ssa.CallCommon, calleeID domain.Can
 	if !ok {
 		return nil
 	}
-	table := snakeCase(named.Obj().Name())
+	// 表名：实体 TableName() 常量优先（Q158），fallback 类型名 snake
+	table := ext.tableNameOf(named)
+	if table == "" {
+		table = snakeCase(named.Obj().Name())
+	}
 	line := ext.prog.Fset.PositionFor(cc.Pos(), false).Line
 	// 对象值节点（兜底连边用；emitValue 幂等去重）
 	objID, err := ext.emitValue(realArg)
@@ -1293,15 +1367,20 @@ func (ext *fieldExtractor) applyInterfaceSummary(cc *ssa.CallCommon, callVal ssa
 		logger.Debug("iface spec 未匹配", zap.String("key", key))
 		return false, nil
 	}
-	entity := entityTypeOf(cc, spec)
-	if entity == nil {
-		logger.Debug("iface entity 未解析", zap.String("key", key))
-		return false, nil
-	}
-	table := ext.tableNameOf(entity)
-	if table == "" {
-		logger.Debug("iface table 为空", zap.String("key", key))
-		return false, nil
+	// SQL 形态（kind=sql）无需实体类型/表名（SQL 字符串自带表名）
+	var table string
+	var entity types.Type
+	if spec.Kind != "sql" {
+		entity = entityTypeOf(cc, spec)
+		if entity == nil {
+			logger.Debug("iface entity 未解析", zap.String("key", key))
+			return false, nil
+		}
+		table = ext.tableNameOf(entity)
+		if table == "" {
+			logger.Debug("iface table 为空", zap.String("key", key))
+			return false, nil
+		}
 	}
 	line := ext.prog.Fset.PositionFor(cc.Pos(), false).Line
 	switch spec.Kind {
@@ -1321,9 +1400,19 @@ func (ext *fieldExtractor) applyInterfaceSummary(cc *ssa.CallCommon, callVal ssa
 			return false, err
 		}
 	case "read":
-		// 返回值对象读出 → read 虚拟节点 + 边（节点 → 调用点值）
+		// 对象读出 → read 虚拟节点 + 边（节点 → 值）。值来源：ObjArg
+		// 指定的输出对象实参（orm.Orm.Get(id, &e) 读进 e）优先，否则
+		// 调用点返回值
 		var callID domain.CanonicalID
-		if callVal != nil {
+		if spec.ObjArg >= 0 && spec.ObjArg < len(cc.Args) {
+			arg := cc.Args[spec.ObjArg]
+			if mi, ok := arg.(*ssa.MakeInterface); ok {
+				arg = mi.X
+			}
+			if id, err := ext.emitValue(arg); err == nil {
+				callID = id
+			}
+		} else if callVal != nil {
 			if id, err := ext.emitValue(callVal); err == nil {
 				callID = id
 			}
@@ -1333,12 +1422,19 @@ func (ext *fieldExtractor) applyInterfaceSummary(cc *ssa.CallCommon, callVal ssa
 		}
 		// 主键 filter（Get(id)）
 		if spec.IDArg >= 0 && spec.IDArg < len(cc.Args) {
-			if err := ext.emitWhereFilter(cc, []string{pkColumnOf(entity)}, spec.IDArg, table, line); err != nil {
+			// IDArg 是值实参下标（无 where 字符串）——emitWhereFilter 的
+			// 值从 whereArg+1 起，传 IDArg-1 使值下标 = IDArg（Q158）
+			if err := ext.emitWhereFilter(cc, []string{pkColumnOf(entity)}, spec.IDArg-1, table, line); err != nil {
 				return false, err
 			}
 		}
 	case "filter":
 		// 仅 where 过滤（Count/DeleteBy：无对象读出）
+	case "sql":
+		fmt.Fprintf(os.Stderr, "IFACE_SQL: key=%s whereArg=%d sqlwrite=%v\n", key, spec.WhereArg, spec.SQLWrite)
+		// SQL 语句形态（Q158）：gof Connector 接口方法——SQL 字符串在
+		// WhereArg 实参，ExecScalar/Query=读、ExecNonQuery=写
+		return true, ext.applySQLSummary(cc, "", spec, callVal, spec.WhereArg)
 	}
 	if spec.WhereArg >= 0 {
 		if spec.WhereArg >= len(cc.Args) {
@@ -1474,7 +1570,15 @@ func entityTypeOf(cc *ssa.CallCommon, spec summarySpec) types.Type {
 			return derefType(cc.Args[spec.ObjArg].Type())
 		}
 	case "read":
-		// 接口方法签名首个结果类型
+		// 输出对象实参优先（orm.Orm.Get(id, &e)——e 是读出对象），
+		// 否则接口方法签名首个结果类型；interface{} 实参先解 MakeInterface
+		if spec.ObjArg >= 0 && spec.ObjArg < len(cc.Args) {
+			arg := cc.Args[spec.ObjArg]
+			if mi, ok := arg.(*ssa.MakeInterface); ok {
+				arg = mi.X
+			}
+			return derefType(arg.Type())
+		}
 		if sig, ok := cc.Method.Type().(*types.Signature); ok && sig.Results().Len() > 0 {
 			return derefType(sig.Results().At(0).Type())
 		}
@@ -1546,23 +1650,31 @@ func gormColumnOf(tag reflect.StructTag, fieldName string) string {
 
 // whereColsOf 从 where 条件串提取列名：AND/OR 拆分 + 占位符剥离
 // （IN (?) 先处理；其余形态截到最后一个 ? 再 TrimRight 运算符——
-// 兼容 " = ?" / "=?" / " <?" / " LIKE ?" 等有无空格写法）。
+// 兼容 " = ?" / "=?" / " <?" / " LIKE ?" 等有无空格写法，以及多行
+// 条件串（AND/OR 前后为换行/制表符——pay_order 实测整串未被拆分）。
 func whereColsOf(where string) []string {
 	var cols []string
-	for _, part := range strings.Split(where, " AND ") {
-		for _, p2 := range strings.Split(part, " OR ") {
-			if i := strings.Index(p2, " IN ("); i >= 0 {
-				p2 = p2[:i]
-			} else if strings.HasSuffix(strings.ToLower(p2), " is null") {
-				p2 = p2[:len(p2)-len(" is null")]
-			} else if i := strings.LastIndex(p2, "?"); i >= 0 {
-				p2 = p2[:i]
-			}
-			p2 = strings.TrimRight(p2, " =<>!()")
-			p2 = strings.TrimSpace(p2)
-			if p2 != "" {
-				cols = append(cols, p2)
-			}
+	re := regexp.MustCompile(`\s+(AND|OR)\s+`)
+	// ORDER BY 子句剥离（无占位符的条件段会残留 " = 0\n\t\tORDER BY id ASC"）
+	if i := regexp.MustCompile(`\s+ORDER\s+BY\s+`).FindStringIndex(where); i != nil {
+		where = where[:i[0]]
+	}
+	for _, part := range re.Split(where, -1) {
+		if i := strings.Index(part, " IN ("); i >= 0 {
+			part = part[:i]
+		} else if strings.HasSuffix(strings.ToLower(part), " is null") {
+			part = part[:len(part)-len(" is null")]
+		} else if i := strings.LastIndex(part, "?"); i >= 0 {
+			part = part[:i]
+		}
+		// 尾部字面量条件剥离（" = 0" / " < 100" 无占位符形态）
+		if m := regexp.MustCompile(`\s*[=<>!]+\s*\S+$`).FindStringIndex(part); m != nil {
+			part = part[:m[0]]
+		}
+		part = strings.TrimRight(part, " =<>!()")
+		part = strings.TrimSpace(part)
+		if part != "" {
+			cols = append(cols, part)
 		}
 	}
 	return cols

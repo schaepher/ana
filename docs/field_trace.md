@@ -1311,3 +1311,38 @@ DispatchCandidate/Origin/Confidence；CLI 文本 `[候选 register 0.9]`、
 **测试**：TestIndirectWriteNestedOwner（动态接口 + 实现写嵌套字段）、
 TestIndirectWriteCallLinePerCall（双调用点边各带 call_line）、
 TestValueTraceDispatchMark（dispatch 边 → 行标注）。验证矩阵全绿。
+
+---
+
+## 28. gof 原生 SQL/ORM 映射 + pay_order 键关联贯通（Q158，2026-08-16）
+
+**动机**（用户问：pay_order 无关联——怎么找支付方/商家信息）：go2o
+会员/商户仓储用 gof 原生形态——`m.Connector.ExecScalar/ExecNonQuery`
+（SQL 字符串，PostgreSQL `$N` 占位符）+ `orm.Save(o, entity, pk)` /
+`orm.Orm.Get(id, &e)`——均无摘要 → mm_member 等主表无虚拟节点 →
+pay_order.buyer_id 链断。
+
+**修复链**：
+1. `whereColRe` 支持 `$N` 占位符（`= $1` 形态；go2o 用 pg）
+2. **接口摘要 kind=sql**：gof db.Connector 接口（ExecScalar/Query/
+   QueryRow 读 + ExecNonQuery 写）——SQL 在 Args[0]（无 receiver），
+   applySQLSummary 参数化 sqlArg
+3. 接口摘要**候选非空也触发**（embed 提升方法的候选无函数体不产边——
+   go2o Connector impls=23 但全是提升方法）
+4. `orm.Save` 包级函数（静态）spec：ORMWrite ParamIndex=1
+5. **applyORMWrite/Read 表名 TableName() 优先**（payment.Order →
+   pay_order，此前 snake 类型名 "order" 错）
+6. read 分支支持 ObjArg 输出对象实参 + MakeInterface 解包（orm.Orm.Get）
+7. **IDArg 值下标修正**（主键 filter 值 = id 实参，非 where+1）
+8. whereColsOf：正则拆 AND/OR（多行条件）+ ORDER BY/字面量条件剥离
+9. SELECT 列跳过聚合函数（COUNT(1) → 表级读）
+
+**go2o 实测**：sql 表 0 → 40（mm_member/mm_account/mch_merchant 等）；
+pay_order 从"无关联"→ 4000 条（含 query 键关联：id → mm_account.
+member_id 10 跳）；mm_member 3 条 query（id → 其他表 id/member_id）。
+
+**回答用户问题**：pay_order 的支付方/商家信息在代码里经
+`memberRepo.GetMember(BuyerId)`（→ orm.Orm.Get → mm_member 主键读）
+与 seller_id 对应商户查询——键关联链现在贯通（buyer_id 值流 →
+GetMember 实参 → mm_member.id filter）。测试：TestWhereColDollar +
+TestInterfaceSQLSummary（$N + 接口 SQL 形态）。验证矩阵全绿。

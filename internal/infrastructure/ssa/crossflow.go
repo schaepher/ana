@@ -199,17 +199,17 @@ func (ext *fieldExtractor) emitCall(cc *ssa.CallCommon, callVal ssa.Value) error
 						ext.recordCallInfo(cc, implID)
 					}
 				}
-				// Q156：候选实现为空（外部框架实现，如 gof fw.Repository）
-				// → 接口摘要（iface+method spec 匹配，表.列虚拟节点）
+				// Q156/Q158：接口摘要——按 iface+method spec 匹配外部框架
+				// 语义（gof fw.Repository / db.Connector 等）。候选非空也执行：
+				// embed 提升方法的候选（无自身函数体）不产出字段边，SQL/ORM
+				// 语义需摘要补充；spec 不匹配时内部快速返回 false 无影响
 				logger.Debug("dyn interface dispatch", zap.Int("impls", len(impls)), zap.String("call", cc.String()), zap.String("iface", cc.Value.Type().String()))
-				if len(impls) == 0 {
-					handled, err := ext.applyInterfaceSummary(cc, callVal)
-					if err != nil {
-						return err
-					}
-					if handled {
-						return nil
-					}
+				handled, err := ext.applyInterfaceSummary(cc, callVal)
+				if err != nil {
+					return err
+				}
+				if handled {
+					return nil
 				}
 			}
 		}
