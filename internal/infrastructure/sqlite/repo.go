@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/mattn/go-sqlite3"
+	"sort"
 	"strings"
 
 	"github.com/schaepher/codeintel/internal/domain"
@@ -1115,6 +1116,17 @@ OR (d.kind != 'field_access' AND (` + q(anchorCtx) + ` = '' OR json_extract(` + 
 
 func q(s string) string { return "'" + s + "'" }
 
+// sortEdgeKinds 排序边类型集合（Q155：GROUP_CONCAT(DISTINCT) 无序，
+// server/CLI 按 LastIndex 取末段展示——排序保证输出稳定）。
+func sortEdgeKinds(s string) string {
+	if s == "" {
+		return s
+	}
+	parts := strings.Split(s, ",")
+	sort.Strings(parts)
+	return strings.Join(parts, ",")
+}
+
 func (r *Repo) GetValueTrace(nodeID domain.CanonicalID, maxDepth int) ([]*domain.TraceRow, error) {
 	logger := zap.L()
 	logger.Debug("enter (Repo).GetValueTrace")
@@ -1136,50 +1148,54 @@ func (r *Repo) GetValueTrace(nodeID domain.CanonicalID, maxDepth int) ([]*domain
 	}
 	backFilter := valueTraceFilter(ctx, inst, true, "n_prev")
 	fwdFilter := valueTraceFilter(ctx, inst, false, "n_next")
-	rows, err := r.Query(`WITH RECURSIVE vt(id, depth, name, edge_kinds, line, dir, kind, access, func_id, full_path, ctx, inst) AS (
-    SELECT n.id, 0, n.name, '', n.line_start, 0, n.kind,
-           json_extract(n.properties, '$.access_kind'), json_extract(n.properties, '$.func_id'),
-           json_extract(n.properties, '$.full_path'), `+q(ctx)+`, `+q(inst)+`
-    FROM nodes n WHERE n.id = ?
+	// Q155：递归 CTE 按 (id, dir) 去重——vt 只存 (id, dir)（UNION 去重，
+	// 每节点一行，递归自然终止，环安全）；dp 存 BFS 深度（每 (id,dir,
+	// depth) 一行，行数 ≤ 节点数×maxDepth 有界）。此前 depth/edge_kinds
+	// 在递归行里导致同一节点每条到达路径产一行并各自展开——汇聚点与环
+	// 使行数随深度/路径数放大。edge_kinds 语义随之从"路径边序列"变为
+	// "入边类型集合（distinct）"（展示用途，Go 侧排序稳定）。
+	rows, err := r.Query(`WITH RECURSIVE
+vt(id, dir, kind, seed) AS (
+    SELECT ?, 0, (SELECT n0.kind FROM nodes n0 WHERE n0.id = ?), 1
     UNION
     -- 反向：流向当前节点（产生链）
-    SELECT e.source_id, d.depth + 1, n_prev.name,
-           CASE WHEN d.edge_kinds = '' THEN e.kind
-                ELSE d.edge_kinds || ',' || e.kind END, n_prev.line_start, 0,
-           n_prev.kind, json_extract(n_prev.properties, '$.access_kind'),
-           json_extract(n_prev.properties, '$.func_id'),
-           json_extract(n_prev.properties, '$.full_path'),
-           CASE WHEN n_prev.kind = 'field_access'
-                THEN json_extract(n_prev.properties, '$.full_path') ELSE d.ctx END,
-           CASE WHEN n_prev.kind = 'field_access'
-                THEN COALESCE(json_extract(n_prev.properties, '$.instance_path'), json_extract(n_prev.properties, '$.full_path')) ELSE d.inst END
-    FROM edges e
+    SELECT e.source_id, 0, n_prev.kind, 0 FROM edges e
     JOIN vt d ON e.target_id = d.id
     JOIN nodes n_prev ON e.source_id = n_prev.id
-    WHERE e.kind IN ('data_flows_to','argument','returns','phi_operand','summary_io')
-      AND (d.dir = 0 OR d.depth = 0) AND d.depth < ?
+    WHERE d.dir = 0 AND e.kind IN ('data_flows_to','argument','returns','phi_operand','summary_io')
       AND (n_prev.kind != 'field_access' OR (`+backFilter+`))
     UNION
-    -- 正向：从当前节点流出（使用链）
-    SELECT e.target_id, d.depth + 1, n_next.name,
-           CASE WHEN d.edge_kinds = '' THEN e.kind
-                ELSE d.edge_kinds || ',' || e.kind END, n_next.line_start, 1,
-           n_next.kind, json_extract(n_next.properties, '$.access_kind'),
-           json_extract(n_next.properties, '$.func_id'),
-           json_extract(n_next.properties, '$.full_path'),
-           CASE WHEN n_next.kind = 'field_access'
-                THEN json_extract(n_next.properties, '$.full_path') ELSE d.ctx END,
-           CASE WHEN n_next.kind = 'field_access'
-                THEN COALESCE(json_extract(n_next.properties, '$.instance_path'), json_extract(n_next.properties, '$.full_path')) ELSE d.inst END
-    FROM edges e
+    -- 正向：从当前节点流出（使用链）；锚点（seed）双向可展开
+    SELECT e.target_id, 1, n_next.kind, 0 FROM edges e
     JOIN vt d ON e.source_id = d.id
     JOIN nodes n_next ON e.target_id = n_next.id
-    WHERE e.kind IN ('data_flows_to','argument','returns','phi_operand','summary_io')
-      AND (d.dir = 1 OR d.depth = 0) AND d.depth < ?
+    WHERE (d.dir = 1 OR d.seed = 1) AND e.kind IN ('data_flows_to','argument','returns','phi_operand','summary_io')
       AND (n_next.kind != 'field_access' OR (`+fwdFilter+`))
+),
+dp(id, dir, depth) AS (
+    SELECT ?, 0, 0
+    UNION
+    SELECT e.source_id, 0, dp.depth + 1 FROM edges e
+    JOIN dp ON e.target_id = dp.id AND dp.dir = 0
+    JOIN vt v ON v.id = e.source_id AND v.dir = 0
+    WHERE dp.depth < ? AND e.kind IN ('data_flows_to','argument','returns','phi_operand','summary_io')
+    UNION
+    SELECT e.target_id, 1, dp.depth + 1 FROM edges e
+    JOIN dp ON e.source_id = dp.id AND (dp.dir = 1 OR dp.depth = 0)
+    JOIN vt v ON v.id = e.target_id AND v.dir = 1
+    WHERE dp.depth < ? AND e.kind IN ('data_flows_to','argument','returns','phi_operand','summary_io')
 )
-SELECT id, depth, name, edge_kinds, line, dir, kind, access, func_id, full_path FROM vt ORDER BY dir, depth, id`,
-		string(nodeID), maxDepth, maxDepth)
+SELECT dp.id, MIN(dp.depth), n.name,
+       (SELECT COALESCE(GROUP_CONCAT(DISTINCT e2.kind), '') FROM edges e2
+         WHERE ((dp.dir = 0 AND e2.target_id = dp.id) OR (dp.dir = 1 AND e2.source_id = dp.id))
+           AND e2.kind IN ('data_flows_to','argument','returns','phi_operand','summary_io')),
+       n.line_start, dp.dir, n.kind,
+       json_extract(n.properties, '$.access_kind'), json_extract(n.properties, '$.func_id'),
+       json_extract(n.properties, '$.full_path')
+FROM dp JOIN nodes n ON n.id = dp.id
+GROUP BY dp.id, dp.dir
+ORDER BY dp.dir, MIN(dp.depth), dp.id`,
+		string(nodeID), string(nodeID), string(nodeID), maxDepth, maxDepth)
 	if err != nil {
 		return nil, err
 	}
@@ -1201,6 +1217,7 @@ SELECT id, depth, name, edge_kinds, line, dir, kind, access, func_id, full_path 
 		}
 		row.ID = domain.CanonicalID(id)
 		row.Dir = dir
+		row.EdgeKinds = sortEdgeKinds(row.EdgeKinds)
 		row.Kind = domain.EntityKind(kind)
 		if access.Valid {
 			row.Access = access.String
@@ -1239,29 +1256,35 @@ func (r *Repo) GetValueTraceMulti(anchors []domain.CanonicalID, ctxField string,
 	}
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
 	fwdFilter := valueTraceFilter(ctxField, ctxField, false, "n_next")
-	rows, err := r.Query(`WITH RECURSIVE vt(id, depth, name, edge_kinds, line, dir, kind, access, func_id, full_path, ctx) AS (
-    SELECT n.id, 0, n.name, '', n.line_start, 0, n.kind,
-           json_extract(n.properties, '$.access_kind'), json_extract(n.properties, '$.func_id'),
-           json_extract(n.properties, '$.full_path'), `+q(ctxField)+`
-    FROM nodes n WHERE n.id IN (`+placeholders+`)
+	rows, err := r.Query(`WITH RECURSIVE
+vt(id, dir, kind) AS (
+    SELECT n.id, 1, n.kind FROM nodes n WHERE n.id IN (`+placeholders+`)
     UNION
-    SELECT e.target_id, d.depth + 1, n_next.name,
-           CASE WHEN d.edge_kinds = '' THEN e.kind
-                ELSE d.edge_kinds || ',' || e.kind END, n_next.line_start, 1,
-           n_next.kind, json_extract(n_next.properties, '$.access_kind'),
-           json_extract(n_next.properties, '$.func_id'),
-           json_extract(n_next.properties, '$.full_path'),
-           CASE WHEN n_next.kind = 'field_access'
-                THEN json_extract(n_next.properties, '$.full_path') ELSE d.ctx END
-    FROM edges e
+    SELECT e.target_id, 1, n_next.kind FROM edges e
     JOIN vt d ON e.source_id = d.id
     JOIN nodes n_next ON e.target_id = n_next.id
-    WHERE e.kind IN ('data_flows_to','argument','returns','phi_operand','summary_io')
-      AND d.depth < ?
+    WHERE d.dir = 1 AND e.kind IN ('data_flows_to','argument','returns','phi_operand','summary_io')
       AND (n_next.kind != 'field_access' OR (`+fwdFilter+`))
+),
+dp(id, dir, depth) AS (
+    SELECT n.id, 0, 0 FROM nodes n WHERE n.id IN (`+placeholders+`)
+    UNION
+    SELECT e.target_id, 1, dp.depth + 1 FROM edges e
+    JOIN dp ON e.source_id = dp.id AND (dp.dir = 1 OR dp.depth = 0)
+    JOIN vt v ON v.id = e.target_id AND v.dir = 1
+    WHERE dp.depth < ? AND e.kind IN ('data_flows_to','argument','returns','phi_operand','summary_io')
 )
-SELECT id, depth, name, edge_kinds, line, dir, kind, access, func_id, full_path FROM vt ORDER BY depth, id`,
-		append(anySlice(ids), maxDepth)...)
+SELECT dp.id, MIN(dp.depth), n.name,
+       (SELECT COALESCE(GROUP_CONCAT(DISTINCT e2.kind), '') FROM edges e2
+         WHERE ((dp.dir = 0 AND e2.target_id = dp.id) OR (dp.dir = 1 AND e2.source_id = dp.id))
+           AND e2.kind IN ('data_flows_to','argument','returns','phi_operand','summary_io')),
+       n.line_start, dp.dir, n.kind,
+       json_extract(n.properties, '$.access_kind'), json_extract(n.properties, '$.func_id'),
+       json_extract(n.properties, '$.full_path')
+FROM dp JOIN nodes n ON n.id = dp.id
+GROUP BY dp.id, dp.dir
+ORDER BY MIN(dp.depth), dp.id`,
+		append(append(anySlice(ids), anySlice(ids)...), maxDepth)...)
 	if err != nil {
 		return nil, err
 	}
@@ -1281,6 +1304,7 @@ SELECT id, depth, name, edge_kinds, line, dir, kind, access, func_id, full_path 
 			return nil, err
 		}
 		row.ID = domain.CanonicalID(id)
+		row.EdgeKinds = sortEdgeKinds(row.EdgeKinds)
 		row.Kind = domain.EntityKind(kind)
 		if access.Valid {
 			row.Access = access.String

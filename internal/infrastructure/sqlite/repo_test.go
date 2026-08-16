@@ -1212,6 +1212,69 @@ func TestValueTraceCycle(t *testing.T) {
 	}
 }
 
+// TestValueTraceConvergeDedup：Q155——递归 CTE 按 (id, dir) 去重。汇聚点
+// （多条路径到达同一节点）只输出一行（最短深度），行数随路径数收敛而非
+// 放大：v0 → x（直接）与 v0 → a → x（绕行）两条路径达 x，x 与 y 各只
+// 出现一次（现状：x/y 每路径一行，共 7 行）。
+func TestValueTraceConvergeDedup(t *testing.T) {
+	r := newTestRepo(t)
+	funcID := "symbol:go:example.com/m:run"
+	nodes := []*domain.CodeEntity{
+		{ID: domain.CanonicalID(funcID + "#v0"), Kind: domain.KindSSAValue, Name: "v0",
+			Properties: map[string]any{"func_id": funcID}},
+		{ID: domain.CanonicalID(funcID + "#a"), Kind: domain.KindSSAValue, Name: "a",
+			Properties: map[string]any{"func_id": funcID}},
+		{ID: domain.CanonicalID(funcID + "#x"), Kind: domain.KindSSAValue, Name: "x",
+			Properties: map[string]any{"func_id": funcID}},
+		{ID: domain.CanonicalID(funcID + "#y"), Kind: domain.KindSSAValue, Name: "y",
+			Properties: map[string]any{"func_id": funcID}},
+	}
+	edges := []*domain.Fact{
+		// 直接路径 v0 → x（depth 1）与绕行路径 v0 → a → x（depth 2）
+		{SourceID: domain.CanonicalID(funcID + "#v0"), TargetID: domain.CanonicalID(funcID + "#x"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: domain.CanonicalID(funcID + "#v0"), TargetID: domain.CanonicalID(funcID + "#a"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: domain.CanonicalID(funcID + "#a"), TargetID: domain.CanonicalID(funcID + "#x"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: domain.CanonicalID(funcID + "#x"), TargetID: domain.CanonicalID(funcID + "#y"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+	}
+	save(t, r, nodes, edges)
+
+	rows, err := r.GetValueTrace(domain.CanonicalID(funcID+"#v0"), 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 锚点 v0（dir0 一行，双向可展开）+ a + x + y 各一行 = 4
+	if len(rows) != 4 {
+		t.Errorf("rows = %d, want 4（锚点一行 + a + x + y）", len(rows))
+	}
+	countX, depthX, countY, depthY := 0, -1, 0, -1
+	for _, row := range rows {
+		switch string(row.ID) {
+		case funcID + "#x":
+			countX++
+			depthX = row.Depth
+		case funcID + "#y":
+			countY++
+			depthY = row.Depth
+		}
+	}
+	if countX != 1 {
+		t.Errorf("x 行数 = %d, want 1（汇聚去重）", countX)
+	}
+	if depthX != 1 {
+		t.Errorf("x depth = %d, want 1（最短路径）", depthX)
+	}
+	if countY != 1 {
+		t.Errorf("y 行数 = %d, want 1（汇聚去重）", countY)
+	}
+	if depthY != 2 {
+		t.Errorf("y depth = %d, want 2", depthY)
+	}
+}
+
 // TestTraceBackwardCrossFunction：⑬ 猎 bug——trace-backward 从 callee
 // 的写入出发，经 argument 反向连到调用方的产生点（值来源）。
 func TestTraceBackwardCrossFunction(t *testing.T) {

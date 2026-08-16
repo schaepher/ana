@@ -1167,3 +1167,34 @@ wrapper→双实现与上游→wrapper。验证矩阵全绿（12 包 + it + e2e 
 
 **权衡**：与 dispatch_to 边一致，所有候选实现都进摘要——真实分派是
 运行时选择，摘要层面保守全列（Q93 候选集语义）。
+
+---
+
+## 24. value-trace 递归 CTE 按 (id, dir) 去重（Q155，2026-08-16）
+
+**动机**（用户 review 建议 P1）：value-trace 递归 CTE 的递归行携带
+depth/edge_kinds，同一节点每条到达路径产一行并各自展开——汇聚点与环使
+行数随深度/路径数放大（同节点多深度行各展开一次，最坏指数）。
+
+**SQLite 限制**：递归 SELECT 禁止子查询引用递归表（multiple recursive
+references），无法在展开处按 (id,dir) 去重；UNION 按整行去重，含
+depth 的行无法按节点唯一。
+
+**修复（双递归 CTE 分治）**：
+- `vt(id, dir, kind, seed)`：UNION 去重可达集——每 (id,dir) 一行，
+  递归自然终止（无新行即停），环安全；seed 标记锚点（双向可展开，
+  等价原 depth=0 语义），锚点输出保持 dir=0 一行
+- `dp(id, dir, depth)`：BFS 最短深度——UNION 去重 (id,dir,depth)，
+  行数 ≤ 节点数×maxDepth 有界；`dp.depth < maxDepth` 截断语义不变
+  （节点最短路径 ≤ maxDepth 才输出，与原逐路径截断等价）
+- 外层 `GROUP BY dp.id, dp.dir` 取 MIN(depth)；edge_kinds 由
+  "路径边序列" 弱化为 "入边类型集合（GROUP_CONCAT DISTINCT + Go 侧
+  sortEdgeKinds 排序稳定——server LastIndex 取末段展示不受影响）"
+- GetValueTraceMulti（跳板合并）同构改造（vt 全 dir=1 单方向）
+
+**测试**：TestValueTraceConvergeDedup——汇聚图（v0→x 直接 + v0→a→x
+绕行）断言 x/y 各一行 + 最短深度；TestValueTraceCycle 保持（环行数
+从 ~16 收敛为 2）；既有链/多锚点测试不变。验证矩阵全绿。
+
+**权衡**：同节点多路径从多行变一行（最短深度）——展示更干净；
+edge_kinds 无路径顺序（展示用途可接受）。
