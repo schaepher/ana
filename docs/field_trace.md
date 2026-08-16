@@ -1180,13 +1180,15 @@ depth/edge_kinds，同一节点每条到达路径产一行并各自展开——�
 references），无法在展开处按 (id,dir) 去重；UNION 按整行去重，含
 depth 的行无法按节点唯一。
 
-**修复（双递归 CTE 分治）**：
-- `vt(id, dir, kind, seed)`：UNION 去重可达集——每 (id,dir) 一行，
-  递归自然终止（无新行即停），环安全；seed 标记锚点（双向可展开，
-  等价原 depth=0 语义），锚点输出保持 dir=0 一行
-- `dp(id, dir, depth)`：BFS 最短深度——UNION 去重 (id,dir,depth)，
-  行数 ≤ 节点数×maxDepth 有界；`dp.depth < maxDepth` 截断语义不变
-  （节点最短路径 ≤ maxDepth 才输出，与原逐路径截断等价）
+**修复（单递归 CTE，depth 入去重键）**：
+- `vt(id, dir, depth, kind, seed)`：递归行带 depth，UNION 去重键
+  (id, dir, depth)——每节点每深度一行（行数 ≤ 节点数×maxDepth 有界），
+  `depth < maxDepth` 截断即递归终止（环安全：每圈 depth+1 直到上限）；
+  锚点（seed）双向可展开，锚点输出保持 dir=0 一行；最短深度语义 =
+  BFS 队列序首次到达
+- go2o 实测修正：初版双 CTE（vt 去重集 + dp 深度）的 vt 无深度限制
+  → 148K 节点图上全图扩散（热点 param 节点 2-4 分钟）不可行——深度
+  必须留在递归行内限制扩散
 - 外层 `GROUP BY dp.id, dp.dir` 取 MIN(depth)；edge_kinds 由
   "路径边序列" 弱化为 "入边类型集合（GROUP_CONCAT DISTINCT + Go 侧
   sortEdgeKinds 排序稳定——server LastIndex 取末段展示不受影响）"
@@ -1195,6 +1197,20 @@ depth 的行无法按节点唯一。
 **测试**：TestValueTraceConvergeDedup——汇聚图（v0→x 直接 + v0→a→x
 绕行）断言 x/y 各一行 + 最短深度；TestValueTraceCycle 保持（环行数
 从 ~16 收敛为 2）；既有链/多锚点测试不变。验证矩阵全绿。
+
+**查询计划修正（go2o 实测）**：递归步的 `JOIN vt d ON e.target_id =
+d.id` 被计划器选成 `idx_edges_kind`（kind IN 5 值命中 ~10 万行）而非
+`idx_edges_target`——每轮 10 万×N 次比较，深度 3 即 2 分钟。加
+`INDEXED BY idx_edges_source/target` 强制走端点索引 → 热点节点从
+4 分钟降到 0.13 秒（1800×）。三个递归分支（GetValueTrace 反向/正向 +
+Multi 正向）均加。
+
+**go2o 实测（Q154/Q155 验证）**：init 27s（148K 节点/152K 边）；
+`(profileManagerImpl).SaveProfile` indirect_write 22 个字段（动态
+派发回传 ✓）；`(serviceUtil).errorV2#err`（207 入边）value-trace
+1549 行、重复 (id,dir)=0、0.13s。go2o 无 go.sum（非 git 仓库）——
+tidy 补齐后 init。顺带修复 ⑮ 存量 bug：多返回候选实现无 Return
+指令（桩函数）时 `rets[0]` 越界 panic。
 
 **权衡**：同节点多路径从多行变一行（最短深度）——展示更干净；
 edge_kinds 无路径顺序（展示用途可接受）。

@@ -1148,42 +1148,29 @@ func (r *Repo) GetValueTrace(nodeID domain.CanonicalID, maxDepth int) ([]*domain
 	}
 	backFilter := valueTraceFilter(ctx, inst, true, "n_prev")
 	fwdFilter := valueTraceFilter(ctx, inst, false, "n_next")
-	// Q155：递归 CTE 按 (id, dir) 去重——vt 只存 (id, dir)（UNION 去重，
-	// 每节点一行，递归自然终止，环安全）；dp 存 BFS 深度（每 (id,dir,
-	// depth) 一行，行数 ≤ 节点数×maxDepth 有界）。此前 depth/edge_kinds
-	// 在递归行里导致同一节点每条到达路径产一行并各自展开——汇聚点与环
-	// 使行数随深度/路径数放大。edge_kinds 语义随之从"路径边序列"变为
-	// "入边类型集合（distinct）"（展示用途，Go 侧排序稳定）。
+	// Q155：递归 CTE 行带 depth，UNION 去重键 (id, dir, depth)——每节点
+	// 每深度一行（行数 ≤ 节点数×maxDepth 有界），depth 截断即递归终止
+	// （环安全：每圈 depth+1 直到上限，不再无限）。go2o 实测（Q155 验证）：
+	// 双 CTE 方案 vt 无深度限制全图扩散（148K 节点 2 分钟）不可行——
+	// 深度必须留在递归行内限制扩散。edge_kinds 语义为"入边类型集合
+	// （distinct）"（展示用途，Go 侧排序稳定）。
 	rows, err := r.Query(`WITH RECURSIVE
-vt(id, dir, kind, seed) AS (
-    SELECT ?, 0, (SELECT n0.kind FROM nodes n0 WHERE n0.id = ?), 1
+vt(id, dir, depth, kind, seed) AS (
+    SELECT ?, 0, 0, (SELECT n0.kind FROM nodes n0 WHERE n0.id = ?), 1
     UNION
     -- 反向：流向当前节点（产生链）
-    SELECT e.source_id, 0, n_prev.kind, 0 FROM edges e
+    SELECT e.source_id, 0, d.depth + 1, n_prev.kind, 0 FROM edges e INDEXED BY idx_edges_target
     JOIN vt d ON e.target_id = d.id
     JOIN nodes n_prev ON e.source_id = n_prev.id
-    WHERE d.dir = 0 AND e.kind IN ('data_flows_to','argument','returns','phi_operand','summary_io')
+    WHERE d.dir = 0 AND d.depth < ? AND e.kind IN ('data_flows_to','argument','returns','phi_operand','summary_io')
       AND (n_prev.kind != 'field_access' OR (`+backFilter+`))
     UNION
     -- 正向：从当前节点流出（使用链）；锚点（seed）双向可展开
-    SELECT e.target_id, 1, n_next.kind, 0 FROM edges e
+    SELECT e.target_id, 1, d.depth + 1, n_next.kind, 0 FROM edges e INDEXED BY idx_edges_source
     JOIN vt d ON e.source_id = d.id
     JOIN nodes n_next ON e.target_id = n_next.id
-    WHERE (d.dir = 1 OR d.seed = 1) AND e.kind IN ('data_flows_to','argument','returns','phi_operand','summary_io')
+    WHERE (d.dir = 1 OR d.seed = 1) AND d.depth < ? AND e.kind IN ('data_flows_to','argument','returns','phi_operand','summary_io')
       AND (n_next.kind != 'field_access' OR (`+fwdFilter+`))
-),
-dp(id, dir, depth) AS (
-    SELECT ?, 0, 0
-    UNION
-    SELECT e.source_id, 0, dp.depth + 1 FROM edges e
-    JOIN dp ON e.target_id = dp.id AND dp.dir = 0
-    JOIN vt v ON v.id = e.source_id AND v.dir = 0
-    WHERE dp.depth < ? AND e.kind IN ('data_flows_to','argument','returns','phi_operand','summary_io')
-    UNION
-    SELECT e.target_id, 1, dp.depth + 1 FROM edges e
-    JOIN dp ON e.source_id = dp.id AND (dp.dir = 1 OR dp.depth = 0)
-    JOIN vt v ON v.id = e.target_id AND v.dir = 1
-    WHERE dp.depth < ? AND e.kind IN ('data_flows_to','argument','returns','phi_operand','summary_io')
 )
 SELECT dp.id, MIN(dp.depth), n.name,
        (SELECT COALESCE(GROUP_CONCAT(DISTINCT e2.kind), '') FROM edges e2
@@ -1192,10 +1179,10 @@ SELECT dp.id, MIN(dp.depth), n.name,
        n.line_start, dp.dir, n.kind,
        json_extract(n.properties, '$.access_kind'), json_extract(n.properties, '$.func_id'),
        json_extract(n.properties, '$.full_path')
-FROM dp JOIN nodes n ON n.id = dp.id
+FROM vt dp JOIN nodes n ON n.id = dp.id
 GROUP BY dp.id, dp.dir
 ORDER BY dp.dir, MIN(dp.depth), dp.id`,
-		string(nodeID), string(nodeID), string(nodeID), maxDepth, maxDepth)
+		string(nodeID), string(nodeID), maxDepth, maxDepth)
 	if err != nil {
 		return nil, err
 	}
@@ -1257,22 +1244,14 @@ func (r *Repo) GetValueTraceMulti(anchors []domain.CanonicalID, ctxField string,
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
 	fwdFilter := valueTraceFilter(ctxField, ctxField, false, "n_next")
 	rows, err := r.Query(`WITH RECURSIVE
-vt(id, dir, kind) AS (
-    SELECT n.id, 1, n.kind FROM nodes n WHERE n.id IN (`+placeholders+`)
+vt(id, dir, depth, kind) AS (
+    SELECT n.id, 0, 0, n.kind FROM nodes n WHERE n.id IN (`+placeholders+`)
     UNION
-    SELECT e.target_id, 1, n_next.kind FROM edges e
+    SELECT e.target_id, 1, d.depth + 1, n_next.kind FROM edges e INDEXED BY idx_edges_source
     JOIN vt d ON e.source_id = d.id
     JOIN nodes n_next ON e.target_id = n_next.id
-    WHERE d.dir = 1 AND e.kind IN ('data_flows_to','argument','returns','phi_operand','summary_io')
+    WHERE (d.dir = 1 OR d.depth = 0) AND d.depth < ? AND e.kind IN ('data_flows_to','argument','returns','phi_operand','summary_io')
       AND (n_next.kind != 'field_access' OR (`+fwdFilter+`))
-),
-dp(id, dir, depth) AS (
-    SELECT n.id, 0, 0 FROM nodes n WHERE n.id IN (`+placeholders+`)
-    UNION
-    SELECT e.target_id, 1, dp.depth + 1 FROM edges e
-    JOIN dp ON e.source_id = dp.id AND (dp.dir = 1 OR dp.depth = 0)
-    JOIN vt v ON v.id = e.target_id AND v.dir = 1
-    WHERE dp.depth < ? AND e.kind IN ('data_flows_to','argument','returns','phi_operand','summary_io')
 )
 SELECT dp.id, MIN(dp.depth), n.name,
        (SELECT COALESCE(GROUP_CONCAT(DISTINCT e2.kind), '') FROM edges e2
@@ -1281,10 +1260,10 @@ SELECT dp.id, MIN(dp.depth), n.name,
        n.line_start, dp.dir, n.kind,
        json_extract(n.properties, '$.access_kind'), json_extract(n.properties, '$.func_id'),
        json_extract(n.properties, '$.full_path')
-FROM dp JOIN nodes n ON n.id = dp.id
+FROM vt dp JOIN nodes n ON n.id = dp.id
 GROUP BY dp.id, dp.dir
 ORDER BY MIN(dp.depth), dp.id`,
-		append(append(anySlice(ids), anySlice(ids)...), maxDepth)...)
+		append(anySlice(ids), maxDepth)...)
 	if err != nil {
 		return nil, err
 	}

@@ -176,7 +176,9 @@ func (ext *fieldExtractor) emitCall(cc *ssa.CallCommon, callVal ssa.Value) error
 									if err != nil || exID == "" {
 										continue
 									}
-									if idx < len(rets[0]) {
+									// rets 为空（无 Return 指令的桩函数：加载失败的
+									// 包/外部实现）时跳过——否则 rets[0] 越界 panic
+									if len(rets) > 0 && idx < len(rets[0]) {
 										opID, err := ext.emitValue(rets[0][idx])
 										if err == nil && opID != "" {
 											if err := ext.emitEdgeKind(opID, exID, domain.FactReturns); err != nil {
