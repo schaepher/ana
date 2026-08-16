@@ -174,6 +174,63 @@ func main() {
 	_ = strings.TrimSpace // keep import
 }
 
+// TestInterfaceDispatchIndirectWrite：Q154——接口动态分派候选实现内的
+// 字段写须回传为 wrapper 与上游调用方的 indirect_write。此前动态分支只
+// 建 argument/returns 边、未追加 funcData.calls，间接写闭包（summary.go:29
+// 消费 fd.calls）无消费入口——实现对 Order.FinalFee 的写断在接口调用点。
+func TestInterfaceDispatchIndirectWrite(t *testing.T) {
+	_, facts, summaries := indexFixtureFull(t, map[string]string{
+		"go.mod": moduleGoMod,
+		"main.go": `package m
+
+type Order struct {
+	FinalFee int
+}
+
+type FeeCalculator interface {
+	Calculate(o *Order)
+}
+
+type StdCalc struct{}
+
+func (c *StdCalc) Calculate(o *Order) { o.FinalFee = 100 }
+
+type ExpCalc struct{}
+
+func (c *ExpCalc) Calculate(o *Order) { o.FinalFee = 200 }
+
+// wrapper：经接口调用分派（动态 invoke，无静态 callee）
+func Process(fc FeeCalculator, o *Order) {
+	fc.Calculate(o)
+}
+
+// 上游：静态调用 wrapper，闭包传播应覆盖到
+func Run() {
+	Process(&StdCalc{}, &Order{})
+}
+`,
+	})
+	stdID := "symbol:go:example.com/mtest:(StdCalc).Calculate"
+	expFuncID := "symbol:go:example.com/mtest:(ExpCalc).Calculate"
+	procID := "symbol:go:example.com/mtest:Process"
+	runID := "symbol:go:example.com/mtest:Run"
+	feePath := "example.com/mtest.Order.FinalFee"
+
+	// 实现：direct_write（写自身声明的字段）
+	findSummary(t, summaries, stdID, domain.SummaryDirectWrite, feePath)
+	findSummary(t, summaries, expFuncID, domain.SummaryDirectWrite, feePath)
+	// wrapper：经接口调用分派 → 两个实现的写都回传为 indirect_write
+	findSummary(t, summaries, procID, domain.SummaryIndirectWrite, feePath)
+	// 上游：间接写闭包迭代至稳定，Run → Process 传播
+	findSummary(t, summaries, runID, domain.SummaryIndirectWrite, feePath)
+
+	// INDIRECT_WRITE 边：wrapper → 每个候选实现（动态派发语义，均有匹配写）
+	findFact(t, facts, procID, stdID, string(domain.FactIndirectWrite))
+	findFact(t, facts, procID, expFuncID, string(domain.FactIndirectWrite))
+	// 上游 → wrapper
+	findFact(t, facts, runID, procID, string(domain.FactIndirectWrite))
+}
+
 // TestDispatchValueReceiverAndSelfExclusion：⑬ 猎 bug——值接收者实现
 // （候选集含 (Eng).Hello）且接口自身不进入候选集（self 排除）。
 func TestDispatchValueReceiverAndSelfExclusion(t *testing.T) {

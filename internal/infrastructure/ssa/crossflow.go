@@ -188,6 +188,13 @@ func (ext *fieldExtractor) emitCall(cc *ssa.CallCommon, callVal ssa.Value) error
 							}
 						}
 					}
+					// Q154：候选实现追加摘要调用记录——实现对实参字段的写
+					// 经间接写闭包（emitSummaries 消费 fd.calls）回传为调用方
+					// wrapper/上游的 indirect_write（此前只建边不记录调用，
+					// 间接写断在接口调用点）
+					if implID, ok := ext.funcIDOf(implSSA); ok {
+						ext.recordCallInfo(cc, implID)
+					}
 				}
 			}
 		}
@@ -278,32 +285,39 @@ func (ext *fieldExtractor) emitCall(cc *ssa.CallCommon, callVal ssa.Value) error
 		}
 	}
 
-	// 摘要收集（间接写闭包计算用）。
-	// 常量实参（nil、字面量）不产生实例传递，不参与类型匹配
-	if ext.funcData != nil {
-		var argPaths, argNames []string
-		for _, arg := range cc.Args {
-			if _, isConst := arg.(*ssa.Const); isConst {
-				continue
-			}
-			if p := structPathOfType(arg.Type()); p != "" {
-				argPaths = append(argPaths, p)
-			}
-			// 实参变量名（Q90 调用点回连展示；SSA 临时名回退原名）
-			name := ext.instancePath(arg)
-			if isSSAName(name) {
-				name = arg.Name()
-			}
-			argNames = append(argNames, name)
-		}
-		ext.funcData.calls = append(ext.funcData.calls, callInfo{
-			calleeID:       calleeID,
-			argStructPaths: argPaths,
-			callLine:       ext.prog.Fset.PositionFor(cc.Pos(), false).Line,
-			argNames:       argNames,
-		})
-	}
+	// 摘要收集（间接写闭包计算用）——动态/静态调用统一走 recordCallInfo。
+	ext.recordCallInfo(cc, calleeID)
 	return nil
+}
+
+// recordCallInfo 记录调用摘要条目（间接写闭包消费：emitSummaries 沿
+// fd.calls 传播被调函数写）。常量实参（nil、字面量）不产生实例传递，
+// 不参与类型匹配；实参类型路径用于与被调函数写字段的声明类型匹配（Q36）。
+func (ext *fieldExtractor) recordCallInfo(cc *ssa.CallCommon, calleeID domain.CanonicalID) {
+	if ext.funcData == nil {
+		return
+	}
+	var argPaths, argNames []string
+	for _, arg := range cc.Args {
+		if _, isConst := arg.(*ssa.Const); isConst {
+			continue
+		}
+		if p := structPathOfType(arg.Type()); p != "" {
+			argPaths = append(argPaths, p)
+		}
+		// 实参变量名（Q90 调用点回连展示；SSA 临时名回退原名）
+		name := ext.instancePath(arg)
+		if isSSAName(name) {
+			name = arg.Name()
+		}
+		argNames = append(argNames, name)
+	}
+	ext.funcData.calls = append(ext.funcData.calls, callInfo{
+		calleeID:       calleeID,
+		argStructPaths: argPaths,
+		callLine:       ext.prog.Fset.PositionFor(cc.Pos(), false).Line,
+		argNames:       argNames,
+	})
 }
 
 // resolveStaticCallee 解析静态可确定的被调函数：静态调用 / 直接函数值 / phi 链。

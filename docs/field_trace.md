@@ -1137,3 +1137,33 @@ session.id → chat_message.session_id [查询关联 4 跳]（ListSessions
 **确认（Q148）**：GORM 结构体写映射（②⑦ applyORMWrite）此前已生效
 （radar 216 个 gorm 节点）——早前"radar 无虚拟节点"结论是查询时用
 kind 过滤排除了 field_access 的误判，非功能缺失。
+
+---
+
+## 23. 动态派发补 indirect_write 摘要（Q154，2026-08-16）
+
+**动机**（用户 review 发现）：接口动态分派候选实现内的字段写不回传为
+调用方摘要。`Process` 调用 `FeeCalculator.Calculate`（动态 invoke），
+实现对 `Order.FinalFee` 的写入不出现在 `Process`（及上游调用方）的
+indirect_write——字段写断在接口调用点。
+
+**根因**：动态分支（crossflow.go ⑮）已建候选实现的 argument/returns
+边，但**未追加 `funcData.calls`**；间接写闭包（emitSummaries）只消费
+`fd.calls`（summary.go:29），因此动态调用的候选实现写无传播入口。
+dispatch_to 边在摘要之后生成且不被摘要消费（adapter.go emitDispatches
+晚于 emitSummaries）——即使时序反转也缺 callInfo 结构。
+
+**修复**：提取 `recordCallInfo(cc, calleeID)`（原静态路径尾部内联逻辑，
+含 argStructPaths/argNames/callLine），动态分支为**每个候选实现**追加
+callInfo（calleeID = 候选实现 funcID；实参类型路径与静态路径同源——
+动态 invoke 的 cc.Args 即接口方法形参，类型解析一致）。间接写闭包
+迭代至稳定：实现 direct → wrapper indirect → 上游 indirect 逐层回传。
+INDIRECT_WRITE 边 wrapper → 每个候选实现（动态派发语义：均可能被调用）。
+
+**测试**：TestInterfaceDispatchIndirectWrite——接口 + 双实现（StdCalc/
+ExpCalc 写 Order.FinalFee）+ wrapper（接口调用）+ 上游（静态调 wrapper）；
+断言实现 direct_write、wrapper/上游 indirect_write、INDIRECT_WRITE 边
+wrapper→双实现与上游→wrapper。验证矩阵全绿（12 包 + it + e2e 27 项）。
+
+**权衡**：与 dispatch_to 边一致，所有候选实现都进摘要——真实分派是
+运行时选择，摘要层面保守全列（Q93 候选集语义）。
