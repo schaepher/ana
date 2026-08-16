@@ -1436,3 +1436,41 @@ clean --force + init 重建；value-trace SQL 每步加 json_extract 判断
 - 已知边界（与既有行为一致，勿当 bug）：增量更新陈旧 summary/origins
   行残留（INSERT OR IGNORE 语义，全量重建才彻底清理）；GetValueTraceMulti
   （生命周期跳板）无候选标注/剪枝；export graph mermaid/dot 不展示候选
+
+## 32. 分析流程清单与内存检查（Q162，2026-08-17）
+
+**全部分析流程**（go2o 148K 节点实测，heap 打点）：
+
+| 流程 | 阶段 | 内存特征（go2o） | 优化状态 |
+|---|---|---|---|
+| 全量构建 init/reindex | 1. ResetGraphTables（SQLite DROP+CREATE） | 无 | — |
+| | 2. loadPackages（go/packages：模块内包 AST+types 全量） | **1.26G（live 主体）** | 必需（SSA/标识符/字段提取依赖），不可释放 |
+| | 3. ssautil.Packages + 模块内 sp.Build（SSA IR） | 并入 2 后 ~1.3G | 需保留到 emitDispatches |
+| | 4. 释放非模块包 AST/TypesInfo | 防御性（./... 加载集均模块内） | 已实施 |
+| | 5. buildIdentIndex（标识符 map）+ buildAssignTargets | +39MB | computeAliases 后置 nil（已实施） |
+| | 6. loadSummaries（yaml） | 小 | — |
+| | 7. emitFunction 循环（逐函数字段提取/跨过程/动态边） | +285MB（dispatchRegs 提升后；此前每函数全 prog 扫描 → 2697MB） | **dispatchRegs Index 级共享（已实施，-1G）** |
+| | 8. computeAliases → emitSummaries（indirect 闭包） | a.fd/aliasRes 消费后置 nil（已实施） | — |
+| | 9. emitGlobalInit + emitDispatches | +110MB | — |
+| 增量构建 update | 与全量相同分析 + keep 过滤写入 | 同全量（分析全跑） | — |
+| 查询 value-trace | 单递归 CTE（SQLite 侧） | 44ms，内存有界 | — |
+| 查询 relations 单表 | 每表 BFS visited map | 小 | — |
+| 查询 relations --all | 顺序 40 表 BFS 聚合 | 时间 2.5min，内存复用 | — |
+| 查询 unused/summary/export | 预聚合 SQL / AllSummaries 读入 | 小 | — |
+| serve | HTTP + 前端静态 | 小 | — |
+
+**峰值构成**（go2o init）：Load+SSA ~1.3G（live 主体）→ 分析阶段 +0.4G → live ~1.7G；
+RSS 峰值 = GC 目标（默认 GOGC=100 → 2×live）≈ 3.2G。
+
+**已实施优化**（累计 -29%，3.37G→2.39G；耗时 -6%）：
+1. **dispatchRegs Index 级共享**：Q161 缓存误放 extractor（每函数新建）
+   → 每函数全 prog 扫描注册点（map 分配+扫描）；提升到 Adapter 级一次
+2. **释放时机**：idents/assignTargets 在 computeAliases 后、a.fd/aliasRes
+   在 emitSummaries 后置 nil（GC 回收）
+3. **构建命令 SetGCPercent(40)**（init/reindex/update）：2×live → 1.4×live；
+   查询命令不受影响
+4. 非模块包 AST/TypesInfo 释放（防御性：多 go.mod 场景的依赖包）
+
+**不优化项**（理由）：Load 的 AST/types 为分析必需；SSA IR 保留至
+emitDispatches；CLI 单进程生命周期（Index 返回即退出）；查询流程
+CTE/BFS 有界（value-trace 44ms）。

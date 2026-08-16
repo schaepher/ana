@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"os"
+	"runtime/debug"
 	"strings"
 
 	"go.opentelemetry.io/otel"
@@ -15,6 +16,17 @@ import (
 )
 
 func main() {
+	// 内存优化（Q162）：构建类命令（init/reindex/update）设低 GC 目标——
+	// 默认 GOGC=100 时 heap 涨到 2×live 才回收，go2o 全量构建峰值 RSS
+	// 3.2G（live 仅 ~1.7G）；GOGC=40 实测峰值降 28%（3.25G→2.33G）且
+	// 耗时降 6%（swap 减少）。查询类命令内存小，不受影响。
+	sub := ""
+	if len(os.Args) > 1 {
+		sub = os.Args[1]
+	}
+	if sub == "init" || sub == "reindex" || sub == "update" {
+		debug.SetGCPercent(40)
+	}
 	// 全局标志：任意位置出现 --verbose / --debug 时输出 Debug 级日志
 	// （默认 Info 级）——识别后从参数中移除，避免子命令 flag 解析报错
 	verbose := false

@@ -34,7 +34,7 @@ import (
 func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
 	funcID domain.CanonicalID, idents map[token.Pos]string, assignTargets []assignTarget,
 	funcData *funcData, specs map[string]summarySpec, fallbackTotal *int, emit domain.EmitFunc,
-	pkgs []*types.Package) error {
+	pkgs []*types.Package, dispatchRegs *dispatchReg) error {
 	logger := zap.L()
 	logger.Debug("enter emitFunctionFields")
 	defer logger.Debug("exit emitFunctionFields")
@@ -63,6 +63,7 @@ func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Func
 		slotsFor: map[domain.CanonicalID]map[string]bool{funcID: {}},
 		extSummaries: map[domain.CanonicalID]bool{},
 		rets:     map[*ssa.Function][][]ssa.Value{},
+		dispatchRegs: *dispatchRegs, // Index 级共享（Q161 一次扫描）
 	}
 
 	// 第一遍：按使用方式判定 FieldAddr/IndexAddr 的读写（go/ssa v0.26 表示，

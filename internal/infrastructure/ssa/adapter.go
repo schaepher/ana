@@ -32,6 +32,9 @@ var _ domain.IndexerPort = (*Adapter)(nil)
 type Adapter struct {
 	// fd 摘要收集（构建期内存态）：function_field_summary 预计算用
 	fd map[domain.CanonicalID]*funcData
+	// dispatchRegs 接口注册点缓存（Q161 动态边候选元数据）：Index 级
+	// 共享一次扫描——放 extractor（每函数新建）会每函数全 prog 扫描
+	dispatchRegs dispatchReg
 }
 
 // Name 实现 IndexerPort。
@@ -60,6 +63,17 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 			sp.Build()
 		}
 	}
+	// 内存优化：释放非模块包 AST/TypesInfo——NeedSyntax 全开导致依赖包
+	// AST 全量加载（go2o 实测 Load 阶段即达峰值 3.3G 级）；go/ssa 函数体
+	// 在 Build 时已缓存 AST（Function.Syntax() 不依赖 packages），后续
+	// 阶段（标识符索引/字段提取/别名）只遍历模块内包，依赖 AST 可整体
+	// 释放（radar 实测 507MB→1MB）。模块内包 AST 保留（SSA 惰性函数体）。
+	for i, p := range pkgs {
+		if !isInModule(p.PkgPath, repo.Modules) {
+			pkgs[i].Syntax = nil
+			pkgs[i].TypesInfo = nil
+		}
+	}
 	// 源码标识符索引（token.Pos → 标识符名）：go/ssa v0.26 的 Alloc 名为 tN，
 	// 实例路径（x.A）需从 AST 恢复源码变量名
 	idents := buildIdentIndex(pkgs, repo.Modules)
@@ -86,7 +100,7 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 		if !isModuleFunction(fn, repo.Modules) {
 			continue // 外部依赖走摘要（Phase 5）
 		}
-		if err := emitFunction(repo, prog, fn, idents, assignTargets, a.fd, specs, &fallbackTotal, emit, typePkgs); err != nil {
+		if err := emitFunction(repo, prog, fn, idents, assignTargets, a.fd, specs, &fallbackTotal, emit, typePkgs, &a.dispatchRegs); err != nil {
 			return err
 		}
 	}
@@ -98,17 +112,28 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 	if err != nil {
 		return fmt.Errorf("alias analysis: %w", err)
 	}
+	// 内存优化：idents/assignTargets 已无后续消费（emitSummaries/
+	// emitGlobalInit/emitDispatches 均不依赖）——置 nil 让 GC 回收
+	idents, assignTargets = nil, nil
 	// function_field_summary 预计算 + INDIRECT_WRITE 边（间接写闭包，消费排除集）
 	if err := emitSummaries(a.fd, aliasRes, emit); err != nil {
 		return err
 	}
+	// 内存优化：摘要收集（a.fd/aliasRes）消费完毕
+	a.fd, aliasRes = nil, nil
 	// 全局变量初始化溯源（Q98）：init（隐式函数）的 Store→Global 边
 	if err := emitGlobalInit(repo, prog, emit); err != nil {
 		return err
 	}
 	// 接口动态派发（Q91/Q93/Q94）：dispatch_to 边（接口类型 → 候选实现方法）
-	return emitDispatches(repo, prog, typePkgs, emit)
+	if err := emitDispatches(repo, prog, typePkgs, emit); err != nil {
+		return err
+	}
+	return nil
 }
+
+
+
 
 // buildIdentIndex 收集项目内文件的所有标识符（位置 → 名字），供 Alloc 反查源码变量名。
 func buildIdentIndex(pkgs []*packages.Package, modules []string) map[token.Pos]string {
@@ -147,7 +172,7 @@ func emitFunction(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
 	idents map[token.Pos]string, assignTargets []assignTarget,
 	data map[domain.CanonicalID]*funcData,
 	specs map[string]summarySpec, fallbackTotal *int, emit domain.EmitFunc,
-	pkgs []*types.Package) error {
+	pkgs []*types.Package, dispatchRegs *dispatchReg) error {
 	logger := zap.L()
 	logger.Debug("enter emitFunction")
 	defer logger.Debug("exit emitFunction")
@@ -172,7 +197,7 @@ func emitFunction(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
 			pfd = &funcData{}
 			data[pid] = pfd
 		}
-		return emitFunctionFields(repo, prog, fn, pid, idents, assignTargets, pfd, specs, fallbackTotal, emit, pkgs)
+		return emitFunctionFields(repo, prog, fn, pid, idents, assignTargets, pfd, specs, fallbackTotal, emit, pkgs, dispatchRegs)
 	}
 	obj, ok := fn.Object().(*types.Func)
 	if !ok || obj == nil {
@@ -211,7 +236,7 @@ func emitFunction(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
 		fd = &funcData{}
 		data[id] = fd
 	}
-	return emitFunctionFields(repo, prog, fn, id, idents, assignTargets, fd, specs, fallbackTotal, emit, pkgs)
+	return emitFunctionFields(repo, prog, fn, id, idents, assignTargets, fd, specs, fallbackTotal, emit, pkgs, dispatchRegs)
 }
 
 // emitSignatureNodes 发射函数/方法签名的参数与返回节点（parameter / result）
