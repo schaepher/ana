@@ -114,15 +114,28 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 			typePkgs = append(typePkgs, p.Types)
 		}
 	}
+	// Q166：按包分组打点——大仓库卡住时定位到具体包（黑盒拆细；
+	// AllFunctions 全量遍历后按 fn.Pkg 分组，闭包函数归所属包）
+	byPkg := map[string][]*ssa.Function{}
 	for fn := range ssautil.AllFunctions(prog) {
 		if !isModuleFunction(fn, repo.Modules) {
 			continue // 外部依赖走摘要（Phase 5）
 		}
-		if err := emitFunction(repo, prog, fn, idents, assignTargets, a.fd, specs, &fallbackTotal, emit, typePkgs, &a.dispatchRegs); err != nil {
-			return err
-		}
+		byPkg[fn.Pkg.Pkg.Path()] = append(byPkg[fn.Pkg.Pkg.Path()], fn)
 	}
-	stage("emitFunction 循环")
+	pkgStart := time.Now()
+	for pkgPath, fns := range byPkg {
+		for _, fn := range fns {
+			if err := emitFunction(repo, prog, fn, idents, assignTargets, a.fd, specs, &fallbackTotal, emit, typePkgs, &a.dispatchRegs); err != nil {
+				return err
+			}
+		}
+		logger.Info("package done",
+			zap.String("pkg", pkgPath), zap.Int("funcs", len(fns)),
+			zap.Duration("elapsed", time.Since(pkgStart)))
+		pkgStart = time.Now()
+	}
+	stage("emitFunction 循环（按包）")
 
 	if fallbackTotal > 0 {
 		fmt.Fprintf(os.Stderr, "warning: %d 个字段访问静态类型解析失败（匿名 struct 等），已回退源码字面量路径\n", fallbackTotal)

@@ -7,6 +7,7 @@ package ssa
 
 import (
 	"strings"
+	"time"
 
 	"github.com/schaepher/codeintel/internal/domain"
 	"go.uber.org/zap"
@@ -32,8 +33,12 @@ func emitSummaries(data map[domain.CanonicalID]*funcData, alias *aliasResult, em
 		indirect[id] = map[indirectKey]fieldEntry{}
 	}
 	changed := true
-	for changed {
+	// Q166：迭代轮次打点——间接写闭包每轮全图遍历，轮数多时定位
+	roundStart := time.Now()
+	addedTotal := 0
+	for round := 1; changed; round++ {
 		changed = false
+		added := 0
 		for fID, fd := range data {
 			for _, c := range fd.calls {
 				for _, e := range calleeWrites(data, indirect, c.calleeID) {
@@ -55,10 +60,17 @@ func emitSummaries(data map[domain.CanonicalID]*funcData, alias *aliasResult, em
 					e.callArg = strings.Join(c.argNames, ", ")
 					indirect[fID][key] = e
 					changed = true
+					added++
 				}
 			}
 		}
+		addedTotal += added
+		logger.Info("indirect round",
+			zap.Int("round", round), zap.Int("added", added),
+			zap.Duration("elapsed", time.Since(roundStart)))
+		roundStart = time.Now()
 	}
+	logger.Debug("indirect settled", zap.Int("total", addedTotal))
 
 	// 发射摘要行与 INDIRECT_WRITE 边
 	for fID, fd := range data {

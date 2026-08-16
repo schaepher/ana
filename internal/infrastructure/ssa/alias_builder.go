@@ -11,6 +11,7 @@ package ssa
 import (
 	"fmt"
 	"go/ast"
+	"time"
 	"go/token"
 	"go/types"
 	"os"
@@ -118,13 +119,24 @@ func computeAliases(repo *domain.Repository, prog *ssa.Program,
 		p.fieldValues[id] = map[ssa.Value]bool{}
 		funcs = append(funcs, fn)
 	}
-	// 收集调用点 + 参与字段访问的值
+	// 收集调用点 + 参与字段访问的值（Q166：每 500 函数进度打点）
 	var sites []callSite
+	aliasStart := time.Now()
+	aliasDone := 0
+	aliasTick := func() {
+		aliasDone++
+		if aliasDone%500 == 0 {
+			logger.Info("alias progress",
+				zap.Int("funcs", aliasDone), zap.Int("total", len(funcs)),
+				zap.Duration("elapsed", time.Since(aliasStart)))
+		}
+	}
 	for _, fn := range funcs {
 		if !p.underLimit(fn) {
 			continue // 超上限：跳过该函数（Q10）
 		}
 		p.collectFieldValues(fn)
+		aliasTick()
 		for _, b := range fn.Blocks {
 			for _, instr := range b.Instrs {
 				var cc *ssa.CallCommon
