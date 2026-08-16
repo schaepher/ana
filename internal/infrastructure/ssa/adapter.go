@@ -17,6 +17,8 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/schaepher/codeintel/internal/canonicalizer"
@@ -106,7 +108,7 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 	}
 
 	a.fd = map[domain.CanonicalID]*funcData{}
-	fallbackTotal := 0
+	var fallbackTotal atomic.Int64
 	// 接口动态派发候选枚举用（⑮：模块内类型池）
 	var typePkgs []*types.Package
 	for _, p := range pkgs {
@@ -128,26 +130,47 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 	for _, fns := range byPkg {
 		totalFuncs += len(fns)
 	}
-	doneFuncs := 0
-	pkgStart := time.Now()
-	for pkgPath, fns := range byPkg {
-		for _, fn := range fns {
-			if err := emitFunction(repo, prog, fn, idents, assignTargets, a.fd, specs, &fallbackTotal, emit, typePkgs, &a.dispatchRegs); err != nil {
-				return err
-			}
-		}
-		doneFuncs += len(fns)
-		logger.Info("build progress",
-			zap.String("pkg", pkgPath), zap.Int("funcs", len(fns)),
-			zap.Int("done", doneFuncs), zap.Int("total", totalFuncs),
-			zap.Int("percent", doneFuncs*100/totalFuncs),
-			zap.Duration("elapsed", time.Since(pkgStart)))
-		pkgStart = time.Now()
+	// Q169：按包并发——包间无共享可变状态（a.fd 由 emitFunction 内
+	// 互斥锁保护；emit 走 channel 并发安全；dispatchRegs/idents/specs
+	// 只读共享）。并发上限 min(核数, 8)——内存受限环境可调低。
+	workers := runtime.GOMAXPROCS(0)
+	if workers > 8 {
+		workers = 8
 	}
-	stage("emitFunction 循环（按包，总量进度）")
+	sem := make(chan struct{}, workers)
+	var wg sync.WaitGroup
+	var fdMu sync.Mutex // a.fd 保护（emitFunction 读写 funcData）
+	doneFuncs := 0
+	var doneMu sync.Mutex
+	for pkgPath, fns := range byPkg {
+		wg.Add(1)
+		go func(pkgPath string, fns []*ssa.Function) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			pkgStart := time.Now()
+			for _, fn := range fns {
+				if err := emitFunction(repo, prog, fn, idents, assignTargets, a.fd, specs, &fallbackTotal, emit, typePkgs, &a.dispatchRegs, &fdMu); err != nil {
+					fmt.Fprintf(os.Stderr, "emitFunction %s: %v\n", fn.Name(), err)
+					return
+				}
+			}
+			doneMu.Lock()
+			doneFuncs += len(fns)
+			percent := doneFuncs * 100 / totalFuncs
+			doneMu.Unlock()
+			logger.Info("build progress",
+				zap.String("pkg", pkgPath), zap.Int("funcs", len(fns)),
+				zap.Int("done", doneFuncs), zap.Int("total", totalFuncs),
+				zap.Int("percent", percent),
+				zap.Duration("elapsed", time.Since(pkgStart)))
+		}(pkgPath, fns)
+	}
+	wg.Wait()
+	stage("emitFunction 循环（按包并发）")
 
-	if fallbackTotal > 0 {
-		fmt.Fprintf(os.Stderr, "warning: %d 个字段访问静态类型解析失败（匿名 struct 等），已回退源码字面量路径\n", fallbackTotal)
+	if n := fallbackTotal.Load(); n > 0 {
+		fmt.Fprintf(os.Stderr, "warning: %d 个字段访问静态类型解析失败（匿名 struct 等），已回退源码字面量路径\n", n)
 	}
 	// 轻量别名分析（Q80）：产出间接写排除集 + ALIAS 边（须在 emitSummaries 前）
 	aliasRes, err := computeAliases(repo, prog, idents, a.fd, emit)
@@ -215,8 +238,8 @@ func isModuleFunction(fn *ssa.Function, modules []string) bool {
 func emitFunction(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
 	idents map[token.Pos]string, assignTargets []assignTarget,
 	data map[domain.CanonicalID]*funcData,
-	specs map[string]summarySpec, fallbackTotal *int, emit domain.EmitFunc,
-	pkgs []*types.Package, dispatchRegs *dispatchReg) error {
+	specs map[string]summarySpec, fallbackTotal *atomic.Int64, emit domain.EmitFunc,
+	pkgs []*types.Package, dispatchRegs *dispatchReg, fdMu *sync.Mutex) error {
 	logger := zap.L()
 	logger.Debug("enter emitFunction")
 	defer logger.Debug("exit emitFunction")
@@ -236,11 +259,13 @@ func emitFunction(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
 		if pid == "" {
 			return nil
 		}
+		fdMu.Lock()
 		pfd := data[pid]
 		if pfd == nil {
 			pfd = &funcData{}
 			data[pid] = pfd
 		}
+		fdMu.Unlock()
 		return emitFunctionFields(repo, prog, fn, pid, idents, assignTargets, pfd, specs, fallbackTotal, emit, pkgs, dispatchRegs)
 	}
 	obj, ok := fn.Object().(*types.Func)

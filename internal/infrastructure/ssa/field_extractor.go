@@ -19,6 +19,7 @@ import (
 	"go/constant"
 	"go/token"
 	"go/types"
+	"sync/atomic"
 	"os"
 	"path/filepath"
 	"sort"
@@ -33,7 +34,7 @@ import (
 // emitFunctionFields 发射单个函数内的字段访问节点与数据流边。
 func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
 	funcID domain.CanonicalID, idents map[token.Pos]string, assignTargets []assignTarget,
-	funcData *funcData, specs map[string]summarySpec, fallbackTotal *int, emit domain.EmitFunc,
+	funcData *funcData, specs map[string]summarySpec, fallbackTotal *atomic.Int64, emit domain.EmitFunc,
 	pkgs []*types.Package, dispatchRegs *dispatchReg) error {
 	logger := zap.L()
 	logger.Debug("enter emitFunctionFields")
@@ -315,7 +316,7 @@ func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Func
 	// 第三遍：跨过程边（argument/returns/phi_operand）
 	err := ext.emitCrossFlow()
 	if fallbackTotal != nil {
-		*fallbackTotal += ext.fallbackCount
+		fallbackTotal.Add(int64(ext.fallbackCount))
 	}
 	return err
 }

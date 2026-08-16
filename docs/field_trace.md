@@ -1532,3 +1532,9 @@ origins 全保留）。
    1.34s
 
 验证：12 包 + it + e2e 27 项全绿；自建 fixture（深链/宽×深）对比。
+
+**Q169 按包并发**：emitFunction 循环按包并行（并发上限 min(核数,8)，
+GOMAXPROCS=1 可退串行）——包间无共享可变状态：a.fd 由互斥锁保护
+（读写 funcData）、fallbackTotal 改 atomic、emit 走 channel 并发安全、
+dispatchRegs/idents/specs 只读共享。自建 20 包 × 1000 函数 fixture：
+并发 187ms vs 串行 322ms（1.7 倍），符号数一致。
