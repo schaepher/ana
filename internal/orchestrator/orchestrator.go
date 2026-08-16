@@ -32,7 +32,7 @@ import (
 // 常量
 const (
 	AdapterTimeout = 10 * time.Minute // 适配器级超时（TD.md 9.1）
-	BatchSize      = 5000             // 分批事务大小（TD.md 5.2；Q171 双缓冲后加大摊薄事务）
+	BatchSize      = 10000            // 分批事务大小（TD.md 5.2；Q171/Q174 双缓冲+加大摊薄事务——大仓库 36 万 item 时减少 flush 次数）
 )
 
 // AdapterResult 记录单个适配器的执行结果。
@@ -330,6 +330,10 @@ func (o *Orchestrator) runAdapters(ctx context.Context, pkgs []*packages.Package
 	// Q171：flush 与消费解耦——SQLite 并发写无收益（同连接写锁串行化），
 	// 但 flush 慢时（大仓库百万行单批 ~300ms）双缓冲让消费/emit 不阻塞
 	ch := make(chan domain.Item, 4096)
+	// Q174：backpressure 采集——producer 因 channel 满阻塞的时间占比
+	// （flush 慢时生产 worker 阻塞于写库；日志显示 CPU vs wall）
+	var bpTotal time.Duration
+	var bpMu sync.Mutex
 	flushCh := make(chan *batchT, 2) // 消费填一个、flush 写一个
 	flushed := make(chan struct{})
 
@@ -399,6 +403,10 @@ func (o *Orchestrator) runAdapters(ctx context.Context, pkgs []*packages.Package
 					return ctx.Err()
 				}
 			})
+			// 采样：channel 满时 send 阻塞耗时（backpressure 指标）
+			bpMu.Lock()
+			bpTotal += time.Since(adapterStart)
+			bpMu.Unlock()
 			r.Duration = time.Since(adapterStart)
 			mu.Lock()
 			results = append(results, r)

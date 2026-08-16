@@ -138,45 +138,68 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 	for _, fns := range byPkg {
 		totalFuncs += len(fns)
 	}
-	// Q169/Q170：按包并发——包间无共享可变状态（a.fd 由 emitFunction
-	// 内互斥锁保护；emit 走 channel 并发安全；dispatchRegs/idents/specs
-	// 只读共享）。并发度 = --workers（默认 1=串行；用户显式调大）。
+	// Q174：按函数量倒序排队（map 遍历顺序不稳定）——大包先启动，
+	// 降低大包晚启动造成的尾部等待（单慢包长尾）
+	pkgOrder := make([]string, 0, len(byPkg))
+	for pkgPath := range byPkg {
+		pkgOrder = append(pkgOrder, pkgPath)
+	}
+	sort.Slice(pkgOrder, func(i, j int) bool {
+		return len(byPkg[pkgOrder[i]]) > len(byPkg[pkgOrder[j]])
+	})
+	// Q169/Q170/Q174：按函数分块 worker pool——包级并发下单个慢包
+	// （如 68 函数 2m53s）独占 worker 造成长尾；改为每块 200 函数
+	// 的任务粒度，块间并行（sem = --workers，默认 1=串行），慢函数
+	// 可被多 worker 分摊。funcData 局部收集后锁内合并（mergeFuncData：
+	// 闭包与外层函数可能跨块，不再共享写同一 funcData）。
 	workers := a.workers
 	if workers < 1 {
 		workers = 1
 	}
+	const blockSize = 200
+	var allFns []*ssa.Function // 按包序平铺（大包先——pkgOrder 已倒序）
+	for _, pkgPath := range pkgOrder {
+		allFns = append(allFns, byPkg[pkgPath]...)
+	}
 	sem := make(chan struct{}, workers)
 	var wg sync.WaitGroup
-	var fdMu sync.Mutex // a.fd 保护（emitFunction 读写 funcData）
+	var fdMu sync.Mutex // 合并保护（mergeFuncData）
 	doneFuncs := 0
 	var doneMu sync.Mutex
-	for pkgPath, fns := range byPkg {
+	blockStart := time.Now()
+	for start := 0; start < len(allFns); start += blockSize {
+		end := start + blockSize
+		if end > len(allFns) {
+			end = len(allFns)
+		}
+		block := allFns[start:end]
 		wg.Add(1)
-		go func(pkgPath string, fns []*ssa.Function) {
+		go func(block []*ssa.Function) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			pkgStart := time.Now()
-			for _, fn := range fns {
-				if err := emitFunction(repo, prog, fn, idents, assignTargets, a.fd, specs, &fallbackTotal, emit, typePkgs, &a.dispatchRegs, &fdMu); err != nil {
+			for _, fn := range block {
+				owner, fd, err := emitFunction(repo, prog, fn, idents, assignTargets, specs, &fallbackTotal, emit, typePkgs, &a.dispatchRegs)
+				if err != nil {
 					fmt.Fprintf(os.Stderr, "emitFunction %s: %v\n", fn.Name(), err)
 					return
 				}
+				mergeFuncData(&fdMu, a.fd, owner, fd)
 			}
 			doneMu.Lock()
-			doneFuncs += len(fns)
+			doneFuncs += len(block)
 			done := doneFuncs
 			percent := done * 100 / totalFuncs
 			doneMu.Unlock()
 			logger.Info("build progress",
-				zap.String("pkg", pkgPath), zap.Int("funcs", len(fns)),
+				zap.Int("funcs", len(block)),
 				zap.Int("done", done), zap.Int("total", totalFuncs),
 				zap.Int("percent", percent),
-				zap.Duration("elapsed", time.Since(pkgStart)))
-		}(pkgPath, fns)
+				zap.Duration("elapsed", time.Since(blockStart)))
+		}(block)
 	}
 	wg.Wait()
-	stage("emitFunction 循环（按包并发）")
+	stage("emitFunction 循环（分块并发）")
 
 	if n := fallbackTotal.Load(); n > 0 {
 		fmt.Fprintf(os.Stderr, "warning: %d 个字段访问静态类型解析失败（匿名 struct 等），已回退源码字面量路径\n", n)
@@ -238,17 +261,18 @@ func isModuleFunction(fn *ssa.Function, modules []string) bool {
 	return fn.Pkg != nil && fn.Pkg.Pkg != nil && isInModule(fn.Pkg.Pkg.Path(), modules)
 }
 
-// emitFunction 发射单个函数的全部产出：
+// emitFunction 发射单个函数的全部产出（Q174：局部收集）：
 //  1. 函数/方法节点（Phase 1：保证边端点存在，ID 与 AST 适配器一致）
 //  2. 字段访问节点与数据流边（Phase 2：field_extractor.go）
+//  3. 返回 (ownerID, 局部 funcData)——由分块 worker pool 锁内合并进
+//     data（闭包归外层；块间并行时同一 funcData 不再被并发写）
 //
 // 仅处理有 FuncDecl 源码的顶层函数/方法——闭包（FuncLit）与合成 wrapper 跳过；
 // 闭包内字段访问在 Phase 2 归入外层函数（field_trace.md Q14 适配）。
 func emitFunction(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
 	idents map[token.Pos]string, assignTargets []assignTarget,
-	data map[domain.CanonicalID]*funcData,
 	specs map[string]summarySpec, fallbackTotal *atomic.Int64, emit domain.EmitFunc,
-	pkgs []*types.Package, dispatchRegs *dispatchReg, fdMu *sync.Mutex) error {
+	pkgs []*types.Package, dispatchRegs *dispatchReg) (domain.CanonicalID, *funcData, error) {
 	logger := zap.L()
 	logger.Debug("enter emitFunction")
 	defer logger.Debug("exit emitFunction")
@@ -258,37 +282,32 @@ func emitFunction(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
 		// 外层（Parent nil）跳过。
 		parent := fn.Parent()
 		if parent == nil {
-			return nil
+			return "", nil, nil
 		}
 		obj, ok := parent.Object().(*types.Func)
 		if !ok || obj == nil {
-			return nil
+			return "", nil, nil
 		}
 		pid, _, _ := funcIdentity(obj)
 		if pid == "" {
-			return nil
+			return "", nil, nil
 		}
-		fdMu.Lock()
-		pfd := data[pid]
-		if pfd == nil {
-			pfd = &funcData{}
-			data[pid] = pfd
-		}
-		fdMu.Unlock()
-		return emitFunctionFields(repo, prog, fn, pid, idents, assignTargets, pfd, specs, fallbackTotal, emit, pkgs, dispatchRegs)
+		fd := &funcData{}
+		err := emitFunctionFields(repo, prog, fn, pid, idents, assignTargets, fd, specs, fallbackTotal, emit, pkgs, dispatchRegs)
+		return pid, fd, err
 	}
 	obj, ok := fn.Object().(*types.Func)
 	if !ok || obj == nil {
-		return nil
+		return "", nil, nil
 	}
 	pos := prog.Fset.PositionFor(fn.Pos(), false)
 	filePath := relPath(repo.Path, pos.Filename)
 	if filePath == "" {
-		return nil // 仓库外文件
+		return "", nil, nil // 仓库外文件
 	}
 	id, kind, name := funcIdentity(obj)
 	if id == "" {
-		return nil // 匿名结构体上的方法（与 AST 适配器一致）
+		return "", nil, nil // 匿名结构体上的方法（与 AST 适配器一致）
 	}
 	n := &domain.CodeEntity{
 		ID:        id,
@@ -303,20 +322,38 @@ func emitFunction(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
 		},
 	}
 	if err := emit(domain.Item{Node: n}); err != nil {
-		return err
+		return "", nil, err
 	}
 	// 签名参数/返回节点（前端展开用）
 	if err := emitSignatureNodes(fn, id, pos, filePath, emit); err != nil {
-		return err
+		return "", nil, err
+	}
+	fd := &funcData{}
+	err := emitFunctionFields(repo, prog, fn, id, idents, assignTargets, fd, specs, fallbackTotal, emit, pkgs, dispatchRegs)
+	return id, fd, err
+}
+
+// mergeFuncData 锁内合并局部 funcData 进共享 map（Q174 分块并发）：
+// direct/indirect 条目均为 append 语义，合并顺序不影响结果集。
+func mergeFuncData(fdMu *sync.Mutex, data map[domain.CanonicalID]*funcData,
+	owner domain.CanonicalID, fd *funcData) {
+	if owner == "" || fd == nil {
+		return
+	}
+	if len(fd.directReads)+len(fd.directWrites)+len(fd.calls)+len(fd.indirectWrites) == 0 {
+		return
 	}
 	fdMu.Lock()
-	fd := data[id]
-	if fd == nil {
-		fd = &funcData{}
-		data[id] = fd
+	defer fdMu.Unlock()
+	d := data[owner]
+	if d == nil {
+		d = &funcData{}
+		data[owner] = d
 	}
-	fdMu.Unlock()
-	return emitFunctionFields(repo, prog, fn, id, idents, assignTargets, fd, specs, fallbackTotal, emit, pkgs, dispatchRegs)
+	d.directReads = append(d.directReads, fd.directReads...)
+	d.directWrites = append(d.directWrites, fd.directWrites...)
+	d.calls = append(d.calls, fd.calls...)
+	d.indirectWrites = append(d.indirectWrites, fd.indirectWrites...)
 }
 
 // emitSignatureNodes 发射函数/方法签名的参数与返回节点（parameter / result）
