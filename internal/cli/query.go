@@ -686,11 +686,17 @@ func queryValueTrace(acts *action.Actions, nodeID string, maxDepth int, opts out
 			FuncID     string   `json:"func_id"`
 			FuncName   string   `json:"func_name"`
 			Conditions []string `json:"conditions,omitempty"`
+			Dispatch   *dispatchJSON `json:"dispatch,omitempty"` // Q157 P1 候选标注
 		}
 		jrows := make([]flowRow, 0, len(rows))
 		for _, r := range rows {
-			jrows = append(jrows, flowRow{string(r.ID), r.Name, r.Depth, r.Dir,
-				lastEdgeKind(r.EdgeKinds), r.Line, string(r.Kind), r.Access, r.FuncID, shortFuncName(r.FuncID), r.Conditions})
+			var disp *dispatchJSON
+			if r.DispatchCandidate {
+				disp = &dispatchJSON{Origin: r.DispatchOrigin, Confidence: r.DispatchConf}
+			}
+			jrows = append(jrows, flowRow{ID: string(r.ID), Name: r.Name, Depth: r.Depth, Dir: r.Dir,
+				Edge: lastEdgeKind(r.EdgeKinds), Line: r.Line, Kind: string(r.Kind), Access: r.Access,
+				FuncID: r.FuncID, FuncName: shortFuncName(r.FuncID), Conditions: r.Conditions, Dispatch: disp})
 		}
 		encodeJSON(map[string]any{"flows": jrows})
 		return 0
@@ -732,11 +738,15 @@ func queryValueTrace(acts *action.Actions, nodeID string, maxDepth int, opts out
 		if len(r.Conditions) > 0 {
 			cond = " [条件: " + strings.Join(r.Conditions, "; ") + "]"
 		}
+		disp := ""
+		if r.DispatchCandidate {
+			disp = fmt.Sprintf(" [候选 %s %.1f]", r.DispatchOrigin, r.DispatchConf)
+		}
 		indent := strings.Repeat("  ", r.Depth)
 		if opts.compact {
 			indent = ""
 		}
-		fmt.Printf("%s%s %s %s%s%s\n", indent, arrow, edge, r.Name+acc, line, cond)
+		fmt.Printf("%s%s %s %s%s%s%s\n", indent, arrow, edge, r.Name+acc, line, cond, disp)
 	}
 	return 0
 }
@@ -800,4 +810,10 @@ func querySummary(acts *action.Actions, input string, opts outputOpts, format st
 		fmt.Printf("  %-8s %-40s %s %s\n", "["+st.Kind+"]", st.Name, loc, st.Func)
 	}
 	return 0
+}
+
+// dispatchJSON 候选派发标注（Q157 P1：value-trace --json 输出）。
+type dispatchJSON struct {
+	Origin     string  `json:"origin"`
+	Confidence float64 `json:"confidence"`
 }

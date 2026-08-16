@@ -13,15 +13,23 @@ import (
 )
 
 // emitSummaries 计算并发射全部函数的 function_field_summary 行与 INDIRECT_WRITE 边。
+// indirectKey 间接写条目键（Q157）：字段 × 调用点粒度——同字段多处
+// 调用点各自保留 callLine/callArg（此前按字段去重复用首次保存的
+// 调用点，INDIRECT_WRITE 边回连错位）。
+type indirectKey struct {
+	fieldPath string
+	callLine  int
+}
+
 // excluded（Q80 别名分析）：确认无别名的间接写候选，迭代时跳过。
 func emitSummaries(data map[domain.CanonicalID]*funcData, alias *aliasResult, emit domain.EmitFunc) error {
 	logger := zap.L()
 	logger.Debug("enter emitSummaries")
 	defer logger.Debug("exit emitSummaries")
 	// 间接写闭包：迭代至稳定（有向调用图，最坏 O(V·E)）
-	indirect := map[domain.CanonicalID]map[string]fieldEntry{}
+	indirect := map[domain.CanonicalID]map[indirectKey]fieldEntry{}
 	for id := range data {
-		indirect[id] = map[string]fieldEntry{}
+		indirect[id] = map[indirectKey]fieldEntry{}
 	}
 	changed := true
 	for changed {
@@ -29,7 +37,8 @@ func emitSummaries(data map[domain.CanonicalID]*funcData, alias *aliasResult, em
 		for fID, fd := range data {
 			for _, c := range fd.calls {
 				for _, e := range calleeWrites(data, indirect, c.calleeID) {
-					if _, ok := indirect[fID][e.fieldPath]; ok {
+					key := indirectKey{e.fieldPath, c.callLine}
+					if _, ok := indirect[fID][key]; ok {
 						continue
 					}
 					// 别名排除（Q80）：确认该调用点无别名 → 不算间接写
@@ -39,11 +48,12 @@ func emitSummaries(data map[domain.CanonicalID]*funcData, alias *aliasResult, em
 					if !contains(c.argStructPaths, structPathOf(e.fieldPath)) {
 						continue
 					}
-					// 调用点级回连（Q90）：fID 视角的调用点 = fID 直接调用
-					// 的位置与实参（多层闭包传播时覆盖为当前层）
+					// 调用点级回连（Q90/Q157）：fID 视角的调用点 = fID 直接
+					// 调用该 callee 的位置与实参（多层闭包传播时覆盖为当前层；
+					// 每 (字段, 调用点) 一条——边发射按边取回连）
 					e.callLine = c.callLine
 					e.callArg = strings.Join(c.argNames, ", ")
-					indirect[fID][e.fieldPath] = e
+					indirect[fID][key] = e
 					changed = true
 				}
 			}
@@ -59,11 +69,12 @@ func emitSummaries(data map[domain.CanonicalID]*funcData, alias *aliasResult, em
 			return err
 		}
 		ind := indirect[fID]
-		// 合并外部摘要的间接写（虚拟节点）
+		// 合并外部摘要的间接写（虚拟节点，无调用点 → callLine=0）
 		if fd != nil {
 			for _, e := range fd.indirectWrites {
-				if _, ok := ind[e.fieldPath]; !ok {
-					ind[e.fieldPath] = e
+				key := indirectKey{e.fieldPath, 0}
+				if _, ok := ind[key]; !ok {
+					ind[key] = e
 				}
 			}
 		}
@@ -71,14 +82,14 @@ func emitSummaries(data map[domain.CanonicalID]*funcData, alias *aliasResult, em
 			return err
 		}
 		// INDIRECT_WRITE 边：f → g（本次调用存在匹配写），metadata 携带
-		// 调用点（Q90 回连：行号 + 实参变量名）。调用点在 fID 的 indirect
-		// 条目（闭包传播时按 fID 的直接调用点设置）
+		// 调用点（Q90/Q157 回连：行号 + 实参变量名，边 × 字段粒度——每条
+		// 边取该调用点自己的 indirect 条目，不再回读按字段去重后的首条）
 		for _, c := range fd.calls {
 			if calleeHasMatchingWrite(data, indirect, c.calleeID, c.argStructPaths) {
 				meta := map[string]any{}
 				for _, e := range calleeWrites(data, indirect, c.calleeID) {
 					if contains(c.argStructPaths, structPathOf(e.fieldPath)) {
-						if got, ok := indirect[fID][e.fieldPath]; ok {
+						if got, ok := indirect[fID][indirectKey{e.fieldPath, c.callLine}]; ok {
 							if got.callLine > 0 {
 								meta["call_line"] = got.callLine
 							}
@@ -133,7 +144,7 @@ func emitSummaryRows(funcID domain.CanonicalID, accessKind string, entries []fie
 
 // calleeWrites 返回被调函数的全部写条目（direct + indirect）。
 func calleeWrites(data map[domain.CanonicalID]*funcData,
-	indirect map[domain.CanonicalID]map[string]fieldEntry, gID domain.CanonicalID) []fieldEntry {
+	indirect map[domain.CanonicalID]map[indirectKey]fieldEntry, gID domain.CanonicalID) []fieldEntry {
 	logger := zap.L()
 	logger.Debug("enter calleeWrites")
 	defer logger.Debug("exit calleeWrites")
@@ -148,7 +159,7 @@ func calleeWrites(data map[domain.CanonicalID]*funcData,
 
 // calleeHasMatchingWrite 判断被调函数是否存在与实参类型匹配的写条目。
 func calleeHasMatchingWrite(data map[domain.CanonicalID]*funcData,
-	indirect map[domain.CanonicalID]map[string]fieldEntry, gID domain.CanonicalID,
+	indirect map[domain.CanonicalID]map[indirectKey]fieldEntry, gID domain.CanonicalID,
 	argStructPaths []string) bool {
 	for _, e := range calleeWrites(data, indirect, gID) {
 		if contains(argStructPaths, structPathOf(e.fieldPath)) {
@@ -159,7 +170,7 @@ func calleeHasMatchingWrite(data map[domain.CanonicalID]*funcData,
 }
 
 // valuesOf 取 map 的 value 列表。
-func valuesOf(m map[string]fieldEntry) []fieldEntry {
+func valuesOf[K comparable](m map[K]fieldEntry) []fieldEntry {
 	out := make([]fieldEntry, 0, len(m))
 	for _, e := range m {
 		out = append(out, e)

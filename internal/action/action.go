@@ -33,6 +33,7 @@ type Reader interface {
 	AllSummaries() ([]*domain.FunctionFieldSummary, error)
 	GetIndirectWriteEdges(funcID domain.CanonicalID) ([]*domain.Fact, error)
 	GetDispatchEdges(ifaceID domain.CanonicalID) ([]*domain.Fact, error)
+	GetDispatchTargets() (map[domain.CanonicalID]domain.DispatchMeta, error) // Q157 P1
 	FindFieldReads(fullPath string) ([]*domain.CodeEntity, error)
 	GetTableColumns(table string) ([]*domain.TableColumn, error)
 	GetTableRelations(table string) ([]*domain.TableRelation, error)
@@ -275,7 +276,35 @@ func (a *Actions) Relations(table string) ([]*domain.TableRelation, error) {
 }
 
 func (a *Actions) ValueTrace(nodeID domain.CanonicalID, maxDepth int) ([]*domain.TraceRow, error) {
-	return a.repo.GetValueTrace(nodeID, maxDepth)
+	rows, err := a.repo.GetValueTrace(nodeID, maxDepth)
+	if err != nil {
+		return nil, err
+	}
+	return a.markDispatchCandidates(rows)
+}
+
+// markDispatchCandidates 标注候选派发（Q157 P1）：value-trace 行所属
+// 函数是接口 dispatch_to 边 target（候选实现）时标记来源与置信度——
+// 链路混入多个接口候选实现时可区分。
+func (a *Actions) markDispatchCandidates(rows []*domain.TraceRow) ([]*domain.TraceRow, error) {
+	targets, err := a.repo.GetDispatchTargets()
+	if err != nil {
+		return nil, err
+	}
+	if len(targets) == 0 {
+		return rows, nil
+	}
+	for _, r := range rows {
+		if r.FuncID == "" {
+			continue
+		}
+		if m, ok := targets[domain.CanonicalID(r.FuncID)]; ok {
+			r.DispatchCandidate = true
+			r.DispatchOrigin = m.Origin
+			r.DispatchConf = m.Confidence
+		}
+	}
+	return rows, nil
 }
 
 // Roots 返回顶层入口节点（前端初始视图）。

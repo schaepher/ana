@@ -1279,3 +1279,35 @@ relations 无关联为数据形态使然（filter 值多来自参数而非其他
 **测试**：TestInterfaceSummaryCustom（自定义 iface spec：write/read/
 filter/id/AND 拆分/TableName）+ TestGofRepositoryInterfaceSelfContained
 （真实 gof 依赖，tidy 后 init）。验证矩阵全绿。
+
+---
+
+## 27. 间接写嵌套传播 + 调用点粒度 + value-trace 候选标注（Q157，2026-08-16）
+
+**review 三项**（用户给出建议优先级，检查后确认 2 项未修复 + 1 项部分）：
+
+**P0-1 嵌套对象字段传播**（未修复 → 修复）：实现写 `Order.FinalFee`，
+wrapper 实参 `*OrderModel`（含 Order 嵌套字段）时类型匹配只比较实参
+结构体（OrderModel）与字段属主（Order）→ wrapper 间接写缺失。
+修复：`ownerTypesOf` 展开实参类型的嵌套 struct 字段 owner 类型集合
+（OrderModel → {OrderModel, Order}，深度上限 3，指针/切片解包，去重），
+recordCallInfo 的 argStructPaths 用展开集合——嵌套字段写经外包裹传
+匹配。
+
+**P0-2 callLine/callArg 粒度**（未修复 → 修复）：indirect 按 fieldPath
+去重后复用**首次**保存的调用点——同函数两处调用同一 callee 写同字段
+时，两条 INDIRECT_WRITE 边都回连首处。修复：indirect 键改
+`indirectKey{fieldPath, callLine}`（字段 × 调用点粒度）；摘要行仍按
+字段去重取代表；INDIRECT_WRITE 边 meta 从该边调用点的条目取（边 ×
+字段粒度）。
+
+**P1 value-trace 性能/候选标注**（性能已修复）：Q155 的 (id,dir) 去重 +
+INDEXED BY 后 go2o 热点写点 --max-depth 2 = 0.05s/27 行（review 观察
+的 21s/13KB 为修复前）。**候选混入标注**（未做 → 实现）：GetDispatchTargets
+查全部 dispatch_to 边 → action.ValueTrace 叠加标记行所属函数
+DispatchCandidate/Origin/Confidence；CLI 文本 `[候选 register 0.9]`、
+--json `dispatch` 字段。
+
+**测试**：TestIndirectWriteNestedOwner（动态接口 + 实现写嵌套字段）、
+TestIndirectWriteCallLinePerCall（双调用点边各带 call_line）、
+TestValueTraceDispatchMark（dispatch 边 → 行标注）。验证矩阵全绿。

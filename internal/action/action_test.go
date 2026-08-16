@@ -209,3 +209,48 @@ func TestSummaryChainWriteAnchorDownstream(t *testing.T) {
 	}
 }
 
+
+// TestValueTraceDispatchMark：Q157 P1——value-trace 候选派发标注。
+// 行所属函数是 dispatch_to 边 target（接口候选实现）时标记来源与
+// 置信度（链路混入多候选实现时可区分）。
+func TestValueTraceDispatchMark(t *testing.T) {
+	acts, dir := seedRepo(t)
+	_ = acts
+	// seedRepo 的 Actions 内部 repo 是窄接口——重开 sqlite 存 dispatch 边
+	// （FK：Iface 节点须先存在）
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	r := sqlite.NewRepo(db)
+	if _, err := r.SaveBatchStats([]*domain.CodeEntity{
+		{ID: "symbol:go:example.com/m:Iface", Kind: domain.KindInterface, Name: "Iface", FilePath: "iface.go"},
+	}, []*domain.Fact{
+		{SourceID: "symbol:go:example.com/m:Iface", TargetID: "symbol:go:example.com/m:main",
+			Kind: domain.FactDispatchTo, ToolSource: domain.ToolSSA, Confidence: 0.9,
+			Metadata: map[string]any{"origin": "register"}},
+	}, nil); err != nil {
+		t.Fatalf("save dispatch: %v", err)
+	}
+	// value-trace 从 main 的写节点反向：t0 行所属 main 是候选 → 标注
+	rows, err := acts.ValueTrace(domain.CanonicalID("symbol:go:example.com/m:main#t.A.write@5"), 8)
+	if err != nil {
+		t.Fatalf("ValueTrace: %v", err)
+	}
+	marked := false
+	for _, r := range rows {
+		if r.FuncID == "symbol:go:example.com/m:main" {
+			if !r.DispatchCandidate {
+				t.Errorf("main 行应标注候选派发: %+v", r)
+			}
+			if r.DispatchOrigin != "register" || r.DispatchConf != 0.9 {
+				t.Errorf("候选元数据 = %s %.1f, want register 0.9", r.DispatchOrigin, r.DispatchConf)
+			}
+			marked = true
+		}
+	}
+	if !marked {
+		t.Error("value-trace 未包含 main 函数行")
+	}
+}

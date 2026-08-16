@@ -45,6 +45,15 @@ type TraceRow struct {
 	FuncID    string // 所属函数 canonical ID（GetValueTrace 函数上下文分组用）
 	FullPath  string // field_access 的类型限定路径（前端展开匹配用）
 	Conditions []string // 路径条件标注（Q92 查询期计算，不落库）
+	DispatchCandidate bool    // 该行所属函数是接口候选实现（Q157 P1）
+	DispatchOrigin    string  // 候选来源（register / enum）
+	DispatchConf      float64 // 候选置信度
+}
+
+// DispatchMeta 接口派发元数据（Q157 P1：value-trace 候选标注用）。
+type DispatchMeta struct {
+	Origin     string  // register / enum
+	Confidence float64
 }
 
 // UnusedFunc 未调用分析中的一个函数（field_trace.md §16）。

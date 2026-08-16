@@ -307,7 +307,9 @@ func (ext *fieldExtractor) emitCall(cc *ssa.CallCommon, callVal ssa.Value) error
 
 // recordCallInfo 记录调用摘要条目（间接写闭包消费：emitSummaries 沿
 // fd.calls 传播被调函数写）。常量实参（nil、字面量）不产生实例传递，
-// 不参与类型匹配；实参类型路径用于与被调函数写字段的声明类型匹配（Q36）。
+// 不参与类型匹配；实参类型路径用于与被调函数写字段的声明类型匹配
+// （Q36；Q157 展开嵌套字段 owner 链——OrderModel 含 Order 字段时
+// 实现写 Order.FinalFee 也能匹配）。
 func (ext *fieldExtractor) recordCallInfo(cc *ssa.CallCommon, calleeID domain.CanonicalID) {
 	if ext.funcData == nil {
 		return
@@ -317,7 +319,7 @@ func (ext *fieldExtractor) recordCallInfo(cc *ssa.CallCommon, calleeID domain.Ca
 		if _, isConst := arg.(*ssa.Const); isConst {
 			continue
 		}
-		if p := structPathOfType(arg.Type()); p != "" {
+		for _, p := range ownerTypesOf(arg.Type(), 0) {
 			argPaths = append(argPaths, p)
 		}
 		// 实参变量名（Q90 调用点回连展示；SSA 临时名回退原名）
@@ -333,6 +335,43 @@ func (ext *fieldExtractor) recordCallInfo(cc *ssa.CallCommon, calleeID domain.Ca
 		callLine:       ext.prog.Fset.PositionFor(cc.Pos(), false).Line,
 		argNames:       argNames,
 	})
+}
+
+// ownerTypesOf 收集实参类型及其嵌套 struct 字段的 owner 类型路径
+// （Q157：OrderModel 含 Order 字段 → [pkg.OrderModel, pkg.Order]——
+// 实现写 Order.FinalFee 也能经 OrderModel 实参匹配）。深度上限 3
+// 防深嵌套爆炸；指针/切片解包；同类型去重。
+func ownerTypesOf(t types.Type, depth int) []string {
+	if depth > 3 {
+		return nil
+	}
+	if p, ok := t.(*types.Pointer); ok {
+		t = p.Elem()
+	} else if s, ok := t.(*types.Slice); ok {
+		t = s.Elem()
+	}
+	named, ok := t.(*types.Named)
+	if !ok {
+		return nil
+	}
+	obj := named.Obj()
+	if obj == nil || obj.Pkg() == nil {
+		return nil
+	}
+	self := obj.Pkg().Path() + "." + obj.Name()
+	seen := map[string]bool{self: true}
+	out := []string{self}
+	if st, ok := named.Underlying().(*types.Struct); ok {
+		for i := 0; i < st.NumFields(); i++ {
+			for _, sub := range ownerTypesOf(st.Field(i).Type(), depth+1) {
+				if !seen[sub] {
+					seen[sub] = true
+					out = append(out, sub)
+				}
+			}
+		}
+	}
+	return out
 }
 
 // resolveStaticCallee 解析静态可确定的被调函数：静态调用 / 直接函数值 / phi 链。
