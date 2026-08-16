@@ -209,6 +209,11 @@ func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Func
 					if err := ext.emitFlow(f.id, v); err != nil {
 						return err
 					}
+					// 基值 → 字段节点（值字段读取，与 FieldAddr 对称）——
+					// 循环读出的对象字段（s.ID）链贯通的关键
+					if err := ext.emitFlowValue(v.X, f.id); err != nil {
+						return err
+					}
 				}
 			case *ssa.Store:
 				if g, ok := v.Addr.(*ssa.Global); ok {
@@ -657,7 +662,13 @@ func (ext *fieldExtractor) emitValue(v ssa.Value) (domain.CanonicalID, error) {
 	// 归一到源码变量名 ID（find#x）——与 Scan 摘要（表关联）的 out
 	// 实参节点一致，数据流链贯通（Scan(&x) 写入 → x 读取使用处）
 	if uo, ok := v.(*ssa.UnOp); ok && uo.Op == token.MUL {
-		if _, isAlloc := uo.X.(*ssa.Alloc); isAlloc {
+		// 局部变量（Alloc）/ 切片元素（IndexAddr）/ 字段地址（FieldAddr）
+		// 的解引用读取：归一到源码路径 ID（find#x / find#s[i] 类），
+		// 与元素/字段节点一致——循环读出的对象字段链贯通
+		_, isAlloc := uo.X.(*ssa.Alloc)
+		_, isIdx := uo.X.(*ssa.IndexAddr)
+		_, isFld := uo.X.(*ssa.FieldAddr)
+		if isAlloc || isIdx || isFld {
 			if name := ext.instancePath(uo); !isSSAName(name) {
 				fid, ok2 := ext.funcIDOf(uo)
 				if ok2 {

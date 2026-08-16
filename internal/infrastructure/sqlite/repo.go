@@ -1413,7 +1413,7 @@ func (r *Repo) GetTableRelations(table string) ([]*domain.TableRelation, error) 
 
 	const maxDepth = 12
 	dataKinds := "'data_flows_to','argument','returns','summary_io','alias','phi_operand'"
-	seen := map[string]bool{} // "fromCol|toTable|toCol" 去重
+	seen := map[string]*domain.TableRelation{} // "fromCol|toTable|toCol" → 关联（Type 取最高）
 	var out []*domain.TableRelation
 	for _, st := range starts {
 		// BFS：沿 data 边双向扩展，收集其他表虚拟节点
@@ -1450,6 +1450,31 @@ func (r *Repo) GetTableRelations(table string) ([]*domain.TableRelation, error) 
 				next = append(next, other)
 			}
 			ns.Close()
+			// 循环读出桥（Q152）：SSA 的 range 迭代器内部（Slice/phi/Next）
+			// 不建边——BFS 到 ssa_value 节点时，桥接同函数、同类型的字段
+			// 读取节点（s.ID.read）：对象读出的值在函数内经字段读取使用。
+			// 类型匹配（type_string 含类型名）限宽，防跨对象扩散
+			if ts, ok := r.typeNameOf(cur); ok && ts != "" {
+				fs, err := r.Query(`SELECT n2.id FROM nodes n1, nodes n2
+					WHERE n1.id = ? AND n2.kind = 'field_access'
+					  AND json_extract(n2.properties, '$.access_kind') = 'read'
+					  AND json_extract(n2.properties, '$.func_id') = json_extract(n1.properties, '$.func_id')
+					  AND instr(json_extract(n2.properties, '$.full_path'), ?) > 0`, cur, ts)
+				if err == nil {
+					var bridge []string
+					for fs.Next() {
+						var bid string
+						if err := fs.Scan(&bid); err == nil {
+							if _, ok := visited[bid]; !ok {
+								visited[bid] = depth + 1
+								bridge = append(bridge, bid)
+							}
+						}
+					}
+					fs.Close()
+					queue = append(queue, bridge...)
+				}
+			}
 			queue = append(queue, next...)
 		}
 		// 命中：其他表的虚拟节点（is_external field_access，表名不同）。
@@ -1499,10 +1524,6 @@ func (r *Repo) GetTableRelations(table string) ([]*domain.TableRelation, error) 
 				continue // 本表内部列，非关联
 			}
 			key := st.name + "|" + otherTable + "|" + col
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
 			fromCol := st.name
 			if i := strings.Index(fromCol, "."); i >= 0 {
 				fromCol = fromCol[i+1:]
@@ -1514,14 +1535,44 @@ func (r *Repo) GetTableRelations(table string) ([]*domain.TableRelation, error) 
 			case "write":
 				rtype = domain.RelationWrite
 			}
-			out = append(out, &domain.TableRelation{
+			if ex, ok := seen[key]; ok {
+				// 同列多节点（write/filter/read）：Type 取最高（query > write > read）
+				if rtype == domain.RelationQuery {
+					ex.Type = domain.RelationQuery
+				}
+				if d < ex.Hops {
+					ex.Hops = d
+				}
+				continue
+			}
+			rel := &domain.TableRelation{
 				FromTable: table, FromCol: fromCol,
 				ToTable: otherTable, ToCol: col,
 				Hops: d, Type: rtype,
-			})
+			}
+			seen[key] = rel
+			out = append(out, rel)
 		}
 	}
 	return out, nil
+}
+
+// typeNameOf 查节点 type_string 并提取类型名（[]example.com/m.Session →
+// Session；*Session → Session；无类型/非 ssa_value 返回 ok=false）。
+func (r *Repo) typeNameOf(id string) (string, bool) {
+	var ts sql.NullString
+	if err := r.QueryRow(`SELECT json_extract(properties, '$.type_string') FROM nodes WHERE id = ?`, id).Scan(&ts); err != nil || !ts.Valid {
+		return "", false
+	}
+	t := ts.String
+	if i := strings.LastIndex(t, "."); i >= 0 {
+		t = t[i+1:]
+	}
+	t = strings.Trim(t, "[]*")
+	if t == "" || t == "any" || t == "string" || t == "int" || t == "int64" || t == "bool" || t == "error" || t == "byte" {
+		return "", false // 基本类型无字段
+	}
+	return t, true
 }
 
 // GetTableColumns 按表名聚合列虚拟节点（query table）：Name=表（整表行）

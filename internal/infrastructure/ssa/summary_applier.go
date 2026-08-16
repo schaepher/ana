@@ -995,7 +995,13 @@ func (ext *fieldExtractor) applyORMWrite(cc *ssa.CallCommon, calleeID domain.Can
 			if strings.HasSuffix(string(calleeID), ".Where") {
 				access = "filter"
 			}
-			return ext.emitORMColumn(cc, calleeID, table, col, cc.Args[2], access)
+			// Where("col = ?", v) 的 v 是 variadic 实参（打包成 Slice）：
+			// 解包取首个值（MakeInterface 由 emitORMColumn 内部再解）
+			val := cc.Args[2]
+			if vals := variadicElems(cc.Args[2]); len(vals) > 0 {
+				val = vals[0]
+			}
+			return ext.emitORMColumn(cc, calleeID, table, col, val, access)
 		}
 		return nil
 	}
