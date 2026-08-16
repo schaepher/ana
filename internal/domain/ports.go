@@ -89,14 +89,22 @@ type TableColumn struct {
 	Readers   []TableEndpoint // 虚拟节点出边（消费）；SELECT 读路径未解析时为空
 }
 
+// 表关联类型（关联终点虚拟节点的 access_kind 判定）：
+const (
+	RelationQuery = "query" // 终点是 WHERE 过滤列（filter）——A 的值作为 B 的查询条件（键关联，高置信）
+	RelationWrite = "write" // 终点是写入列——同源/间接写入（值相关，中置信）
+	RelationRead  = "read"  // 终点是读出列——间接扩散（低置信）
+)
+
 // TableRelation 表间关联（query relations）：本表某列的值沿数据流链
 // 流入另一表的列（A.x 读出 → B.y 过滤/写入——代码层关联，无外键依赖）。
 type TableRelation struct {
-	FromTable string // 本表
-	FromCol   string // 本表列
-	ToTable   string // 关联表
-	ToCol     string // 关联表列
-	Hops      int    // 数据流链长度（边数）
+	FromTable string `json:"from_table"` // 本表
+	FromCol   string `json:"from_col"`   // 本表列
+	ToTable   string `json:"to_table"`   // 关联表
+	ToCol     string `json:"to_col"`     // 关联表列
+	Hops      int    `json:"hops"`       // 数据流链长度（边数）
+	Type      string `json:"type"`       // query（键关联）/ write（同源）/ read（间接）
 }
 
 // SinceInfo --since <ref> 的 diff 解析结果（field_trace.md §16.5）。

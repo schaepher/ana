@@ -1087,7 +1087,7 @@ CLI `update`（全量分析+增量写入）已有；补**自动触发闭环**（
 **动机**：理解项目时从"数据库表"反推数据流——表.列虚拟节点（Q97 持久化
 映射 + GORM ②）已有，但无表级聚合查询。
 
-**命令**：`codeintel query table <表名> [--json]`；`codeintel query relations <表名> [--json]`（表间关联）
+**命令**：`codeintel query table <表名> [--json]`；`codeintel query relations <表名> [--json|--format mermaid]`（表间关联）
 
 **表间关联（query relations，Q149）**：无外键时从代码使用方式推断——
 该表列虚拟节点沿数据流边（data_flows_to/argument/returns/summary_io/
@@ -1102,6 +1102,17 @@ sql/gorm）的列：A.x 读出 → Scan 写入变量 → 变量作为 B 查询�
 
 radar 实测：sq_lite_atom ↔ sq_lite_knowledge_graph（140 条列关联，
 6 跳——ingest 同源写入的原子与知识图谱）。
+
+**精度分级（Q150）**：关联按终点虚拟节点 access_kind 分三级——
+`query`（终点是 WHERE 过滤列：A 的值作为 B 的查询条件 = 键关联，高置信）、
+`write`（同源/间接写入，中）、`read`（间接扩散，低）。GORM Where 摘要：
+`(DB).Where("col = ?", v)` 字符串列名剥离 " = ?" 后缀产 filter 节点
+（链式 Model 范围对象溯源）。输出排序 query 优先、跳数升序。
+**--format mermaid**：列级图（表为子图、列节点、列间边，query 类型
+粗线 ==\>）。
+**盲区**：GORM 读路径（Find/First 读出到对象）无虚拟节点——键关联链
+断在读出端（radar 的 session.id 读出走 Find，relations 只显示同源
+write；ListSessions 的 Where filter 节点已产）。
 - 数据源：`kind='field_access' AND is_external=true AND (name=表 OR name LIKE 表.%)`
   （Q97 字符串 SQL + GORM 结构体写路径共用形态）
 - 输出：按列名**聚合**（同列多调用点合并一行），每列列出入写入方

@@ -159,6 +159,10 @@ func builtinSummaries() map[string]summarySpec {
 			Func: "gorm.io/gorm.(DB)." + fn, ParamIndex: 1, ORMWrite: true,
 		}
 	}
+	// Where 过滤（表关联键）：Where("col = ?", v) 字符串列名 → filter 节点
+	specs["gorm.io/gorm.(DB).Where"] = summarySpec{
+		Func: "gorm.io/gorm.(DB).Where", ParamIndex: 1, ORMWrite: true,
+	}
 	specs["database/sql.(DB).Begin"] = summarySpec{Func: "database/sql.(DB).Begin", TxBoundary: "begin"}
 	specs["database/sql.(Tx).Commit"] = summarySpec{Func: "database/sql.(Tx).Commit", TxBoundary: "commit"}
 	specs["database/sql.(Tx).Rollback"] = summarySpec{Func: "database/sql.(Tx).Rollback", TxBoundary: "rollback"}
@@ -877,7 +881,7 @@ func (ext *fieldExtractor) applyORMWrite(cc *ssa.CallCommon, calleeID domain.Can
 	t := derefType(realArg.Type())
 	named, ok := t.(*types.Named)
 	if !ok {
-		// ⑦ 字符串列名形态：Update("col", v) → 表名溯源链式范围对象
+		// ⑦ 字符串列名形态：Update("col", v) / Where("col = ?", v)
 		if c, isConst := realArg.(*ssa.Const); isConst && c.Value != nil &&
 			constant.StringVal(c.Value) != "" && len(cc.Args) >= 3 {
 			scope := chainScopeObject(cc.Args[0])
@@ -886,7 +890,16 @@ func (ext *fieldExtractor) applyORMWrite(cc *ssa.CallCommon, calleeID domain.Can
 			}
 			table := snakeCase(scope.Obj().Name())
 			col := constant.StringVal(c.Value)
-			return ext.emitORMColumn(cc, calleeID, table, col, cc.Args[2], "write")
+			// Where("session_id = ?", v) 条件串：剥离 " = ?" 后缀取列名
+			if i := strings.Index(col, " = "); i >= 0 {
+				col = col[:i]
+			}
+			// Where 过滤列标 filter（表关联键：值 → 过滤列）
+			access := "write"
+			if strings.HasSuffix(string(calleeID), ".Where") {
+				access = "filter"
+			}
+			return ext.emitORMColumn(cc, calleeID, table, col, cc.Args[2], access)
 		}
 		return nil
 	}

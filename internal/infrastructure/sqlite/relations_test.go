@@ -57,6 +57,10 @@ func TestGetTableRelations(t *testing.T) {
 	if rels[0].Hops == 0 {
 		t.Error("hops 应为数据流链长度（>0）")
 	}
+	// 终点是 filter 虚拟节点 → query 类型（键关联，高置信）
+	if rels[0].Type != domain.RelationQuery {
+		t.Errorf("relation type = %q, want query（终点 filter 列）", rels[0].Type)
+	}
 	// table_c 无链 → 不出现；无关联表 → 空
 	empty, err := r.GetTableRelations("table_c")
 	if err != nil || len(empty) != 0 {

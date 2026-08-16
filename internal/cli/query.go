@@ -102,7 +102,7 @@ func cmdQuery(args []string) int {
 	case "table":
 		return queryTable(acts, target, opts)
 	case "relations":
-		return queryRelations(acts, target, opts)
+		return queryRelations(acts, target, f.format, opts)
 	case "path":
 		return queryPath(acts, f.positional[0], f.positional[1], f)
 	case "callers", "callees", "impact":

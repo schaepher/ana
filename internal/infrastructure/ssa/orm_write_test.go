@@ -178,3 +178,57 @@ func f(db *DB) {
 		}
 	}
 }
+
+// TestORMWhereFilter：GORM Where("session_id = ?", v) 字符串列名形态——
+// 列名剥离 " = ?" 后缀产 filter 虚拟节点（表关联键：值 → 过滤列）。
+// 用本地模拟 DB 类型（链式 Model/Where/Count，同 gorm 形态）。
+func TestORMWhereFilter(t *testing.T) {
+	nodes, facts, _ := indexFixtureFull(t, map[string]string{
+		"go.mod":  moduleGoMod,
+		"field-summary.yaml": `summaries:
+  - func: example.com/mtest.(DB).Where
+    orm_write: true
+    param_index: 1
+`,
+		"main.go": `package m
+
+type DB struct{}
+
+func (db *DB) Model(v any) *DB { return db }
+
+func (db *DB) Where(cond string, args ...any) *DB { return db }
+
+func (db *DB) Count(c *int64) {}
+
+type ChatMessage struct {
+	SessionID string
+	Content   string
+}
+
+type Session struct {
+	ID string
+}
+
+func countBySession(db *DB, s *Session) int {
+	var count int64
+	db.Model(&ChatMessage{}).Where("session_id = ?", s.ID).Count(&count)
+	return int(count)
+}
+`,
+	})
+	funcID := "symbol:go:example.com/mtest:countBySession"
+	vnode := findVirtualNode(t, nodes, funcID, "chat_message.session_id")
+	if vnode.Property("access_kind") != "filter" {
+		t.Errorf("chat_message.session_id access_kind = %q, want filter（Where 过滤列）", vnode.Property("access_kind"))
+	}
+	// 值（s.ID）→ filter 节点边
+	found := false
+	for _, f := range facts {
+		if f.Kind == domain.FactSummaryIO && string(f.TargetID) == string(vnode.ID) {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("Where 值 → filter 节点边缺失（表关联键链断点）")
+	}
+}

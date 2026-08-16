@@ -1454,28 +1454,26 @@ func (r *Repo) GetTableRelations(table string) ([]*domain.TableRelation, error) 
 		}
 		// 命中：其他表的虚拟节点（is_external field_access，表名不同）。
 		// 列名 = 节点 Name（表.列）；表名 = 前缀
-		byNode := map[string]string{} // nodeID → Name（预查）
+		byNode := map[string]string{} // nodeID → "name|access_kind"（预查）
 		if len(visited) > 1 {
 			ids := make([]any, 0, len(visited))
-			idx := map[string]string{}
 			for id := range visited {
 				ids = append(ids, id)
-				idx[id] = id
 			}
-			_ = idx
-			q := `SELECT id, name FROM nodes WHERE id IN (` + strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",") + `)
+			q := `SELECT id, name, json_extract(properties, '$.access_kind') FROM nodes
+			  WHERE id IN (` + strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",") + `)
 			  AND json_extract(properties, '$.type_string') IN ('sql', 'gorm')`
 			ns, err := r.Query(q, ids...)
 			if err != nil {
 				return nil, err
 			}
 			for ns.Next() {
-				var id, name string
-				if err := ns.Scan(&id, &name); err != nil {
+				var id, name, access string
+				if err := ns.Scan(&id, &name, &access); err != nil {
 					ns.Close()
 					return nil, err
 				}
-				byNode[id] = name
+				byNode[id] = name + "|" + access
 			}
 			ns.Close()
 		}
@@ -1483,8 +1481,16 @@ func (r *Repo) GetTableRelations(table string) ([]*domain.TableRelation, error) 
 			if id == st.id || d == 0 {
 				continue
 			}
-			name := byNode[id]
-			if name == "" || !strings.Contains(name, ".") {
+			meta := byNode[id]
+			if meta == "" {
+				continue
+			}
+			name := meta
+			access := ""
+			if i := strings.Index(meta, "|"); i >= 0 {
+				name, access = meta[:i], meta[i+1:]
+			}
+			if !strings.Contains(name, ".") {
 				continue // 非 表.列（ssa_value 等）
 			}
 			dot := strings.Index(name, ".")
@@ -1501,10 +1507,17 @@ func (r *Repo) GetTableRelations(table string) ([]*domain.TableRelation, error) 
 			if i := strings.Index(fromCol, "."); i >= 0 {
 				fromCol = fromCol[i+1:]
 			}
+			rtype := domain.RelationRead
+			switch access {
+			case "filter":
+				rtype = domain.RelationQuery // WHERE 过滤列：键关联（高置信）
+			case "write":
+				rtype = domain.RelationWrite
+			}
 			out = append(out, &domain.TableRelation{
 				FromTable: table, FromCol: fromCol,
 				ToTable: otherTable, ToCol: col,
-				Hops: d,
+				Hops: d, Type: rtype,
 			})
 		}
 	}
