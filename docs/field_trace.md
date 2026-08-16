@@ -1214,3 +1214,29 @@ tidy 补齐后 init。顺带修复 ⑮ 存量 bug：多返回候选实现无 Ret
 
 **权衡**：同节点多路径从多行变一行（最短深度）——展示更干净；
 edge_kinds 无路径顺序（展示用途可接受）。
+
+---
+
+## 25. unused 大仓库性能：EXISTS 子查询 → 预聚合（go2o 实测，2026-08-16）
+
+**动机**：go2o 验证（Q155 延续）发现 `query unused` 全量在 13K 函数
+节点上 150 秒超时。瓶颈：GetUncalledFunctions/GetIsolatedChains 每行
+4 个 EXISTS 子查询（calls/passes_result + passes_to/dispatch_to/
+initializes + var 初始化 data_flows_to LIKE 前缀扫描）——13K 行 ×
+子查询 = 5 万次索引查找。
+
+**修复**：预聚合替代逐行 EXISTS——
+- `edgeTargetKinds(kinds...)`：一次查询返回指定 kind 边的 target_id 集合
+- `varInitFuncs()`：一次查询取 var.* 初始化引用的 func_id 集合
+- 主查询只 SELECT 节点属性，Go 侧 map O(1) 标记 called/referenced
+
+**实测**：go2o 全量 unused 从 150s+ 超时 → 0.23 秒（650×），输出
+11061 未调用 + 0 孤立链。radar 回归正常。验证矩阵全绿。
+
+**go2o 验证汇总（Q154/Q155/§25）**：init 27s（148K 节点/152K 边）；
+动态派发 indirect_write 回传 ✓（profileManagerImpl.SaveProfile 22 字段）；
+value-trace 去重 ✓（errorV2#err 1549 行、0 重复、0.13s，索引选择
+INDEXED BY 修复）；query table ✓（wallet_log 4 列 + 读取方定位）；
+update 非 git 仓库正确拒绝；unused ✓（预聚合后 0.23s）。已知边界：
+gof 框架自定义仓储不在 GORM 摘要覆盖内（表虚拟节点少，relations 无
+关联输出）；alipay 等包自身编译错误降级跳过。

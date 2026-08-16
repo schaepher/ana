@@ -1733,12 +1733,21 @@ func (r *Repo) GetUncalledFunctions() ([]*domain.UnusedFunc, error) {
 	logger := zap.L()
 	logger.Debug("enter (Repo).GetUncalledFunctions")
 	defer logger.Debug("exit (Repo).GetUncalledFunctions")
-	rows, err := r.Query(`SELECT n.id, n.kind, n.name, n.file_path, n.line_start, n.line_end,
-	EXISTS(SELECT 1 FROM edges e WHERE e.target_id = n.id AND e.kind IN ('calls','passes_result')) AS called,
-	EXISTS(SELECT 1 FROM edges e WHERE e.target_id = n.id AND e.kind IN ('passes_to','dispatch_to','initializes'))
-	OR EXISTS(SELECT 1 FROM edges e JOIN nodes s ON s.id = e.source_id
-	          WHERE e.kind = 'data_flows_to' AND e.target_id LIKE 'symbol:go:%:var.%'
-	            AND json_extract(s.properties, '$.func_id') = n.id) AS referenced
+	// 预聚合 called/referenced（替代 13K 行 × N 个 EXISTS 子查询——go2o
+	// 实测 13K 函数 150s+ 超时；聚合后秒级）
+	called, err := r.edgeTargetKinds("calls", "passes_result")
+	if err != nil {
+		return nil, err
+	}
+	refed, err := r.edgeTargetKinds("passes_to", "dispatch_to", "initializes")
+	if err != nil {
+		return nil, err
+	}
+	varInit, err := r.varInitFuncs()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.Query(`SELECT n.id, n.kind, n.name, n.file_path, n.line_start, n.line_end
 	FROM nodes n
 	WHERE n.kind IN ('function','method')
 	  AND n.name NOT IN ('main','init')
@@ -1754,20 +1763,65 @@ func (r *Repo) GetUncalledFunctions() ([]*domain.UnusedFunc, error) {
 		var (
 			u          domain.UnusedFunc
 			id, kind   string
-			called     bool
-			referenced bool
 			file       string
 		)
-		if err := rows.Scan(&id, &kind, &u.Name, &file, &u.LineStart, &u.LineEnd, &called, &referenced); err != nil {
+		if err := rows.Scan(&id, &kind, &u.Name, &file, &u.LineStart, &u.LineEnd); err != nil {
 			return nil, err
 		}
 		u.ID = domain.CanonicalID(id)
 		u.Kind = domain.EntityKind(kind)
 		u.FilePath = file
-		u.Called = called
-		u.Referenced = referenced
+		u.Called = called[u.ID]
+		u.Referenced = refed[u.ID] || varInit[u.ID]
 		u.Exported = len(u.Name) > 0 && u.Name[0] >= 'A' && u.Name[0] <= 'Z'
 		out = append(out, &u)
+	}
+	return out, rows.Err()
+}
+
+// edgeTargetKinds 一次查询返回指定 kind 边的全部 target_id 集合
+// （unused 预聚合，替代逐行 EXISTS 子查询）。
+func (r *Repo) edgeTargetKinds(kinds ...string) (map[domain.CanonicalID]bool, error) {
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(kinds)), ",")
+	args := make([]any, len(kinds))
+	for i, k := range kinds {
+		args[i] = k
+	}
+	rows, err := r.Query(`SELECT target_id FROM edges WHERE kind IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[domain.CanonicalID]bool{}
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return nil, err
+		}
+		out[domain.CanonicalID(t)] = true
+	}
+	return out, rows.Err()
+}
+
+// varInitFuncs 返回被全局变量初始化表达式引用的函数集合（data_flows_to
+// → var.* 节点，source 的 func_id——Q108：包初始化调用的函数不算孤立）。
+func (r *Repo) varInitFuncs() (map[domain.CanonicalID]bool, error) {
+	rows, err := r.Query(`SELECT DISTINCT json_extract(s.properties, '$.func_id')
+	FROM edges e JOIN nodes s ON s.id = e.source_id
+	WHERE e.kind = 'data_flows_to' AND e.target_id LIKE 'symbol:go:%:var.%'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[domain.CanonicalID]bool{}
+	for rows.Next() {
+		var fid sql.NullString
+		if err := rows.Scan(&fid); err != nil {
+			return nil, err
+		}
+		if fid.Valid && fid.String != "" {
+			out[domain.CanonicalID(fid.String)] = true
+		}
 	}
 	return out, rows.Err()
 }
@@ -1783,12 +1837,17 @@ func (r *Repo) GetIsolatedChains() ([][]*domain.UnusedFunc, error) {
 	defer logger.Debug("exit (Repo).GetIsolatedChains")
 	// 1. 候选节点（function/method；main/init 参与构图但不报告）
 	//    referenced：有 passes_to/dispatch_to/initializes/var 初始化引用
-	//    ——有引用的函数不算孤立（链头判定排除），如注册回调
-	nodeRows, err := r.Query(`SELECT n.id, n.kind, n.name, n.file_path, n.line_start, n.line_end,
-	EXISTS(SELECT 1 FROM edges e WHERE e.target_id = n.id AND e.kind IN ('passes_to','dispatch_to','initializes'))
-	OR EXISTS(SELECT 1 FROM edges e JOIN nodes s ON s.id = e.source_id
-	          WHERE e.kind = 'data_flows_to' AND e.target_id LIKE 'symbol:go:%:var.%'
-	            AND json_extract(s.properties, '$.func_id') = n.id) AS referenced
+	//    ——有引用的函数不算孤立（链头判定排除），如注册回调。
+	//    预聚合替代逐行 EXISTS（go2o 实测 13K 函数 150s+ 超时）
+	refed, err := r.edgeTargetKinds("passes_to", "dispatch_to", "initializes")
+	if err != nil {
+		return nil, err
+	}
+	varInit, err := r.varInitFuncs()
+	if err != nil {
+		return nil, err
+	}
+	nodeRows, err := r.Query(`SELECT n.id, n.kind, n.name, n.file_path, n.line_start, n.line_end
 	FROM nodes n
 	WHERE n.kind IN ('function','method')
 	  AND n.file_path IS NOT NULL AND n.file_path NOT LIKE '%_test.go'`)
@@ -1800,15 +1859,14 @@ func (r *Repo) GetIsolatedChains() ([][]*domain.UnusedFunc, error) {
 	var order []domain.CanonicalID
 	for nodeRows.Next() {
 		var (
-			u          domain.UnusedFunc
-			id, kind   string
-			file       string
-			referenced bool
+			u        domain.UnusedFunc
+			id, kind string
+			file     string
 		)
-		if err := nodeRows.Scan(&id, &kind, &u.Name, &file, &u.LineStart, &u.LineEnd, &referenced); err != nil {
+		if err := nodeRows.Scan(&id, &kind, &u.Name, &file, &u.LineStart, &u.LineEnd); err != nil {
 			return nil, err
 		}
-		u.Referenced = referenced
+		u.Referenced = refed[domain.CanonicalID(id)] || varInit[domain.CanonicalID(id)]
 		u.ID = domain.CanonicalID(id)
 		u.Kind = domain.EntityKind(kind)
 		u.FilePath = file
