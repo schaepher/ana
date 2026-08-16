@@ -1369,3 +1369,27 @@ BFS 对象值共享桥接噪音。
 member_id→mm_account.member_id、category.parent_id↔product_category
 （自引用）、sale_sub_order.order_no→order_list.order_no（2 跳高置信）、
 商品域 item_id→snapshot.item_id 等。ER 图脚本 tmp/er_diagram.py。
+
+## 30. 全库关联单次查询：query relations --all + export relations（Q160，2026-08-16）
+
+**动机**（用户）：ER 图验证后确认——AGENT 拿全库表间关联需遍历全部表
+逐次 `query relations`（~40 次 CLI 调用），要求一次查询拿全库。
+
+**实现**：
+- `sqlite.Repo.GetTables()`——枚举外部 gorm/sql 虚拟节点表名（去重）
+- `sqlite.Repo.GetAllTableRelations()`——遍历 GetTables 调
+  GetTableRelations，合并去重（同 from/to 列对取 hops 最小 + Type 最高
+  query>write>read），按 from/to 稳定排序
+- CLI：`query relations --all [--json|--mermaid]`（无需表名参数，cmdQuery
+  target 检查放行）、`export relations [--out x.json]`（{"relations": [...]}）
+- action 透传：`RelationsAll()`
+
+**性能**（go2o 148K 节点实测）：顺序遍历 2m34s（40 表 × 每表 BFS 12 跳）。
+曾试 8 路并发 → 5m53s 反而劣化：SQLite 连接池锁竞争 + 3.5G 低内存 swap
+（sys 时间 4 倍）。保持顺序。
+
+**验证**：go2o 全库 42596 条关联（query 键关联 21 条，与 ER 图/源码验证
+结果一致）；单元测试覆盖聚合去重（正向 query + 反向 read）。
+
+**边界**：全库 read/write 关联量级大（4 万+），AGENT 建议按 type 过滤取
+query 键关联；耗时 2.5 分钟级——适合批量分析而非交互。

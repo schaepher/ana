@@ -43,7 +43,8 @@ func cmdQuery(args []string) int {
 	// 手动解析 flags（flag 包遇到位置参数即停止，无法支持 "query symbol X --repo Y" 形式）
 	f := parseQueryFlags(rest)
 	target := ""
-	if sub != "unused" && sub != "module-calls" {
+	// relations --all（Q160）无需表名参数
+	if sub != "unused" && sub != "module-calls" && !(sub == "relations" && f.all) {
 		if len(f.positional) < 1 {
 			fmt.Fprintf(os.Stderr, "error: 缺少符号参数\n")
 			return 2
@@ -102,6 +103,9 @@ func cmdQuery(args []string) int {
 	case "table":
 		return queryTable(acts, target, opts)
 	case "relations":
+		if f.all {
+			return queryRelationsAll(acts, f.format, opts) // Q160 全库聚合
+		}
 		return queryRelations(acts, target, f.format, opts)
 	case "path":
 		return queryPath(acts, f.positional[0], f.positional[1], f)
@@ -134,6 +138,7 @@ type queryFlags struct {
 	format     string // summary 的 mermaid 输出（Q100）
 	since      string // unused 的 --since <ref>（git diff 区间）
 	failOn     string // unused 的 --fail-on unused|isolated（CI 退出码）
+	all        bool   // relations --all：全库关联聚合（Q160）
 }
 
 // parseQueryFlags 手动解析 query 子命令的参数，支持 flags 与位置参数任意顺序。
@@ -175,6 +180,8 @@ func parseQueryFlags(args []string) queryFlags {
 			i++
 		case strings.HasPrefix(a, "--fail-on="):
 			f.failOn = strings.TrimPrefix(a, "--fail-on=")
+		case a == "--all":
+			f.all = true
 		case a == "--json":
 			f.json = true
 		case a == "--compact":

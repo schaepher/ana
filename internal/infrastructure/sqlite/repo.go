@@ -1659,6 +1659,92 @@ func (r *Repo) typeNameOf(id string) (string, bool) {
 	return t, true
 }
 
+// GetTables 枚举全库外部表名（gorm/sql 虚拟节点表名去重，Q160）。
+func (r *Repo) GetTables() ([]string, error) {
+	logger := zap.L()
+	logger.Debug("enter (Repo).GetTables")
+	defer logger.Debug("exit (Repo).GetTables")
+	rows, err := r.Query(`SELECT DISTINCT substr(name, 1, instr(name, '.') - 1) FROM nodes
+		WHERE kind = 'field_access' AND json_extract(properties, '$.is_external') = 'true'
+		  AND json_extract(properties, '$.type_string') IN ('gorm', 'sql')
+		  AND name NOT LIKE '%.%.%' ORDER BY 1`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var tables []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return nil, err
+		}
+		if t == "" {
+			continue // name 无点（整表行）时 substr 截出空串
+		}
+		tables = append(tables, t)
+	}
+	return tables, rows.Err()
+}
+
+// GetAllTableRelations 全库关联聚合（Q160）：每表 GetTableRelations 结果
+// 合并去重——同 from/to 列对取 hops 最小 + Type 最高（query > write > read）。
+// 输出按 from/to 稳定排序，AGENT 一次调用拿全库（query relations --all / export relations）。
+// 注：曾试 8 路并发——go2o 实测 2m34s 反而劣化到 5m53s（SQLite 连接池
+// 锁竞争 + 低内存 swap），保持顺序执行。
+func (r *Repo) GetAllTableRelations() ([]*domain.TableRelation, error) {
+	logger := zap.L()
+	logger.Debug("enter (Repo).GetAllTableRelations")
+	defer logger.Debug("exit (Repo).GetAllTableRelations")
+	tables, err := r.GetTables()
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]*domain.TableRelation{} // ft|fc|tt|tc → 最佳关联
+	for _, t := range tables {
+		rels, err := r.GetTableRelations(t)
+		if err != nil {
+			return nil, err
+		}
+		for _, rel := range rels {
+			key := rel.FromTable + "|" + rel.FromCol + "|" + rel.ToTable + "|" + rel.ToCol
+			ex, ok := seen[key]
+			if !ok || rel.Hops < ex.Hops || (rel.Hops == ex.Hops && relTypeRank(rel.Type) > relTypeRank(ex.Type)) {
+				seen[key] = rel
+			}
+		}
+	}
+	out := make([]*domain.TableRelation, 0, len(seen))
+	for _, rel := range seen {
+		out = append(out, rel)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.FromTable != b.FromTable {
+			return a.FromTable < b.FromTable
+		}
+		if a.FromCol != b.FromCol {
+			return a.FromCol < b.FromCol
+		}
+		if a.ToTable != b.ToTable {
+			return a.ToTable < b.ToTable
+		}
+		return a.ToCol < b.ToCol
+	})
+	return out, nil
+}
+
+// relTypeRank 关联类型优先级（聚合去重用）：query > write > read。
+func relTypeRank(t string) int {
+	switch t {
+	case domain.RelationQuery:
+		return 2
+	case domain.RelationWrite:
+		return 1
+	default:
+		return 0
+	}
+}
+
 // GetTableColumns 按表名聚合列虚拟节点（query table）：Name=表（整表行）
 // 或 表.列（Q97 持久化映射）；每列带写入方（summary_io 入边 source 值节点
 // 的所属函数与行号）。读取方（出边）通常为空——SELECT 读路径未解析。

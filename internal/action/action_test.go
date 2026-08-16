@@ -254,3 +254,58 @@ func TestValueTraceDispatchMark(t *testing.T) {
 		t.Error("value-trace 未包含 main 函数行")
 	}
 }
+
+// TestRelationsAll：全库关联聚合（Q160）——多表 BFS 结果合并去重，
+// 同列对保留 hops 最小 + query 类型（如 A.id → B 在 B 视角可能重复出现）。
+func TestRelationsAll(t *testing.T) {
+	acts, dir := seedRepo(t)
+	_ = acts
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	r := sqlite.NewRepo(db)
+	funcID := domain.CanonicalID("symbol:go:example.com/m:find")
+	nodes := []*domain.CodeEntity{
+		{ID: funcID, Kind: domain.KindFunction, Name: "find", FilePath: "a.go"},
+		{ID: funcID + "#ext.sql.table_a.id.read@6", Kind: domain.KindFieldAccess,
+			Name: "table_a.id", FilePath: "a.go", LineStart: 6,
+			Properties: map[string]any{"full_path": "table_a.id", "access_kind": "read",
+				"type_string": "sql", "is_external": "true", "func_id": funcID}},
+		{ID: funcID + "#t4", Kind: domain.KindSSAValue, Name: "t4",
+			Properties: map[string]any{"func_id": funcID}},
+		{ID: funcID + "#x", Kind: domain.KindSSAValue, Name: "id",
+			Properties: map[string]any{"func_id": funcID}},
+		{ID: funcID + "#ext.sql.table_b.a_id.filter@9", Kind: domain.KindFieldAccess,
+			Name: "table_b.a_id", FilePath: "a.go", LineStart: 9,
+			Properties: map[string]any{"full_path": "table_b.a_id", "access_kind": "filter",
+				"type_string": "sql", "is_external": "true", "func_id": funcID}},
+	}
+	if _, err := r.SaveBatchStats(nodes, []*domain.Fact{
+		{SourceID: funcID + "#ext.sql.table_a.id.read@6", TargetID: funcID + "#t4",
+			Kind: domain.FactSummaryIO, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: funcID + "#t4", TargetID: funcID + "#x",
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: funcID + "#x", TargetID: funcID + "#ext.sql.table_b.a_id.filter@9",
+			Kind: domain.FactSummaryIO, ToolSource: domain.ToolSSA, Confidence: 1},
+	}, nil); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	acts = New(r)
+	rels, err := acts.RelationsAll()
+	if err != nil {
+		t.Fatalf("RelationsAll: %v", err)
+	}
+	// 期望 2 条：正向 query（table_a.id → table_b.a_id）+ 反向 read（table_b.a_id → table_a.id）
+	if len(rels) != 2 {
+		t.Fatalf("rels = %+v, want 2", rels)
+	}
+	fwd, bwd := rels[0], rels[1]
+	if fwd.FromTable != "table_a" || fwd.ToTable != "table_b" || fwd.Type != domain.RelationQuery {
+		t.Errorf("fwd = %+v, want table_a→table_b query", fwd)
+	}
+	if bwd.FromTable != "table_b" || bwd.ToTable != "table_a" || bwd.Type != domain.RelationRead {
+		t.Errorf("bwd = %+v, want table_b→table_a read", bwd)
+	}
+}

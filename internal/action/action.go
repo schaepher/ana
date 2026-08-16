@@ -37,6 +37,7 @@ type Reader interface {
 	FindFieldReads(fullPath string) ([]*domain.CodeEntity, error)
 	GetTableColumns(table string) ([]*domain.TableColumn, error)
 	GetTableRelations(table string) ([]*domain.TableRelation, error)
+	GetAllTableRelations() ([]*domain.TableRelation, error) // Q160 全库聚合
 	GetUncalledFunctions() ([]*domain.UnusedFunc, error)
 	GetIsolatedChains() ([][]*domain.UnusedFunc, error)
 	GetPath(from, to domain.CanonicalID, maxDepth int, viaCalls bool) ([]*domain.TraceRow, error)
@@ -273,6 +274,12 @@ func (a *Actions) Table(table string) ([]*domain.TableColumn, error) {
 // 的其他表.列（代码层推断，无外键依赖）。
 func (a *Actions) Relations(table string) ([]*domain.TableRelation, error) {
 	return a.repo.GetTableRelations(table)
+}
+
+// RelationsAll 全库表间关联聚合（query relations --all / export relations，Q160）：
+// 一次遍历全部表返回所有表对关联（合并去重）。
+func (a *Actions) RelationsAll() ([]*domain.TableRelation, error) {
+	return a.repo.GetAllTableRelations()
 }
 
 func (a *Actions) ValueTrace(nodeID domain.CanonicalID, maxDepth int) ([]*domain.TraceRow, error) {
