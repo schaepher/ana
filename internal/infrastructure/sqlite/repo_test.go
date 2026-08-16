@@ -1540,3 +1540,48 @@ func TestGetValueTraceMinConf(t *testing.T) {
 		}
 	}
 }
+
+// TestGetValueTraceEdgeCandidateFwd：Q161 场景树——正向（dir=1 使用链）
+// 经候选 returns 边到达的行同样标注候选元数据（出边 source=dp.id）。
+func TestGetValueTraceEdgeCandidateFwd(t *testing.T) {
+	r := newTestRepo(t)
+	callerID := "symbol:go:example.com/m:g"
+	implID := "symbol:go:example.com/m:(Impl).M"
+	callVal := node(callerID+"#t0", "ssa_value", "t0", "g.go")
+	callVal.Properties["func_id"] = callerID
+	retVal := node(implID+"#t5", "ssa_value", "t5", "i.go")
+	retVal.Properties["func_id"] = implID
+	save(t, r, []*domain.CodeEntity{callVal, retVal}, []*domain.Fact{
+		// 候选 returns 边：实现返回值 → 调用点结果（register 0.9）
+		{SourceID: retVal.ID, TargetID: callVal.ID, Kind: domain.FactReturns, ToolSource: domain.ToolSSA,
+			Confidence: 1, Metadata: map[string]any{"interface": "example.com/m.Iface",
+				"candidate_origin": "register", "confidence": 0.9}},
+	})
+
+	// 锚点 = 调用点结果（returns 边 target 端）：到达它的候选 returns
+	// 边在 dir=0（产生链）标注；反向链走到候选返回值 t5
+	rows, err := r.GetValueTrace(callVal.ID, 8, 0)
+	if err != nil {
+		t.Fatalf("GetValueTrace: %v", err)
+	}
+	marked := false
+	reached := false
+	for _, row := range rows {
+		if row.ID == callVal.ID {
+			if row.EdgeOrigin != "register" || row.EdgeConf != 0.9 || row.EdgeIface != "example.com/m.Iface" {
+				t.Errorf("候选 returns 标注 = %s/%v/%s, want register/0.9/example.com/m.Iface",
+					row.EdgeOrigin, row.EdgeConf, row.EdgeIface)
+			}
+			marked = true
+		}
+		if row.ID == retVal.ID {
+			reached = true
+		}
+	}
+	if !marked {
+		t.Fatal("锚点行未标注候选 returns 边")
+	}
+	if !reached {
+		t.Fatal("反向链未到达候选返回值 t5")
+	}
+}

@@ -345,3 +345,102 @@ func Run() {
 		t.Errorf("ExpCalc confidence = %v, want 0.7", expArg.Metadata["confidence"])
 	}
 }
+
+// TestDispatchEdgeCandidateMetaGoDefer：Q161 场景树——Go/Defer 形态的
+// 动态调用，argument 边同样携带候选元数据（emitCall 对 Go/Defer 共用
+// 动态分支）。
+func TestDispatchEdgeCandidateMetaGoDefer(t *testing.T) {
+	_, facts, _ := indexFixtureFull(t, map[string]string{
+		"go.mod": moduleGoMod,
+		"main.go": `package m
+
+type Order struct {
+	FinalFee int
+}
+
+type FeeCalculator interface {
+	Calculate(o *Order)
+}
+
+type StdCalc struct{}
+
+func (c *StdCalc) Calculate(o *Order) { o.FinalFee = 100 }
+
+func Run() {
+	var fc FeeCalculator = &StdCalc{}
+	go fc.Calculate(&Order{})
+	defer fc.Calculate(&Order{})
+}
+`,
+	})
+	// Go/Defer 动态调用：argument 边带候选元数据（register 0.9）
+	count := 0
+	for _, f := range facts {
+		if f.Kind != domain.FactArgument || f.Metadata == nil {
+			continue
+		}
+		if f.Metadata["candidate_origin"] != "register" {
+			continue
+		}
+		if strings.Contains(string(f.TargetID), "(StdCalc).Calculate") {
+			if c, ok := f.Metadata["confidence"].(float64); !ok || c != 0.9 {
+				t.Errorf("Go/Defer 候选边 confidence = %v, want 0.9", f.Metadata["confidence"])
+			}
+			count++
+		}
+	}
+	if count < 2 {
+		t.Errorf("Go/Defer 动态 argument 候选边 = %d, want ≥2（go + defer 各一）", count)
+	}
+}
+
+// TestDispatchOriginsMultiImpl：Q161 场景树——多候选实现写同一字段时，
+// wrapper 的 indirect_write 摘要保留全部来源（每个候选实现一条 origin，
+// 不再折叠为单行"置零"分支）。
+func TestDispatchOriginsMultiImpl(t *testing.T) {
+	_, _, _, origins := indexFixtureFullOrigins(t, map[string]string{
+		"go.mod": moduleGoMod,
+		"main.go": `package m
+
+type Order struct {
+	FinalFee int
+}
+
+type FeeCalculator interface {
+	Calculate(o *Order)
+}
+
+type StdCalc struct{}
+
+func (c *StdCalc) Calculate(o *Order) { o.FinalFee = 100 }
+
+type ExpCalc struct{}
+
+func (c *ExpCalc) Calculate(o *Order) { o.FinalFee = 200 }
+
+// wrapper：经接口调用分派（动态 invoke，无静态 callee）
+func Process(fc FeeCalculator, o *Order) {
+	fc.Calculate(o)
+}
+
+func Run() {
+	Process(&StdCalc{}, &Order{})
+}
+`,
+	})
+	procID := domain.CanonicalID("symbol:go:example.com/mtest:Process")
+	feePath := "example.com/mtest.Order.FinalFee"
+	// Process 的 indirect_write 应有 2 条来源：StdCalc + ExpCalc 两个候选实现
+	seen := map[string]bool{}
+	for _, o := range origins {
+		if o.FunctionID == procID && o.FieldPath == feePath {
+			seen[string(o.CalleeID)] = true
+		}
+	}
+	if !seen["symbol:go:example.com/mtest:(StdCalc).Calculate"] {
+		t.Error("origins 缺 StdCalc 来源")
+	}
+	if !seen["symbol:go:example.com/mtest:(ExpCalc).Calculate"] {
+		t.Error("origins 缺 ExpCalc 来源（多候选实现来源被折叠）")
+	}
+}

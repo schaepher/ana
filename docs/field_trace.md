@@ -1422,3 +1422,17 @@ query 键关联；耗时 2.5 分钟级——适合批量分析而非交互。
 **影响**：schema user_version 2→3——验证仓库（radar/go2o）须
 clean --force + init 重建；value-trace SQL 每步加 json_extract 判断
 （metadata 多 NULL，实测确认开销）。
+
+**场景树检查**（举一反三）：
+- A 动态边：Call/Go/Defer 三形态共用动态分支（Go/Defer 单测确认）；
+  单/多返回 + Extract 拆解均带元数据；多候选各自判定 origin
+- B value-trace：dir=0 标注到达端（argument 入边 target / returns 到达
+  调用点结果）；dir=1 出边场景与 edge_kinds 语义一致（链首不标注）；
+  minConf 剪枝两方向 + seed 双向 + NULL/无候选 metadata 恒放行；
+  性能无感知（go2o 44ms，json_extract 开销可忽略）
+- C origins：多候选实现写同一字段保留全部来源（每条 callInfo 一条——
+  用户"置零分支折叠"场景确认解决，ssa 单测断言两候选）；外部摘要
+  无调用点不产 origins；deleteFiles 级联删 origins（FK CASCADE）
+- 已知边界（与既有行为一致，勿当 bug）：增量更新陈旧 summary/origins
+  行残留（INSERT OR IGNORE 语义，全量重建才彻底清理）；GetValueTraceMulti
+  （生命周期跳板）无候选标注/剪枝；export graph mermaid/dot 不展示候选

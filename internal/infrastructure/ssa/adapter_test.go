@@ -31,6 +31,13 @@ func indexFixture(t *testing.T, files map[string]string) ([]*domain.CodeEntity, 
 
 // indexFixtureFull 同 indexFixture，额外收集函数字段摘要行。
 func indexFixtureFull(t *testing.T, files map[string]string) ([]*domain.CodeEntity, []*domain.Fact, []*domain.FunctionFieldSummary) {
+	nodes, facts, summaries, _ := indexFixtureFullOrigins(t, files)
+	return nodes, facts, summaries
+}
+
+// indexFixtureFullOrigins 同 indexFixtureFull，额外收集 Q161 origins
+// （emitSummaries 发射的 Item.Origins）。
+func indexFixtureFullOrigins(t *testing.T, files map[string]string) ([]*domain.CodeEntity, []*domain.Fact, []*domain.FunctionFieldSummary, []*domain.SummaryOrigin) {
 	t.Helper()
 	dir := t.TempDir()
 	for path, content := range files {
@@ -39,6 +46,7 @@ func indexFixtureFull(t *testing.T, files map[string]string) ([]*domain.CodeEnti
 	var nodes []*domain.CodeEntity
 	var facts []*domain.Fact
 	var summaries []*domain.FunctionFieldSummary
+	var origins []*domain.SummaryOrigin
 	adapter := &Adapter{}
 	repo := &domain.Repository{Path: dir, Module: "example.com/mtest", Modules: []string{"example.com/mtest"}}
 	pkgs, err := loadTestPackages(dir)
@@ -55,12 +63,15 @@ func indexFixtureFull(t *testing.T, files map[string]string) ([]*domain.CodeEnti
 		if item.Summary != nil {
 			summaries = append(summaries, item.Summary)
 		}
+		if item.Origins != nil {
+			origins = append(origins, item.Origins...)
+		}
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("Index: %v", err)
 	}
-	return nodes, facts, summaries
+	return nodes, facts, summaries, origins
 }
 
 // findNode 按 ID 查找节点。
