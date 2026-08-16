@@ -268,3 +268,62 @@ func TestQueryFieldsOrigins(t *testing.T) {
 		t.Errorf("fields 文本缺来源行:\n%s", out)
 	}
 }
+
+// TestValueTraceIncludeContainerCLI：Q163——--include-container 显式
+// 开启父容器路径扩展（默认精确匹配拦截容器读；flag 放行且不影响
+// 候选剪枝语义）。
+func TestValueTraceIncludeContainerCLI(t *testing.T) {
+	dir := seedRepo(t)
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	r := sqlite.NewRepo(db)
+	funcID := "symbol:go:example.com/m:calc"
+	write := &domain.CodeEntity{ID: domain.CanonicalID(funcID + "#invoice.SettledFee.write@3"),
+		Kind: domain.KindFieldAccess, Name: "invoice.SettledFee", FilePath: "m.go", LineStart: 3,
+		Properties: map[string]any{"full_path": "example.com/m.Invoice.SettledFee",
+			"instance_path": "invoice.SettledFee", "access_kind": "write", "func_id": funcID}}
+	v := &domain.CodeEntity{ID: domain.CanonicalID(funcID + "#t0"), Kind: domain.KindSSAValue, Name: "t0",
+		Properties: map[string]any{"func_id": funcID}}
+	invRead := &domain.CodeEntity{ID: domain.CanonicalID(funcID + "#invoice.read@5"),
+		Kind: domain.KindFieldAccess, Name: "invoice", FilePath: "m.go", LineStart: 5,
+		Properties: map[string]any{"full_path": "example.com/m.Invoice",
+			"instance_path": "invoice", "access_kind": "read", "func_id": funcID,
+			"type_string": "*example.com/m.Invoice"}}
+	// RefundSource 候选实现入口（候选 argument 边）
+	refundParam := &domain.CodeEntity{ID: domain.CanonicalID(funcID + "#refund"),
+		Kind: domain.KindSSAValue, Name: "refund",
+		Properties: map[string]any{"func_id": funcID}}
+	if _, err := r.SaveBatchStats([]*domain.CodeEntity{write, v, invRead, refundParam}, []*domain.Fact{
+		{SourceID: v.ID, TargetID: write.ID, Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: invRead.ID, TargetID: v.ID, Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+		// 候选 returns 边（上行：RefundSource 实现返回值 → 容器值）
+		{SourceID: refundParam.ID, TargetID: v.ID, Kind: domain.FactReturns, ToolSource: domain.ToolSSA,
+			Confidence: 1, Metadata: map[string]any{"interface": "example.com/m.RefundSource",
+				"candidate_origin": "enum", "confidence": 0.7}},
+	}, nil); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	anchor := string(write.ID)
+	// 默认（minConf=1.0）：候选边剪枝——RefundSource 实现不可达
+	out := captureStdout(func() {
+		if code := cmdQuery([]string{"value-trace", anchor, "--repo", dir, "--json"}); code != 0 {
+			t.Errorf("value-trace exit = %d", code)
+		}
+	})
+	if strings.Contains(out, "refund") {
+		t.Error("默认模式不应出现 RefundSource 候选路径")
+	}
+	// --include-container 与 --min-conf 0：flag 均被接受，候选路径可达
+	out = captureStdout(func() {
+		if code := cmdQuery([]string{"value-trace", anchor, "--repo", dir,
+			"--include-container", "--min-conf", "0", "--json"}); code != 0 {
+			t.Errorf("value-trace flags exit = %d", code)
+		}
+	})
+	if !strings.Contains(out, "refund") {
+		t.Error("--include-container --min-conf 0 后候选路径应可达")
+	}
+}

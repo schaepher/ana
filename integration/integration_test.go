@@ -3186,3 +3186,85 @@ func main() {}
 		t.Errorf("value-trace 未标注动态候选边:\n%s", out[:min(len(out), 400)])
 	}
 }
+
+// TestValueTraceContainerBoundarySelfContained：Q163 集成固化——从
+// Payment 分支写点（SettledFee.write）追踪，默认（候选边剪枝）不出现
+// RefundSource 实现；显式 --min-conf 0 时经候选 returns 边可达且标注
+// 候选（路径累计）。
+func TestValueTraceContainerBoundarySelfContained(t *testing.T) {
+	if !scipGoAvailable() {
+		t.Skip("scip-go not found")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/vtbound\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "main.go"), `package vtbound
+
+type Invoice struct {
+	SettledFee int64
+}
+
+type FeeSource interface {
+	Calculate(inv *Invoice)
+}
+
+type RefundSource interface {
+	Build() *Invoice
+}
+
+type PaymentSource struct{}
+
+func (p *PaymentSource) Calculate(inv *Invoice) {
+	inv.SettledFee = 100
+}
+
+type RefundImpl struct{}
+
+func (r *RefundImpl) Build() *Invoice {
+	return &Invoice{}
+}
+
+// 容器 inv 来自 RefundSource 实现（候选 returns 边）——从 Payment
+// 分支写点反向追踪经容器可到 RefundSource，Q163 默认应剪枝
+func Process() {
+	var rs RefundSource = &RefundImpl{}
+	inv := rs.Build()
+	var fs FeeSource = &PaymentSource{}
+	fs.Calculate(inv)
+}
+
+func main() {}
+`)
+	if code := runCLI(t, "init", "--repo", dir); code != 0 {
+		t.Fatalf("init exit = %d", code)
+	}
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := sqlite.NewRepo(db)
+	funcID := "symbol:go:example.com/vtbound:(PaymentSource).Calculate"
+	writeID := fieldAccessID(t, repo, funcID, "inv.SettledFee", "write")
+	if writeID == "" {
+		t.Fatal("SettledFee.write 节点缺失")
+	}
+	// 默认：RefundImpl 不可达（候选边剪枝）
+	code, out := runCLIOut(t, "query", "value-trace", writeID, "--repo", dir, "--max-depth", "8")
+	if code != 0 {
+		t.Fatalf("value-trace exit = %d", code)
+	}
+	if strings.Contains(out, "RefundImpl") {
+		t.Errorf("默认模式不应出现 RefundSource 实现（候选边越界）:\n%s", out[:min(len(out), 400)])
+	}
+	// 显式 --min-conf 0：候选路径可达 + 标注（路径累计）
+	code, out = runCLIOut(t, "query", "value-trace", writeID, "--repo", dir, "--max-depth", "8", "--min-conf", "0")
+	if code != 0 {
+		t.Fatalf("value-trace --min-conf exit = %d", code)
+	}
+	if !strings.Contains(out, "RefundImpl") {
+		t.Errorf("--min-conf 0 后应可达 RefundImpl:\n%s", out[:min(len(out), 400)])
+	}
+	if !strings.Contains(out, "动态候选") {
+		t.Errorf("--min-conf 0 后应标注动态候选:\n%s", out[:min(len(out), 400)])
+	}
+}

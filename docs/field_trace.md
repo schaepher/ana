@@ -1506,3 +1506,9 @@ meta 调用点信息只设一次。回归：fill 写三字段、process 调 fill
 时容器读放行且标候选；跨函数链/拷贝链/对象锚点回归全绿
 （TestCLIFullFlow/TestFieldPrecisionSelfContained）；12 包 + it +
 e2e 27 项。
+
+**补充测试**：集成 TestValueTraceContainerBoundarySelfContained
+（Payment/Refund 双接口端到端：默认 RefundImpl 不可达、--min-conf 0
+可达且标注）；CLI 单测 TestValueTraceIncludeContainerCLI（flag 解析 +
+默认剪枝/显式开启）；ssa 单测 TestDispatchOriginsMultiField（三字段
+origins 全保留）。
