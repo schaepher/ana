@@ -114,8 +114,9 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 			typePkgs = append(typePkgs, p.Types)
 		}
 	}
-	// Q166：按包分组打点——大仓库卡住时定位到具体包（黑盒拆细；
-	// AllFunctions 全量遍历后按 fn.Pkg 分组，闭包函数归所属包）
+	// Q166/Q167：按包分组打点 + 总量进度——先全量遍历拿到总数
+	// （AllFunctions 按 fn.Pkg 分组，闭包函数归所属包），每包完成
+	// 输出 done/total/percent——大仓库一开始就知道总函数量
 	byPkg := map[string][]*ssa.Function{}
 	for fn := range ssautil.AllFunctions(prog) {
 		if !isModuleFunction(fn, repo.Modules) {
@@ -123,6 +124,11 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 		}
 		byPkg[fn.Pkg.Pkg.Path()] = append(byPkg[fn.Pkg.Pkg.Path()], fn)
 	}
+	totalFuncs := 0
+	for _, fns := range byPkg {
+		totalFuncs += len(fns)
+	}
+	doneFuncs := 0
 	pkgStart := time.Now()
 	for pkgPath, fns := range byPkg {
 		for _, fn := range fns {
@@ -130,12 +136,15 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 				return err
 			}
 		}
-		logger.Info("package done",
+		doneFuncs += len(fns)
+		logger.Info("build progress",
 			zap.String("pkg", pkgPath), zap.Int("funcs", len(fns)),
+			zap.Int("done", doneFuncs), zap.Int("total", totalFuncs),
+			zap.Int("percent", doneFuncs*100/totalFuncs),
 			zap.Duration("elapsed", time.Since(pkgStart)))
 		pkgStart = time.Now()
 	}
-	stage("emitFunction 循环（按包）")
+	stage("emitFunction 循环（按包，总量进度）")
 
 	if fallbackTotal > 0 {
 		fmt.Fprintf(os.Stderr, "warning: %d 个字段访问静态类型解析失败（匿名 struct 等），已回退源码字面量路径\n", fallbackTotal)

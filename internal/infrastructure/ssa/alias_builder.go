@@ -125,9 +125,10 @@ func computeAliases(repo *domain.Repository, prog *ssa.Program,
 	aliasDone := 0
 	aliasTick := func() {
 		aliasDone++
-		if aliasDone%500 == 0 {
+		if aliasDone%500 == 0 || aliasDone == len(funcs) {
 			logger.Info("alias progress",
 				zap.Int("funcs", aliasDone), zap.Int("total", len(funcs)),
+				zap.Int("percent", aliasDone*100/len(funcs)),
 				zap.Duration("elapsed", time.Since(aliasStart)))
 		}
 	}
