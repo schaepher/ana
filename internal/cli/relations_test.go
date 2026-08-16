@@ -153,7 +153,7 @@ func TestValueTraceMinConfCLI(t *testing.T) {
 		t.Fatalf("save: %v", err)
 	}
 	anchor := string(domain.CanonicalID(funcID + "#a.X.read@3"))
-	// 默认（无阈值）：候选路径可见 + 边级标注
+	// Q163 默认（minConf=1.0）：候选边剪枝——调用方实参不可达、无标注
 	out := captureStdout(func() {
 		if code := cmdQuery([]string{"value-trace", anchor, "--repo", dir, "--json"}); code != 0 {
 			t.Errorf("value-trace exit = %d", code)
@@ -165,6 +165,20 @@ func TestValueTraceMinConfCLI(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &flows); err != nil {
 		t.Fatalf("value-trace JSON: %v\n%s", err, out)
 	}
+	for _, f := range flows.Flows {
+		if f["func_id"] == callerID {
+			t.Error("默认模式候选路径不应出现（Q163 候选边剪枝）")
+		}
+	}
+	// 显式 --min-conf 0：候选路径可见 + 边级标注（累计）
+	out = captureStdout(func() {
+		if code := cmdQuery([]string{"value-trace", anchor, "--repo", dir, "--min-conf", "0", "--json"}); code != 0 {
+			t.Errorf("value-trace --min-conf exit = %d", code)
+		}
+	})
+	if err := json.Unmarshal([]byte(out), &flows); err != nil {
+		t.Fatalf("value-trace --min-conf JSON: %v", err)
+	}
 	marked := false
 	for _, f := range flows.Flows {
 		if ec, ok := f["edge_candidate"].(map[string]any); ok {
@@ -175,21 +189,7 @@ func TestValueTraceMinConfCLI(t *testing.T) {
 		}
 	}
 	if !marked {
-		t.Error("value-trace 无 edge_candidate 标注")
-	}
-	// --min-conf 0.8：候选边剪枝 → 调用方实参不可达
-	out = captureStdout(func() {
-		if code := cmdQuery([]string{"value-trace", anchor, "--repo", dir, "--min-conf", "0.8", "--json"}); code != 0 {
-			t.Errorf("value-trace --min-conf exit = %d", code)
-		}
-	})
-	if err := json.Unmarshal([]byte(out), &flows); err != nil {
-		t.Fatalf("value-trace --min-conf JSON: %v", err)
-	}
-	for _, f := range flows.Flows {
-		if f["func_id"] == callerID {
-			t.Error("--min-conf 0.8 后调用方实参行不应出现")
-		}
+		t.Error("--min-conf 0 后应有 edge_candidate 标注")
 	}
 }
 

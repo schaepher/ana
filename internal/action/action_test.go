@@ -125,7 +125,7 @@ func TestFunctionFieldsAndTrace(t *testing.T) {
 
 func TestValueTraceSearchExpandFlows(t *testing.T) {
 	a, _ := seedRepo(t)
-	vt, err := a.ValueTrace("symbol:go:example.com/m:main#t0", 8, 0)
+	vt, err := a.ValueTrace("symbol:go:example.com/m:main#t0", 8, 0, false)
 	if err != nil || len(vt) == 0 {
 		t.Errorf("value-trace = %v, %v", vt, err)
 	}
@@ -234,7 +234,7 @@ func TestValueTraceDispatchMark(t *testing.T) {
 		t.Fatalf("save dispatch: %v", err)
 	}
 	// value-trace 从 main 的写节点反向：t0 行所属 main 是候选 → 标注
-	rows, err := acts.ValueTrace(domain.CanonicalID("symbol:go:example.com/m:main#t.A.write@5"), 8, 0)
+	rows, err := acts.ValueTrace(domain.CanonicalID("symbol:go:example.com/m:main#t.A.write@5"), 8, 0, false)
 	if err != nil {
 		t.Fatalf("ValueTrace: %v", err)
 	}

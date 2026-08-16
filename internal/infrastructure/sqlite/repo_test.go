@@ -810,7 +810,7 @@ func TestGetValueTrace(t *testing.T) {
 	})
 
 	// 以字段访问为锚点，反向应走到调用方实参（跨函数）
-	rows, err := r.GetValueTrace(fa.ID, 8, 0)
+	rows, err := r.GetValueTrace(fa.ID, 8, 0, false)
 	if err != nil {
 		t.Fatalf("GetValueTrace: %v", err)
 	}
@@ -974,7 +974,7 @@ func TestValueTraceFieldAnchorNoCrossField(t *testing.T) {
 
 	// 锚点 = 字段写（T.A）：反向链含同字段读（faA.read）与值来源读跳板
 	// （faB.read → v0 → faA.write：v0 的 phi 合并来源，值流相关）
-	rows, err := r.GetValueTrace(domain.CanonicalID(funcID+"#faA.write@2"), 8, 0)
+	rows, err := r.GetValueTrace(domain.CanonicalID(funcID+"#faA.write@2"), 8, 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -995,7 +995,7 @@ func TestValueTraceFieldAnchorNoCrossField(t *testing.T) {
 	}
 	// 对象锚点（v0，无字段）：正向仅放行写、反向仅放行读——反向链应
 	// 含 A 读与 B 读（值来源），正向仅写
-	rows, err = r.GetValueTrace(domain.CanonicalID(funcID+"#v0"), 8, 0)
+	rows, err = r.GetValueTrace(domain.CanonicalID(funcID+"#v0"), 8, 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1203,7 +1203,7 @@ func TestValueTraceCycle(t *testing.T) {
 			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
 	}
 	save(t, r, nodes, edges)
-	rows, err := r.GetValueTrace(domain.CanonicalID(funcID+"#a"), 8, 0)
+	rows, err := r.GetValueTrace(domain.CanonicalID(funcID+"#a"), 8, 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1242,7 +1242,7 @@ func TestValueTraceConvergeDedup(t *testing.T) {
 	}
 	save(t, r, nodes, edges)
 
-	rows, err := r.GetValueTrace(domain.CanonicalID(funcID+"#v0"), 8, 0)
+	rows, err := r.GetValueTrace(domain.CanonicalID(funcID+"#v0"), 8, 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1510,14 +1510,15 @@ func TestGetValueTraceMinConf(t *testing.T) {
 		{SourceID: paramVal.ID, TargetID: fa.ID, Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
 	})
 
-	// minConf=0：候选路径可见 + 边级标注（到达 paramVal 的 argument 边）
-	rows, err := r.GetValueTrace(fa.ID, 8, 0)
+	// minConf=0：候选路径可见 + 边级标注（Q163 路径累计：经候选
+	// argument 边到达的行——source 端 argVal）
+	rows, err := r.GetValueTrace(fa.ID, 8, 0, false)
 	if err != nil {
 		t.Fatalf("GetValueTrace(0): %v", err)
 	}
 	found := false
 	for _, row := range rows {
-		if row.ID == paramVal.ID {
+		if row.ID == argVal.ID {
 			found = true
 			if row.EdgeOrigin != "enum" || row.EdgeConf != 0.7 || row.EdgeIface != "example.com/m.Fee" {
 				t.Errorf("候选边标注 = %s/%v/%s, want enum/0.7/example.com/m.Fee",
@@ -1526,11 +1527,11 @@ func TestGetValueTraceMinConf(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatal("minConf=0 时候选路径应可达 paramVal")
+		t.Fatal("minConf=0 时候选路径应可达 argVal")
 	}
 
 	// minConf=0.8：候选边（0.7）被剪枝，argVal 不可达
-	rows, err = r.GetValueTrace(fa.ID, 8, 0.8)
+	rows, err = r.GetValueTrace(fa.ID, 8, 0.8, false)
 	if err != nil {
 		t.Fatalf("GetValueTrace(0.8): %v", err)
 	}
@@ -1558,30 +1559,100 @@ func TestGetValueTraceEdgeCandidateFwd(t *testing.T) {
 				"candidate_origin": "register", "confidence": 0.9}},
 	})
 
-	// 锚点 = 调用点结果（returns 边 target 端）：到达它的候选 returns
-	// 边在 dir=0（产生链）标注；反向链走到候选返回值 t5
-	rows, err := r.GetValueTrace(callVal.ID, 8, 0)
+	// 锚点 = 调用点结果：经候选 returns 边到达的行（source 端 t5）
+	// 标注 register（Q163 路径累计；锚点 seed 行自身为起点不累计）
+	rows, err := r.GetValueTrace(callVal.ID, 8, 0, false)
 	if err != nil {
 		t.Fatalf("GetValueTrace: %v", err)
 	}
 	marked := false
-	reached := false
 	for _, row := range rows {
-		if row.ID == callVal.ID {
+		if row.ID == retVal.ID {
+			marked = true
+			if row.Dir != 0 {
+				t.Errorf("ret 行 dir = %d, want 0（产生链）", row.Dir)
+			}
 			if row.EdgeOrigin != "register" || row.EdgeConf != 0.9 || row.EdgeIface != "example.com/m.Iface" {
 				t.Errorf("候选 returns 标注 = %s/%v/%s, want register/0.9/example.com/m.Iface",
 					row.EdgeOrigin, row.EdgeConf, row.EdgeIface)
 			}
-			marked = true
-		}
-		if row.ID == retVal.ID {
-			reached = true
 		}
 	}
 	if !marked {
-		t.Fatal("锚点行未标注候选 returns 边")
+		t.Fatal("反向链未到达候选返回值 t5 且未标注")
 	}
-	if !reached {
-		t.Fatal("反向链未到达候选返回值 t5")
+}
+
+// TestGetValueTraceContainerBoundary：Q163 回归——默认（精确匹配）从
+// 叶子字段 SettledFee.write 追踪到"容器读节点"（inst=invoice）即断，
+// 不进入 RefundSource 候选实现路径；--include-container 显式放行父
+// 容器路径后可达，且候选标记沿路径累计（refundParam 行继承 returns
+// 候选边的状态，不被后续普通边覆盖）。
+func TestGetValueTraceContainerBoundary(t *testing.T) {
+	r := newTestRepo(t)
+	funcID := "symbol:go:example.com/m:calc"
+	// 锚点：叶子字段写
+	write := faNodeAccess(funcID+"#invoice.SettledFee.write@3", funcID,
+		"example.com/m.Invoice.SettledFee", "invoice.SettledFee", 3, "write")
+	// 计算值（write 的值来源）
+	v := node(funcID+"#t0", "ssa_value", "t0", "m.go")
+	v.Properties["func_id"] = funcID
+	// 容器读节点（field_access，inst=invoice——父容器路径，对象类型）：
+	// 默认精确匹配（full_path=Invoice ≠ SettledFee）且对象类型读不是
+	// 基本类型值来源跳板 → 链断于此
+	invRead := faNodeAccess(funcID+"#invoice.read@5", funcID,
+		"example.com/m.Invoice", "invoice", 5, "read")
+	invRead.Properties["type_string"] = "*example.com/m.Invoice"
+	// RefundSource 调用点结果（invRead 的值来源）
+	rv := node(funcID+"#rv", "ssa_value", "rv", "m.go")
+	rv.Properties["func_id"] = funcID
+	// RefundSource 实现返回值（候选 returns 边）
+	refundParam := node(funcID+"#refund", "ssa_value", "refund", "m.go")
+	refundParam.Properties["func_id"] = funcID
+	save(t, r, []*domain.CodeEntity{write, v, invRead, rv, refundParam}, []*domain.Fact{
+		{SourceID: v.ID, TargetID: write.ID, Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: invRead.ID, TargetID: v.ID, Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: rv.ID, TargetID: invRead.ID, Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+		// RefundSource 实现返回值 → 调用点结果（候选 returns 边）
+		{SourceID: refundParam.ID, TargetID: rv.ID, Kind: domain.FactReturns, ToolSource: domain.ToolSSA,
+			Confidence: 1, Metadata: map[string]any{"interface": "example.com/m.RefundSource",
+				"candidate_origin": "enum", "confidence": 0.7}},
+	})
+
+	// 默认（CLI 语义 minConf=1.0）：候选边剪枝——refundParam 不可达
+	rows, err := r.GetValueTrace(write.ID, 8, 1.0, false)
+	if err != nil {
+		t.Fatalf("GetValueTrace: %v", err)
+	}
+	for _, row := range rows {
+		if row.ID == refundParam.ID {
+			t.Error("默认模式不应出现 RefundSource 路径（候选边越界）")
+		}
+	}
+	// --include-container + 显式 minConf=0：可达且 refundParam 标注候选
+	// （路径累计，不被普通边覆盖）
+	rows, err = r.GetValueTrace(write.ID, 8, 0, true)
+	if err != nil {
+		t.Fatalf("GetValueTrace(includeContainer): %v", err)
+	}
+	marked := false
+	invSeen := false
+	for _, row := range rows {
+		if row.ID == refundParam.ID {
+			marked = true
+			if row.EdgeOrigin != "enum" || row.EdgeConf != 0.7 || row.EdgeIface != "example.com/m.RefundSource" {
+				t.Errorf("候选标记 = %s/%v/%s, want enum/0.7/example.com/m.RefundSource（累计不被普通边覆盖）",
+					row.EdgeOrigin, row.EdgeConf, row.EdgeIface)
+			}
+		}
+		if row.ID == invRead.ID {
+			invSeen = true
+		}
+	}
+	if !marked {
+		t.Fatal("includeContainer 模式 refundParam 应出现且标候选")
+	}
+	if !invSeen {
+		t.Error("includeContainer 模式容器读节点应放行")
 	}
 }

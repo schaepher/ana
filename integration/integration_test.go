@@ -1811,7 +1811,7 @@ func main() {}
 	if retID == "" {
 		t.Fatalf("run6 返回值节点缺失（returns 边未建立）")
 	}
-	code, out := runCLIOut(t, "query", "value-trace", retID, "--repo", dir)
+	code, out := runCLIOut(t, "query", "value-trace", retID, "--repo", dir, "--min-conf", "0")
 	if code != 0 {
 		t.Fatalf("value-trace exit = %d", code)
 	}
@@ -2010,7 +2010,7 @@ func main() {}
 	if allocID == "" {
 		t.Fatalf("runA alloc 节点缺失")
 	}
-	code, out := runCLIOut(t, "query", "value-trace", allocID, "--repo", dir)
+	code, out := runCLIOut(t, "query", "value-trace", allocID, "--repo", dir, "--min-conf", "0")
 	if code != 0 {
 		t.Fatalf("value-trace exit = %d", code)
 	}
@@ -2891,7 +2891,7 @@ func main() { join(true) }
 		LIMIT 1`).Scan(&writeID); err != nil {
 		t.Fatalf("x.FinalFee.write 节点缺失: %v", err)
 	}
-	rows, err := repo.GetValueTrace(domain.CanonicalID(writeID), 8, 0)
+	rows, err := repo.GetValueTrace(domain.CanonicalID(writeID), 8, 0, false)
 	if err != nil {
 		t.Fatalf("GetValueTrace: %v", err)
 	}
@@ -3178,7 +3178,7 @@ func main() {}
 	if anchor == "" {
 		t.Fatal("无 register 候选 argument 边")
 	}
-	code, out := runCLIOut(t, "query", "value-trace", anchor, "--repo", dir)
+	code, out := runCLIOut(t, "query", "value-trace", anchor, "--repo", dir, "--min-conf", "0")
 	if code != 0 {
 		t.Fatalf("value-trace exit = %d", code)
 	}

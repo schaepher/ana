@@ -89,7 +89,13 @@ func cmdQuery(args []string) int {
 	case "trace-backward", "trace-forward":
 		return queryTraceDir(acts, target, f.funcPath, f.maxDepth, sub == "trace-forward", opts)
 	case "value-trace":
-		return queryValueTrace(acts, target, f.maxDepth, f.minConf, opts)
+		// Q163：默认剪候选边（minConf=1.0）——从字段锚点追踪不进入
+		// 其他接口候选实现（RefundSource 越界）；显式 --min-conf 开启
+		mc := f.minConf
+		if !f.minConfSet {
+			mc = 1.0
+		}
+		return queryValueTrace(acts, target, f.maxDepth, mc, f.includeContainer, opts)
 	case "summary":
 		return querySummary(acts, target, opts, f.format)
 	case "unused":
@@ -140,6 +146,8 @@ type queryFlags struct {
 	failOn     string // unused 的 --fail-on unused|isolated（CI 退出码）
 	all        bool   // relations --all：全库关联聚合（Q160）
 	minConf    float64 // value-trace --min-conf：候选边置信度剪枝（Q161）
+	minConfSet bool     // --min-conf 显式设置（Q163 默认 1.0）
+	includeContainer bool // value-trace --include-container：父容器扩展（Q163）
 }
 
 // parseQueryFlags 手动解析 query 子命令的参数，支持 flags 与位置参数任意顺序。
@@ -183,9 +191,13 @@ func parseQueryFlags(args []string) queryFlags {
 			f.failOn = strings.TrimPrefix(a, "--fail-on=")
 		case a == "--min-conf" && i+1 < len(args):
 			f.minConf, _ = strconv.ParseFloat(args[i+1], 64)
+			f.minConfSet = true
 			i++
 		case strings.HasPrefix(a, "--min-conf="):
 			f.minConf, _ = strconv.ParseFloat(strings.TrimPrefix(a, "--min-conf="), 64)
+			f.minConfSet = true
+		case a == "--include-container":
+			f.includeContainer = true
 		case a == "--all":
 			f.all = true
 		case a == "--json":
@@ -695,11 +707,11 @@ func printNodes(nodes []*domain.CodeEntity) {
 
 // queryValueTrace 输出数据值在整条链路上的处理过程，按函数上下文分组
 // （field_trace.md §14.2 数据值全链追踪）。
-func queryValueTrace(acts *action.Actions, nodeID string, maxDepth int, minConf float64, opts outputOpts) int {
+func queryValueTrace(acts *action.Actions, nodeID string, maxDepth int, minConf float64, includeContainer bool, opts outputOpts) int {
 	logger := zap.L()
 	logger.Debug("enter queryValueTrace")
 	defer logger.Debug("exit queryValueTrace")
-	rows, err := acts.ValueTrace(domain.CanonicalID(nodeID), maxDepth, minConf)
+	rows, err := acts.ValueTrace(domain.CanonicalID(nodeID), maxDepth, minConf, includeContainer)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1

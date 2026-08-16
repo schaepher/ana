@@ -89,26 +89,35 @@ func emitSummaries(data map[domain.CanonicalID]*funcData, alias *aliasResult, em
 				meta := map[string]any{}
 				// Q161：origins 聚合——每个匹配写（字段 × 调用点 × 被调
 				// 函数）记一条来源；摘要行仍按字段去重，来源不折叠
+				// Q163：不 break——被调函数写多个匹配字段（Fee/SettledFee/
+				// Tax）时每个字段都记 origins（此前只记第一个，其余字段
+				// 的间接写来源为空）；meta 的调用点信息只设一次（首个字段）
 				var origins []*domain.SummaryOrigin
 				for _, e := range calleeWrites(data, indirect, c.calleeID) {
-					if contains(c.argStructPaths, structPathOf(e.fieldPath)) {
-						if got, ok := indirect[fID][indirectKey{e.fieldPath, c.callLine}]; ok {
-							if got.callLine > 0 {
-								meta["call_line"] = got.callLine
-							}
-							if got.callArg != "" {
-								meta["call_args"] = got.callArg
-							}
-							origins = append(origins, &domain.SummaryOrigin{
-								FunctionID: fID,
-								AccessKind: domain.SummaryIndirectWrite,
-								FieldPath:  e.fieldPath,
-								CallLine:   got.callLine,
-								CalleeID:   c.calleeID,
-							})
-						}
-						break
+					if !contains(c.argStructPaths, structPathOf(e.fieldPath)) {
+						continue
 					}
+					got, ok := indirect[fID][indirectKey{e.fieldPath, c.callLine}]
+					if !ok {
+						continue
+					}
+					if got.callLine > 0 {
+						if _, set := meta["call_line"]; !set {
+							meta["call_line"] = got.callLine
+						}
+					}
+					if got.callArg != "" {
+						if _, set := meta["call_args"]; !set {
+							meta["call_args"] = got.callArg
+						}
+					}
+					origins = append(origins, &domain.SummaryOrigin{
+						FunctionID: fID,
+						AccessKind: domain.SummaryIndirectWrite,
+						FieldPath:  e.fieldPath,
+						CallLine:   got.callLine,
+						CalleeID:   c.calleeID,
+					})
 				}
 				if len(origins) > 0 {
 					if err := emit(domain.Item{Origins: origins}); err != nil {

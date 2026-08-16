@@ -298,7 +298,7 @@ func renderCalleesDot(acts *action.Actions, id domain.CanonicalID) (string, erro
 // renderValueTraceMermaid 渲染 value-trace 为 mermaid flowchart，
 // 函数上下文用 subgraph 分组（Q89）。
 func renderValueTraceMermaid(acts *action.Actions, id domain.CanonicalID) (string, error) {
-	rows, err := acts.ValueTrace(id, 8, 0)
+	rows, err := acts.ValueTrace(id, 8, 0, false)
 	if err != nil {
 		return "", err
 	}
@@ -331,7 +331,7 @@ func renderValueTraceMermaid(acts *action.Actions, id domain.CanonicalID) (strin
 
 // renderValueTraceDot 渲染 value-trace 为 DOT（同数据，dot 形态）。
 func renderValueTraceDot(acts *action.Actions, id domain.CanonicalID) (string, error) {
-	rows, err := acts.ValueTrace(id, 8, 0)
+	rows, err := acts.ValueTrace(id, 8, 0, false)
 	if err != nil {
 		return "", err
 	}

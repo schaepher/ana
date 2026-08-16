@@ -444,3 +444,52 @@ func Run() {
 		t.Error("origins 缺 ExpCalc 来源（多候选实现来源被折叠）")
 	}
 }
+
+// TestDispatchOriginsMultiField：Q163 回归——被调函数写多个匹配字段
+// 时，调用方 indirect_write 的 origins 每个字段都保留（此前 break 只
+// 记第一个匹配字段，其余字段来源为空）。
+func TestDispatchOriginsMultiField(t *testing.T) {
+	_, _, _, origins := indexFixtureFullOrigins(t, map[string]string{
+		"go.mod": moduleGoMod,
+		"main.go": `package m
+
+type Invoice struct {
+	Fee        int
+	SettledFee int
+	Tax        int
+}
+
+// fill 写三个字段
+func fill(invoice *Invoice) {
+	invoice.Fee = 1
+	invoice.SettledFee = 2
+	invoice.Tax = 3
+}
+
+func process(invoice *Invoice) {
+	fill(invoice)
+}
+
+func Run() {
+	process(&Invoice{})
+}
+`,
+	})
+	procID := domain.CanonicalID("symbol:go:example.com/mtest:process")
+	// process 的 origins 应覆盖全部三个字段
+	fields := map[string]bool{}
+	for _, o := range origins {
+		if o.FunctionID == procID {
+			fields[o.FieldPath] = true
+		}
+	}
+	for _, want := range []string{
+		"example.com/mtest.Invoice.Fee",
+		"example.com/mtest.Invoice.SettledFee",
+		"example.com/mtest.Invoice.Tax",
+	} {
+		if !fields[want] {
+			t.Errorf("process 的 origins 缺字段 %s（多字段只记首个）", want)
+		}
+	}
+}

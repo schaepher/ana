@@ -1172,17 +1172,36 @@ func paramValueID(id string) string {
 //     m.cfg.APIKey ← m.cfg、kg.ID.read ← kg）——字段访问 → 字段访问
 //     仅限精确/前缀/external（嵌套扩散控制）
 // tbl 为递归目标节点别名（反向 n_prev / 正向 n_next）。
-func valueTraceFilter(anchorCtx, anchorInst string, reverse bool, tbl string) string {
-	dirAccess := "'read'"
-	if !reverse {
-		dirAccess = "'write'"
-	}
+func valueTraceFilter(anchorCtx, anchorInst string, reverse bool, tbl string, includeContainer bool) string {
 	fp := `json_extract(` + tbl + `.properties, '$.full_path')`
 	inst := `COALESCE(json_extract(` + tbl + `.properties, '$.instance_path'), json_extract(` + tbl + `.properties, '$.full_path'))`
-	return fp + ` = ` + q(anchorCtx) + `
-OR (` + q(anchorCtx) + ` != '' AND (instr(` + q(anchorInst) + `, ` + inst + `) = 1 OR instr(` + inst + `, ` + q(anchorInst) + `) = 1))
+	// Q163：字段访问邻居只放行锚点上下文——默认精确匹配
+	// （full_path == anchorCtx）；--include-container 显式开启双向
+	// instance_path 前缀扩展（父容器路径）。此前"当前节点是值节点时
+	// 邻居字段无条件放行"是越界根源（叶子 SettledFee 经值节点扩散到
+	// 同容器其他字段/接口调用）；is_external（表列节点）恒放行保留；
+	// 对象级锚点（ctx=''）按方向放行所有字段。
+	// 值跳板：反向放行任意 read（值来源——跨函数链的 cfg 容器读、
+	// phi 合并来源），正向放行任意 write（值使用——拷贝链 src.ID →
+	// dst.ID 跨类型写入）。对象锚点（ctx=''）放行全部字段访问。
+	// 越界拦截靠候选边默认剪枝（Q163：value-trace 默认 minConf=1.0，
+	// RefundSource 接口调用的候选边不展开；值跳板本身不越界）。
+	prefix := ""
+	if includeContainer {
+		prefix = `
+OR (` + q(anchorCtx) + ` != '' AND (instr(` + q(anchorInst) + `, ` + inst + `) = 1 OR instr(` + inst + `, ` + q(anchorInst) + `) = 1))`
+	}
+	valueBridge := ""
+	if reverse {
+		valueBridge = `
+OR json_extract(` + tbl + `.properties, '$.access_kind') = 'read'`
+	} else {
+		valueBridge = `
+OR json_extract(` + tbl + `.properties, '$.access_kind') = 'write'`
+	}
+	return fp + ` = ` + q(anchorCtx) + prefix + valueBridge + `
 OR json_extract(` + tbl + `.properties, '$.is_external') = 'true'
-OR (d.kind != 'field_access' AND (` + q(anchorCtx) + ` = '' OR json_extract(` + tbl + `.properties, '$.access_kind') = ` + dirAccess + `))`
+OR ` + q(anchorCtx) + ` = ''`
 }
 
 func q(s string) string { return "'" + s + "'" }
@@ -1198,7 +1217,7 @@ func sortEdgeKinds(s string) string {
 	return strings.Join(parts, ",")
 }
 
-func (r *Repo) GetValueTrace(nodeID domain.CanonicalID, maxDepth int, minConf float64) ([]*domain.TraceRow, error) {
+func (r *Repo) GetValueTrace(nodeID domain.CanonicalID, maxDepth int, minConf float64, includeContainer bool) ([]*domain.TraceRow, error) {
 	logger := zap.L()
 	logger.Debug("enter (Repo).GetValueTrace")
 	defer logger.Debug("exit (Repo).GetValueTrace")
@@ -1217,8 +1236,8 @@ func (r *Repo) GetValueTrace(nodeID domain.CanonicalID, maxDepth int, minConf fl
 	if anchorCtx.Valid {
 		ctx, inst = anchorCtx.String, anchorInst.String
 	}
-	backFilter := valueTraceFilter(ctx, inst, true, "n_prev")
-	fwdFilter := valueTraceFilter(ctx, inst, false, "n_next")
+	backFilter := valueTraceFilter(ctx, inst, true, "n_prev", includeContainer)
+	fwdFilter := valueTraceFilter(ctx, inst, false, "n_next", includeContainer)
 	// Q155：递归 CTE 行带 depth，UNION 去重键 (id, dir, depth)——每节点
 	// 每深度一行（行数 ≤ 节点数×maxDepth 有界），depth 截断即递归终止
 	// （环安全：每圈 depth+1 直到上限，不再无限）。go2o 实测（Q155 验证）：
@@ -1226,14 +1245,23 @@ func (r *Repo) GetValueTrace(nodeID domain.CanonicalID, maxDepth int, minConf fl
 	// 深度必须留在递归行内限制扩散。edge_kinds 语义为"入边类型集合
 	// （distinct）"（展示用途，Go 侧排序稳定）。
 	// Q161：--min-conf 剪枝——动态候选边（metadata 带 candidate_origin）
-	// 置信度低于阈值不展开；普通边（无候选 metadata）恒放行。候选边
-	// metadata 子查询取到达该行的一条（dir=0 入边 / dir=1 出边）。
+	// 置信度低于阈值不展开；普通边（无候选 metadata）恒放行。
+	// Q163：递归状态累计候选标记——vt 行带 (c_iface, c_origin, c_conf)
+	// 状态：经过候选边时更新为该边，否则继承父状态（候选标记不被后续
+	// 普通边覆盖）；输出取每 (id, dir) 最小深度行的状态（最短路径累计）。
 	rows, err := r.Query(`WITH RECURSIVE
-vt(id, dir, depth, kind, seed) AS (
-    SELECT ?, 0, 0, (SELECT n0.kind FROM nodes n0 WHERE n0.id = ?), 1
+vt(id, dir, depth, kind, seed, c_iface, c_origin, c_conf) AS (
+    SELECT ?, 0, 0, (SELECT n0.kind FROM nodes n0 WHERE n0.id = ?), 1, '', '', 0
     UNION
     -- 反向：流向当前节点（产生链）
-    SELECT e.source_id, 0, d.depth + 1, n_prev.kind, 0 FROM edges e INDEXED BY idx_edges_target
+    SELECT e.source_id, 0, d.depth + 1, n_prev.kind, 0,
+           CASE WHEN json_extract(e.metadata, '$.candidate_origin') IS NOT NULL
+                THEN COALESCE(json_extract(e.metadata, '$.interface'), '') ELSE d.c_iface END,
+           CASE WHEN json_extract(e.metadata, '$.candidate_origin') IS NOT NULL
+                THEN json_extract(e.metadata, '$.candidate_origin') ELSE d.c_origin END,
+           CASE WHEN json_extract(e.metadata, '$.candidate_origin') IS NOT NULL
+                THEN COALESCE(json_extract(e.metadata, '$.confidence'), 0) ELSE d.c_conf END
+    FROM edges e INDEXED BY idx_edges_target
     JOIN vt d ON e.target_id = d.id
     JOIN nodes n_prev ON e.source_id = n_prev.id
     WHERE d.dir = 0 AND d.depth < ? AND e.kind IN ('data_flows_to','argument','returns','phi_operand','summary_io')
@@ -1242,7 +1270,14 @@ vt(id, dir, depth, kind, seed) AS (
            OR json_extract(e.metadata, '$.confidence') >= ?)
     UNION
     -- 正向：从当前节点流出（使用链）；锚点（seed）双向可展开
-    SELECT e.target_id, 1, d.depth + 1, n_next.kind, 0 FROM edges e INDEXED BY idx_edges_source
+    SELECT e.target_id, 1, d.depth + 1, n_next.kind, 0,
+           CASE WHEN json_extract(e.metadata, '$.candidate_origin') IS NOT NULL
+                THEN COALESCE(json_extract(e.metadata, '$.interface'), '') ELSE d.c_iface END,
+           CASE WHEN json_extract(e.metadata, '$.candidate_origin') IS NOT NULL
+                THEN json_extract(e.metadata, '$.candidate_origin') ELSE d.c_origin END,
+           CASE WHEN json_extract(e.metadata, '$.candidate_origin') IS NOT NULL
+                THEN COALESCE(json_extract(e.metadata, '$.confidence'), 0) ELSE d.c_conf END
+    FROM edges e INDEXED BY idx_edges_source
     JOIN vt d ON e.source_id = d.id
     JOIN nodes n_next ON e.target_id = n_next.id
     WHERE (d.dir = 1 OR d.seed = 1) AND d.depth < ? AND e.kind IN ('data_flows_to','argument','returns','phi_operand','summary_io')
@@ -1257,13 +1292,9 @@ SELECT dp.id, MIN(dp.depth), n.name,
        n.line_start, dp.dir, n.kind,
        json_extract(n.properties, '$.access_kind'), json_extract(n.properties, '$.func_id'),
        json_extract(n.properties, '$.full_path'),
-       (CASE WHEN dp.dir = 0 THEN
-          COALESCE((SELECT e3.metadata FROM edges e3 WHERE e3.target_id = dp.id
-             AND json_extract(e3.metadata, '$.candidate_origin') IS NOT NULL LIMIT 1), '')
-        ELSE
-          COALESCE((SELECT e3.metadata FROM edges e3 WHERE e3.source_id = dp.id
-             AND json_extract(e3.metadata, '$.candidate_origin') IS NOT NULL LIMIT 1), '')
-        END)
+       (SELECT v2.c_iface FROM vt v2 WHERE v2.id = dp.id AND v2.dir = dp.dir ORDER BY v2.depth LIMIT 1),
+       (SELECT v2.c_origin FROM vt v2 WHERE v2.id = dp.id AND v2.dir = dp.dir ORDER BY v2.depth LIMIT 1),
+       (SELECT v2.c_conf FROM vt v2 WHERE v2.id = dp.id AND v2.dir = dp.dir ORDER BY v2.depth LIMIT 1)
 FROM vt dp JOIN nodes n ON n.id = dp.id
 GROUP BY dp.id, dp.dir
 ORDER BY dp.dir, MIN(dp.depth), dp.id`,
@@ -1283,9 +1314,11 @@ ORDER BY dp.dir, MIN(dp.depth), dp.id`,
 			access   sql.NullString
 			funcID   sql.NullString
 			fullPath sql.NullString
-			edgeMeta string
+			cIface   sql.NullString
+			cOrigin  sql.NullString
+			cConf    sql.NullFloat64
 		)
-		if err := rows.Scan(&id, &row.Depth, &row.Name, &row.EdgeKinds, &line, &dir, &kind, &access, &funcID, &fullPath, &edgeMeta); err != nil {
+		if err := rows.Scan(&id, &row.Depth, &row.Name, &row.EdgeKinds, &line, &dir, &kind, &access, &funcID, &fullPath, &cIface, &cOrigin, &cConf); err != nil {
 			return nil, err
 		}
 		row.ID = domain.CanonicalID(id)
@@ -1304,16 +1337,16 @@ ORDER BY dp.dir, MIN(dp.depth), dp.id`,
 		if line.Valid {
 			row.Line = int(line.Int64)
 		}
-		// Q161：候选边标注（动态 argument/returns 边的 interface/origin/confidence）
-		if edgeMeta != "" {
-			var m map[string]any
-			if json.Unmarshal([]byte(edgeMeta), &m) == nil {
-				row.EdgeIface, _ = m["interface"].(string)
-				row.EdgeOrigin, _ = m["candidate_origin"].(string)
-				if c, ok := m["confidence"].(float64); ok {
-					row.EdgeConf = c
-				}
-			}
+		// Q161/Q163：候选标记 = 路径累计状态（到达该行的最短路径上经过
+		// 的候选边；不被后续普通边覆盖）
+		if cIface.Valid {
+			row.EdgeIface = cIface.String
+		}
+		if cOrigin.Valid {
+			row.EdgeOrigin = cOrigin.String
+		}
+		if cConf.Valid {
+			row.EdgeConf = cConf.Float64
 		}
 		out = append(out, &row)
 	}
@@ -1339,7 +1372,7 @@ func (r *Repo) GetValueTraceMulti(anchors []domain.CanonicalID, ctxField string,
 		ids = append(ids, string(a))
 	}
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
-	fwdFilter := valueTraceFilter(ctxField, ctxField, false, "n_next")
+	fwdFilter := valueTraceFilter(ctxField, ctxField, false, "n_next", false) // Q163 跳板合并：精确匹配
 	rows, err := r.Query(`WITH RECURSIVE
 vt(id, dir, depth, kind) AS (
     SELECT n.id, 0, 0, n.kind FROM nodes n WHERE n.id IN (`+placeholders+`)

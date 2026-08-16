@@ -1474,3 +1474,35 @@ RSS 峰值 = GC 目标（默认 GOGC=100 → 2×live）≈ 3.2G。
 **不优化项**（理由）：Load 的 AST/types 为分析必需；SSA IR 保留至
 emitDispatches；CLI 单进程生命周期（Index 返回即退出）；查询流程
 CTE/BFS 有界（value-trace 44ms）。
+
+## 33. 摘要 origins 多字段遗漏 + value-trace 父容器越界修复（Q163，2026-08-17）
+
+**问题一：来源遗漏**（review）——emitSummaries 的 INDIRECT_WRITE 循环
+命中第一个匹配字段即 break：ApplyPaymentFee 写 Fee/SettledFee/Tax 时
+ProcessInvoice 的间接写 origins 只保留首个字段，其余字段来源为空。
+修复：不 break，每个匹配字段都记 origins（表 UNIQUE 四键已去重）；
+meta 调用点信息只设一次。回归：fill 写三字段、process 调 fill，断言
+三字段均有 origins。
+
+**问题二：追踪越界**（review）——从 Invoice.SettledFee.write 追踪
+可进入 RefundSource 相关实现。根因链：
+1. valueTraceFilter 双向 instance_path 前缀匹配（叶子回退父容器）
+2. "当前节点是值节点时邻居字段无条件放行"（值节点邻居字段无 ctx 限制）
+修复后的过滤语义（valueTraceFilter）：
+- 字段访问邻居：full_path == anchorCtx（精确）；--include-container
+  显式开启双向 instance_path 前缀扩展
+- 值跳板：反向放行任意 read（值来源——跨函数链 cfg 容器读/phi 合并）、
+  正向放行任意 write（值使用——拷贝链 src.ID→dst.ID）
+- 对象锚点（ctx=''）放行全部字段；is_external（表列）恒放行
+- **越界拦截靠候选边默认剪枝**：CLI value-trace 默认 minConf=1.0
+  （候选边不展开——RefundSource 接口调用路径不可达）；显式
+  --min-conf N 开启候选（Q161 语义保留）
+- **候选标记路径累计**：递归 CTE 带 (c_iface, c_origin, c_conf) 状态
+  列——经过候选边时更新、否则继承父状态（候选标记不被后续普通边
+  覆盖）；锚点 seed 行自身为起点不累计
+
+**验证**：默认从 SettledFee.write 不出现 RefundSource（go2o 实测
+候选 param 反向 ctx 不可达/--min-conf 0 可达）；--include-container
+时容器读放行且标候选；跨函数链/拷贝链/对象锚点回归全绿
+（TestCLIFullFlow/TestFieldPrecisionSelfContained）；12 包 + it +
+e2e 27 项。
