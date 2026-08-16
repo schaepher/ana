@@ -1113,10 +1113,13 @@ radar 实测：sq_lite_atom ↔ sq_lite_knowledge_graph（140 条列关联，
 **盲区（Q151 已实现部分）**：GORM 读路径（Find/First/Take/Last）已
 映射——对象读出产 表.列 read 虚拟节点 + 边（读出值 → 对象，与写反向）；
 radar 实测 ListSessions 的 session.id.read 节点产且 s.ID → filter 边
-贯通。**剩余缺口**：range 循环变量的对象字段链（sessions alloc →
-迭代器 Extract → s.ID）缺边——ListSessions 的 `for _, s := range
-sessions` 场景 BFS 断在迭代器段，query 类型暂不显示（循环变量链为
-SSA 层独立扩展）。
+贯通。**查询关联落地（Q152）**：range 循环链已贯通——SSA 层 Field 值字段
+读取补基值边 + UnOp MUL 归一放宽（IndexAddr/FieldAddr）+ Where
+variadic 实参解包；sqlite 层循环读出桥（BFS 到 ssa_value 桥接同函数
+同类型 read 字段节点）+ 同列多节点 Type 取最高。radar 实测：
+session.id → chat_message.session_id [查询关联 4 跳]（ListSessions
+读出 → Where session_id = s.ID）。已知权衡：同函数同类型字段读被桥
+接，session.title/created_at → session_id 也标查询关联（保守语义）。
 - 数据源：`kind='field_access' AND is_external=true AND (name=表 OR name LIKE 表.%)`
   （Q97 字符串 SQL + GORM 结构体写路径共用形态）
 - 输出：按列名**聚合**（同列多调用点合并一行），每列列出入写入方
