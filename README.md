@@ -62,6 +62,24 @@ codeintel query impact 'symbol:go:example.com/svc:(Service).Handle' --repo /path
 codeintel clean --repo /path/to/repo
 ```
 
+## 配置（解析新项目）
+
+codeintel 通过被分析仓库根目录的**可选 YAML 文件**增强解析——全部可选（不配置也能 init，但外部框架的表映射/字段传播/模块图 http 边会缺失）：
+
+| 文件 | 作用 | 何时需要 |
+|---|---|---|
+| `field-summary.yaml` | 外部函数/接口调用的读写语义映射（ORM/SQL/回调）——外部调用 → 表.列 虚拟节点 | `query table`/`query relations` 缺表或缺写入方时（自研 ORM/DAO、非 GORM 框架） |
+| `modules.yaml` | 多模块 monorepo 模块划分（`query module-calls` 模块图） | 多 go.mod 或需模块级调用图时 |
+| `routes.yaml` | HTTP 路由人工表（客户端 URL ↔ 服务端 handler，模块图 http 边） | 需模块图含 HTTP 调用时 |
+
+完整格式与字段说明见本仓库根目录的示例（复制为对应文件名放入目标仓库根目录即可）：
+
+- `field-summary.example.yaml`——含函数摘要（func：`orm_write`/`orm_read`/`reads`/`writes`/`reads_all`/`writes_all`/`param_index`）与接口摘要（iface：`method`/`kind`（write/read/filter/sql）/`obj_arg`/`where_arg`/`id_arg`/`sql_write`）
+- `modules.example.yaml`——模块前缀划分（`prefix`/`name`，最长前缀优先，未匹配归 `_root`）
+- `routes.example.yaml`——HTTP 路由表（`path`/`handler`/`method`；`{id}` 段通配）
+
+配置后重新 `codeintel init --repo <目标仓库>`（或 `reindex`）生效。
+
 ## Agent Skill
 
 为 AI Agent 提供 codeintel 命令行使用指南（字段追溯 / 字段读写摘要 / 数据值

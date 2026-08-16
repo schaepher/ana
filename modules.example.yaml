@@ -1,0 +1,15 @@
+# modules.yaml —— 多模块 monorepo 模块划分（field_trace.md §18.1）
+# 位置：被分析仓库根目录（复制本文件为 modules.yaml 后编辑）
+#
+# 作用：`query module-calls` 模块图（跨模块调用分析）。
+# 配置前缀为 module 相对路径（先剥离 go.mod 的 module 前缀后匹配，
+# 最长前缀优先）；未匹配的包归 _root。
+# 单模块项目无需此文件（所有包归 _root）。
+
+modules:
+  - prefix: "internal/svc_a"
+    name: "svc_a"
+  - prefix: "internal/svc_orders"
+    name: "svc_orders"
+  - prefix: "pkg/infra"
+    name: "infra"

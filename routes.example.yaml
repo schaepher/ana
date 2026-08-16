@@ -1,0 +1,22 @@
+# routes.yaml —— HTTP 路由人工表（field_trace.md §18.7）
+# 位置：被分析仓库根目录（复制本文件为 routes.yaml 后编辑）
+#
+# 作用：`query module-calls` 的 HTTP 调用识别——客户端 URL 路径 ↔
+# 服务端 handler 映射（AST 适配器生成 http_route 节点 + http_call 边，
+# 模块图显示 http 调用）。不配置时 HTTP 调用全为外部（无 http 边）。
+#
+# handler 格式：module 相对包路径 + ":" + 符号名
+#   - 方法：pkg/path:(Type).Method
+#   - 函数：pkg/path:funcName
+# path 匹配：精确相等；以 / 结尾 → 前缀匹配；{id} 段 → 任意单段通配。
+
+routes:
+  - path: "/api/orders"
+    handler: "internal/svc_orders/controller:(OrderController).List"
+    method: "GET"
+  - path: "/api/orders/{id}"
+    handler: "internal/svc_orders/controller:(OrderController).Get"
+    method: "GET"
+  - path: "/api/orders"
+    handler: "internal/svc_orders/controller:(OrderController).Create"
+    method: "POST"

@@ -1,0 +1,60 @@
+# field-summary.yaml —— codeintel 摘要配置
+# 位置：被分析仓库根目录（复制本文件为 field-summary.yaml 后编辑）
+#
+# 作用：外部函数/接口调用的读写语义映射——SSA 静态分析看不到外部依赖
+# 的行为（ORM 保存/查询、SQL 执行、回调写入等），配置后：
+#   - 外部调用 → 表.列 虚拟节点（query table / query relations 的数据源）
+#   - 接口方法调用（动态 invoke）→ ORM/SQL 语义（如 gof fw.Repository）
+# 全部条目可选；不配置也能 init，只是外部框架的表映射/字段传播缺失。
+
+summaries:
+  # ═══════════ 1. 函数摘要（func）：静态调用的外部函数 ═══════════
+  # 对象实参 → 表.列 写虚拟节点（同内置 GORM Create/Save；表名取实体
+  # TableName()，否则类型名 snake_case）
+  - func: "example.com/app/internal/dao.(DB).create"
+    orm_write: true        # 写对象：字段 → 表.列
+    param_index: 1         # 对象实参下标（0 = 接收者）
+  # 对象读出 → 表.列 read 节点（键关联链：读出值流向其他表过滤列）
+  - func: "example.com/app/internal/dao.(DB).find"
+    orm_read: true
+    param_index: 1
+  # 精确控制读写字段
+  - func: "example.com/app/pkg/notify.Send"
+    reads: ["Message.Topic"]    # 读指定字段
+    writes: ["Message.SentAt"]  # 写指定字段
+    param_index: 1
+  # 保守策略：读/写实参类型全部字段
+  - func: "example.com/app/pkg/notify.SendAll"
+    reads_all: true
+    writes_all: true
+    param_index: 1
+
+  # ═══════════ 2. 接口摘要（iface）：接口方法调用（动态 invoke）═══════════
+  # 适用：框架接口在外部模块 / 被 embed 提升（方法无函数体不产边）——
+  # 接口方法名 + 接口类型匹配 spec 后按 ORM/SQL 语义生成虚拟节点。
+  # 内置已覆盖 gof 全家（fw.Repository、db.Connector、db/orm.Orm），
+  # 其他框架（xorm、sqlx、自研 DAO 接口）用 iface 自定义。
+  - iface: "example.com/app/pkg/repo.Repository"
+    method: "Save"
+    kind: write            # write: 对象实参字段展开写
+    obj_arg: 0             # 对象实参下标（动态 invoke 无接收者）
+  - iface: "example.com/app/pkg/repo.Repository"
+    method: "FindBy"
+    kind: read             # read: 返回值/输出对象读出
+    where_arg: 0           # where 条件字符串实参下标 → 过滤列（表关联键）
+  - iface: "example.com/app/pkg/repo.Repository"
+    method: "Count"
+    kind: filter           # filter: 仅 where 过滤列（无对象读出）
+    where_arg: 0
+  # 原生 SQL 接口（SQL 字符串 → 表/列解析；支持 ? 与 $N 占位符）
+  - iface: "example.com/app/pkg/sql.Conn"
+    method: "Exec"
+    kind: sql
+    where_arg: 0           # SQL 字符串实参下标
+    sql_write: true        # true = 写（UPDATE/INSERT/DELETE），false = 读
+  # 主键读（输出对象实参 + 主键过滤）
+  - iface: "example.com/app/pkg/orm.Orm"
+    method: "Get"
+    kind: read
+    obj_arg: 1             # 输出对象实参（Get(id, &e) 读进 e）
+    id_arg: 0              # 主键值实参下标 → 主键列 filter

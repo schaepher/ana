@@ -22,6 +22,28 @@ go build -o codeintel ./cmd/codeintel
 #   codeintel query symbol|callers|callees|impact|table ...
 ```
 
+## 解析新项目的配置（目标仓库根目录的可选 YAML）
+
+全部可选（不配置也能 init），配置后 `init`/`reindex` 生效；示例见本仓库根
+`*.example.yaml`（复制为目标仓库根目录的对应文件名）：
+
+| 文件 | 作用 | 何时配置 |
+|---|---|---|
+| `field-summary.yaml` | 外部函数/接口调用的读写语义（→ 表.列 虚拟节点） | query table/relations 缺表或缺写入方（自研 ORM/DAO、非 GORM 框架） |
+| `modules.yaml` | 多模块 monorepo 模块划分（模块图） | 多 go.mod 或需模块级调用图 |
+| `routes.yaml` | HTTP 路由人工表（模块图 http 边） | 需 HTTP 调用识别 |
+
+关键点：
+- `field-summary.yaml` 两类条目：`func`（静态调用：`orm_write`/`orm_read`/
+  `reads`/`writes`/`reads_all`/`writes_all`/`param_index`）与 `iface`
+  （接口方法动态 invoke：`method` + `kind`（write/read/filter/sql）+
+  `obj_arg`/`where_arg`/`id_arg`/`sql_write`）。内置已覆盖 gof 全家
+  （fw.Repository 两路径、db.Connector 原生 SQL、db/orm.Orm.Get、
+  orm.Save）；其他框架（xorm/sqlx/自研接口）用 iface 自定义
+- SQL 摘要支持 `?` 与 `$N` 占位符、多行 WHERE、ORDER BY 剥离
+- 表名优先取实体 `TableName()`（否则类型名 snake_case）
+- 改配置后须重新 `init`/`reindex`（增量 update 不含配置变更）
+
 ## 架构与目录
 
 六边形架构：`internal/domain`（内核，零外部依赖）通过 Port 接口与适配器解耦。
