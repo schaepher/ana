@@ -1,6 +1,5 @@
 # 构建产物
 /codeintel
 /.codeintel/
-scripts/notify.sh
 e2e/node_modules
 /.codegraph/
