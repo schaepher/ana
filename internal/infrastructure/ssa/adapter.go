@@ -14,16 +14,18 @@ import (
 	"go/types"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/schaepher/codeintel/internal/canonicalizer"
 	"github.com/schaepher/codeintel/internal/domain"
 	"github.com/schaepher/codeintel/internal/logging"
+	"go.uber.org/zap"
 	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/go/ssa"
 	"golang.org/x/tools/go/ssa/ssautil"
-	"go.uber.org/zap"
 )
 
 var _ domain.IndexerPort = (*Adapter)(nil)
@@ -48,11 +50,23 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 	logger.Debug("enter (Adapter).Index")
 	defer logger.Debug("exit (Adapter).Index")
 	packages.PrintErrors(pkgs) // 诊断信息打到 stderr，不中断
+	// 阶段进度日志（Q164 诊断：大仓库构建卡住/内存高时定位阶段；
+	// Info 级写入 .codeintel/codeintel.log）
+	stageStart := time.Now()
+	stage := func(name string) {
+		var ms runtime.MemStats
+		runtime.ReadMemStats(&ms)
+		logger.Info("build stage",
+			zap.String("stage", name), zap.Duration("elapsed", time.Since(stageStart)),
+			zap.Int64("heap_mb", int64(ms.HeapAlloc>>20)))
+		stageStart = time.Now()
+	}
 
 	prog, ssaPkgs := ssautil.Packages(pkgs, ssa.BuilderMode(0))
 	if prog == nil {
 		return fmt.Errorf("ssa build failed")
 	}
+	stage("ssautil.Packages")
 	// 仅构建项目内包的函数体（依赖函数保持 stub，按需惰性创建）；
 	// 全程序 prog.Build() 会把依赖体也构建出来，成本高（field_trace.md §9）
 	for i, p := range pkgs {
@@ -74,9 +88,13 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 			pkgs[i].TypesInfo = nil
 		}
 	}
+	stage("释放依赖 AST")
+
 	// 源码标识符索引（token.Pos → 标识符名）：go/ssa v0.26 的 Alloc 名为 tN，
 	// 实例路径（x.A）需从 AST 恢复源码变量名
 	idents := buildIdentIndex(pkgs, repo.Modules)
+	stage("buildIdentIndex")
+
 	// 赋值目标索引（表达式起点 → 目标变量名）：lifting 后 map/slice 字面量
 	// 是 MakeMap/MakeSlice 寄存器，容器名从此恢复
 	assignTargets := buildAssignTargets(pkgs, repo.Modules)
@@ -104,6 +122,8 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 			return err
 		}
 	}
+	stage("emitFunction 循环")
+
 	if fallbackTotal > 0 {
 		fmt.Fprintf(os.Stderr, "warning: %d 个字段访问静态类型解析失败（匿名 struct 等），已回退源码字面量路径\n", fallbackTotal)
 	}
@@ -112,6 +132,8 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 	if err != nil {
 		return fmt.Errorf("alias analysis: %w", err)
 	}
+	stage("computeAliases")
+
 	// 内存优化：idents/assignTargets 已无后续消费（emitSummaries/
 	// emitGlobalInit/emitDispatches 均不依赖）——置 nil 让 GC 回收
 	idents, assignTargets = nil, nil
@@ -119,6 +141,8 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 	if err := emitSummaries(a.fd, aliasRes, emit); err != nil {
 		return err
 	}
+	stage("emitSummaries")
+
 	// 内存优化：摘要收集（a.fd/aliasRes）消费完毕
 	a.fd, aliasRes = nil, nil
 	// 全局变量初始化溯源（Q98）：init（隐式函数）的 Store→Global 边
@@ -129,11 +153,9 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 	if err := emitDispatches(repo, prog, typePkgs, emit); err != nil {
 		return err
 	}
+	stage("emitDispatches")
 	return nil
 }
-
-
-
 
 // buildIdentIndex 收集项目内文件的所有标识符（位置 → 名字），供 Alloc 反查源码变量名。
 func buildIdentIndex(pkgs []*packages.Package, modules []string) map[token.Pos]string {
