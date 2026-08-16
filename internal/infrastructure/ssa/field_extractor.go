@@ -900,6 +900,7 @@ type fieldExtractor struct {
 	extSummaries map[domain.CanonicalID]bool // 已创建 external_summary 节点
 	currentFile string                       // 当前函数文件（虚拟节点用）
 	fallbackCount int                        // 静态类型解析失败回退数（警告汇总）
+	dispatchRegs dispatchReg                 // 接口注册点缓存（Q161 动态边候选元数据，一次扫描）
 }
 
 // isSSAName 判断是否为 SSA 临时名（t0、t91 等），用于决定展示名回退。

@@ -273,3 +273,75 @@ func main() {
 		}
 	}
 }
+
+// TestDispatchEdgeCandidateMeta：Q161——动态 argument/returns 边附加
+// 候选元数据（interface / candidate_origin / confidence），value-trace
+// 据此区分必达/候选路径（注册点命中 register 0.9，枚举兜底 enum 0.7）。
+func TestDispatchEdgeCandidateMeta(t *testing.T) {
+	_, facts, _ := indexFixtureFull(t, map[string]string{
+		"go.mod": moduleGoMod,
+		"main.go": `package m
+
+type Order struct {
+	FinalFee int
+}
+
+type FeeCalculator interface {
+	Calculate(o *Order)
+}
+
+type StdCalc struct{}
+
+func (c *StdCalc) Calculate(o *Order) { o.FinalFee = 100 }
+
+type ExpCalc struct{}
+
+func (c *ExpCalc) Calculate(o *Order) { o.FinalFee = 200 }
+
+// wrapper：经接口调用分派（动态 invoke，无静态 callee）
+func Process(fc FeeCalculator, o *Order) {
+	fc.Calculate(o)
+}
+
+// 上游：静态调用 wrapper，&StdCalc{} 是注册点（MakeInterface）
+func Run() {
+	Process(&StdCalc{}, &Order{})
+}
+`,
+	})
+	var stdArg, expArg *domain.Fact
+	for _, f := range facts {
+		if f.Kind != domain.FactArgument || f.Metadata == nil {
+			continue
+		}
+		if f.Metadata["candidate_origin"] == nil {
+			continue
+		}
+		if strings.Contains(string(f.TargetID), "(StdCalc).Calculate") {
+			stdArg = f
+		}
+		if strings.Contains(string(f.TargetID), "(ExpCalc).Calculate") {
+			expArg = f
+		}
+	}
+	if stdArg == nil || expArg == nil {
+		t.Fatalf("动态 argument 边未带候选元数据: stdArg=%v expArg=%v", stdArg != nil, expArg != nil)
+	}
+	// 注册点命中（Run 里 &StdCalc{} → register 0.9）
+	if stdArg.Metadata["candidate_origin"] != "register" {
+		t.Errorf("StdCalc candidate_origin = %v, want register", stdArg.Metadata["candidate_origin"])
+	}
+	if c, ok := stdArg.Metadata["confidence"].(float64); !ok || c != 0.9 {
+		t.Errorf("StdCalc confidence = %v, want 0.9", stdArg.Metadata["confidence"])
+	}
+	if stdArg.Metadata["interface"] == nil {
+		t.Error("StdCalc 动态边缺 interface 元数据")
+	}
+	// 枚举兜底（ExpCalc 未注册 → enum 0.7）
+	if expArg.Metadata["candidate_origin"] != "enum" {
+		t.Errorf("ExpCalc candidate_origin = %v, want enum", expArg.Metadata["candidate_origin"])
+	}
+	if c, ok := expArg.Metadata["confidence"].(float64); !ok || c != 0.7 {
+		t.Errorf("ExpCalc confidence = %v, want 0.7", expArg.Metadata["confidence"])
+	}
+}

@@ -326,7 +326,10 @@ func (o *Orchestrator) runAdapters(ctx context.Context, pkgs []*packages.Package
 			if item.Summary != nil {
 				batch.summaries = append(batch.summaries, item.Summary)
 			}
-			if len(batch.nodes) >= BatchSize || len(batch.edges) >= BatchSize || len(batch.summaries) >= BatchSize {
+			if item.Origins != nil {
+				batch.origins = append(batch.origins, item.Origins...)
+			}
+			if len(batch.nodes) >= BatchSize || len(batch.edges) >= BatchSize || len(batch.summaries) >= BatchSize || len(batch.origins) >= BatchSize {
 				if err := o.flush(batch, &mu, &skipped); err != nil {
 					fmt.Fprintf(os.Stderr, "write batch: %v\n", err)
 				}
@@ -419,6 +422,7 @@ type batchT struct {
 	nodes     []*domain.CodeEntity
 	edges     []*domain.Fact
 	summaries []*domain.FunctionFieldSummary
+	origins   []*domain.SummaryOrigin // Q161 摘要来源
 }
 
 func newBatch() *batchT {
@@ -436,7 +440,7 @@ func (o *Orchestrator) flush(b *batchT, mu *sync.Mutex, skipped *int) error {
 	if len(b.nodes) == 0 && len(b.edges) == 0 && len(b.summaries) == 0 {
 		return nil
 	}
-	res, err := o.RepoImpl.SaveBatchStats(b.nodes, b.edges, b.summaries)
+	res, err := o.RepoImpl.SaveBatchStats(b.nodes, b.edges, b.summaries, b.origins)
 	if err != nil {
 		return err
 	}

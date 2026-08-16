@@ -330,7 +330,7 @@ func (s *Server) handleValueTrace(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "missing id")
 		return
 	}
-	rows, err := s.acts.ValueTrace(domain.CanonicalID(id), 8)
+	rows, err := s.acts.ValueTrace(domain.CanonicalID(id), 8, 0)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return

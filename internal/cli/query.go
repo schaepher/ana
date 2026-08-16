@@ -89,7 +89,7 @@ func cmdQuery(args []string) int {
 	case "trace-backward", "trace-forward":
 		return queryTraceDir(acts, target, f.funcPath, f.maxDepth, sub == "trace-forward", opts)
 	case "value-trace":
-		return queryValueTrace(acts, target, f.maxDepth, opts)
+		return queryValueTrace(acts, target, f.maxDepth, f.minConf, opts)
 	case "summary":
 		return querySummary(acts, target, opts, f.format)
 	case "unused":
@@ -139,6 +139,7 @@ type queryFlags struct {
 	since      string // unused 的 --since <ref>（git diff 区间）
 	failOn     string // unused 的 --fail-on unused|isolated（CI 退出码）
 	all        bool   // relations --all：全库关联聚合（Q160）
+	minConf    float64 // value-trace --min-conf：候选边置信度剪枝（Q161）
 }
 
 // parseQueryFlags 手动解析 query 子命令的参数，支持 flags 与位置参数任意顺序。
@@ -180,6 +181,11 @@ func parseQueryFlags(args []string) queryFlags {
 			i++
 		case strings.HasPrefix(a, "--fail-on="):
 			f.failOn = strings.TrimPrefix(a, "--fail-on=")
+		case a == "--min-conf" && i+1 < len(args):
+			f.minConf, _ = strconv.ParseFloat(args[i+1], 64)
+			i++
+		case strings.HasPrefix(a, "--min-conf="):
+			f.minConf, _ = strconv.ParseFloat(strings.TrimPrefix(a, "--min-conf="), 64)
 		case a == "--all":
 			f.all = true
 		case a == "--json":
@@ -212,16 +218,32 @@ func queryFields(acts *action.Actions, input string, opts outputOpts, since *dom
 		return 1
 	}
 	if opts.json {
+		type originRow struct {
+			CallLine   int     `json:"call_line"`
+			Callee     string  `json:"callee"`
+			Origin     string  `json:"origin,omitempty"`
+			Confidence float64 `json:"confidence,omitempty"`
+		}
 		type fieldRow struct {
-			AccessKind   string `json:"access_kind"`
-			FieldPath    string `json:"field_path"`
-			InstancePath string `json:"instance_path"`
-			Line         int    `json:"line"`
-			CodeSnippet  string `json:"code_snippet"`
+			AccessKind   string      `json:"access_kind"`
+			FieldPath    string      `json:"field_path"`
+			InstancePath string      `json:"instance_path"`
+			Line         int         `json:"line"`
+			CodeSnippet  string      `json:"code_snippet"`
+			Origins      []originRow `json:"origins,omitempty"` // Q161 间接写多来源
 		}
 		jrows := make([]fieldRow, 0, len(rows))
 		for _, r := range rows {
-			jrows = append(jrows, fieldRow{r.AccessKind, r.FieldPath, r.InstancePath, r.LineStart, r.CodeSnippet})
+			fr := fieldRow{r.AccessKind, r.FieldPath, r.InstancePath, r.LineStart, r.CodeSnippet, nil}
+			if len(r.Origins) > 0 {
+				for _, o := range r.Origins {
+					fr.Origins = append(fr.Origins, originRow{
+						CallLine: o.CallLine, Callee: shortFuncName(string(o.CalleeID)),
+						Origin: o.Origin, Confidence: o.Confidence,
+					})
+				}
+			}
+			jrows = append(jrows, fr)
 		}
 		encodeJSON(map[string]any{"name": n.Name, "rows": jrows})
 		return 0
@@ -263,6 +285,13 @@ func queryFields(acts *action.Actions, input string, opts outputOpts, since *dom
 			}
 			fmt.Printf("    %-60s %-24s %-6s %s\n",
 				it.FieldPath, it.InstancePath, line, it.CodeSnippet)
+			for _, o := range it.Origins { // Q161 多来源
+				tag := ""
+				if o.Origin != "" {
+					tag = fmt.Sprintf(" [候选 %s %.1f]", o.Origin, o.Confidence)
+				}
+				fmt.Printf("        ↳ 来源: :%d %s%s\n", o.CallLine, shortFuncName(string(o.CalleeID)), tag)
+			}
 		}
 	}
 	return 0
@@ -666,11 +695,11 @@ func printNodes(nodes []*domain.CodeEntity) {
 
 // queryValueTrace 输出数据值在整条链路上的处理过程，按函数上下文分组
 // （field_trace.md §14.2 数据值全链追踪）。
-func queryValueTrace(acts *action.Actions, nodeID string, maxDepth int, opts outputOpts) int {
+func queryValueTrace(acts *action.Actions, nodeID string, maxDepth int, minConf float64, opts outputOpts) int {
 	logger := zap.L()
 	logger.Debug("enter queryValueTrace")
 	defer logger.Debug("exit queryValueTrace")
-	rows, err := acts.ValueTrace(domain.CanonicalID(nodeID), maxDepth)
+	rows, err := acts.ValueTrace(domain.CanonicalID(nodeID), maxDepth, minConf)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
@@ -694,6 +723,7 @@ func queryValueTrace(acts *action.Actions, nodeID string, maxDepth int, opts out
 			FuncName   string   `json:"func_name"`
 			Conditions []string `json:"conditions,omitempty"`
 			Dispatch   *dispatchJSON `json:"dispatch,omitempty"` // Q157 P1 候选标注
+			EdgeCandidate *edgeCandidateJSON `json:"edge_candidate,omitempty"` // Q161 边级候选标注
 		}
 		jrows := make([]flowRow, 0, len(rows))
 		for _, r := range rows {
@@ -701,9 +731,14 @@ func queryValueTrace(acts *action.Actions, nodeID string, maxDepth int, opts out
 			if r.DispatchCandidate {
 				disp = &dispatchJSON{Origin: r.DispatchOrigin, Confidence: r.DispatchConf}
 			}
+			var ec *edgeCandidateJSON
+			if r.EdgeOrigin != "" {
+				ec = &edgeCandidateJSON{Iface: r.EdgeIface, Origin: r.EdgeOrigin, Confidence: r.EdgeConf}
+			}
 			jrows = append(jrows, flowRow{ID: string(r.ID), Name: r.Name, Depth: r.Depth, Dir: r.Dir,
 				Edge: lastEdgeKind(r.EdgeKinds), Line: r.Line, Kind: string(r.Kind), Access: r.Access,
-				FuncID: r.FuncID, FuncName: shortFuncName(r.FuncID), Conditions: r.Conditions, Dispatch: disp})
+				FuncID: r.FuncID, FuncName: shortFuncName(r.FuncID), Conditions: r.Conditions,
+				Dispatch: disp, EdgeCandidate: ec})
 		}
 		encodeJSON(map[string]any{"flows": jrows})
 		return 0
@@ -748,6 +783,9 @@ func queryValueTrace(acts *action.Actions, nodeID string, maxDepth int, opts out
 		disp := ""
 		if r.DispatchCandidate {
 			disp = fmt.Sprintf(" [候选 %s %.1f]", r.DispatchOrigin, r.DispatchConf)
+		}
+		if r.EdgeOrigin != "" { // Q161 边级候选（动态 argument/returns 路径）
+			disp = fmt.Sprintf(" [动态候选 %s %.1f %s]", r.EdgeOrigin, r.EdgeConf, r.EdgeIface)
 		}
 		indent := strings.Repeat("  ", r.Depth)
 		if opts.compact {
@@ -820,6 +858,13 @@ func querySummary(acts *action.Actions, input string, opts outputOpts, format st
 }
 
 // dispatchJSON 候选派发标注（Q157 P1：value-trace --json 输出）。
+// edgeCandidateJSON 边级候选标注（Q161：动态 argument/returns 边元数据）。
+type edgeCandidateJSON struct {
+	Iface      string  `json:"interface"`
+	Origin     string  `json:"origin"`
+	Confidence float64 `json:"confidence"`
+}
+
 type dispatchJSON struct {
 	Origin     string  `json:"origin"`
 	Confidence float64 `json:"confidence"`

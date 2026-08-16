@@ -87,6 +87,9 @@ func emitSummaries(data map[domain.CanonicalID]*funcData, alias *aliasResult, em
 		for _, c := range fd.calls {
 			if calleeHasMatchingWrite(data, indirect, c.calleeID, c.argStructPaths) {
 				meta := map[string]any{}
+				// Q161：origins 聚合——每个匹配写（字段 × 调用点 × 被调
+				// 函数）记一条来源；摘要行仍按字段去重，来源不折叠
+				var origins []*domain.SummaryOrigin
 				for _, e := range calleeWrites(data, indirect, c.calleeID) {
 					if contains(c.argStructPaths, structPathOf(e.fieldPath)) {
 						if got, ok := indirect[fID][indirectKey{e.fieldPath, c.callLine}]; ok {
@@ -96,8 +99,20 @@ func emitSummaries(data map[domain.CanonicalID]*funcData, alias *aliasResult, em
 							if got.callArg != "" {
 								meta["call_args"] = got.callArg
 							}
+							origins = append(origins, &domain.SummaryOrigin{
+								FunctionID: fID,
+								AccessKind: domain.SummaryIndirectWrite,
+								FieldPath:  e.fieldPath,
+								CallLine:   got.callLine,
+								CalleeID:   c.calleeID,
+							})
 						}
 						break
+					}
+				}
+				if len(origins) > 0 {
+					if err := emit(domain.Item{Origins: origins}); err != nil {
+						return err
 					}
 				}
 				if err := emit(domain.Item{Fact: &domain.Fact{

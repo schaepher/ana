@@ -2891,7 +2891,7 @@ func main() { join(true) }
 		LIMIT 1`).Scan(&writeID); err != nil {
 		t.Fatalf("x.FinalFee.write 节点缺失: %v", err)
 	}
-	rows, err := repo.GetValueTrace(domain.CanonicalID(writeID), 8)
+	rows, err := repo.GetValueTrace(domain.CanonicalID(writeID), 8, 0)
 	if err != nil {
 		t.Fatalf("GetValueTrace: %v", err)
 	}
@@ -3097,5 +3097,92 @@ func main() {
 	}
 	if len(exp.Relations) == 0 {
 		t.Error("export relations 空文件")
+	}
+}
+
+// TestDispatchCandidateMetaSelfContained：Q161 集成固化——动态接口调用
+// 的 argument 边携带候选元数据（interface/candidate_origin/confidence，
+// 注册点命中 register 0.9），value-trace 标注且 --min-conf 可剪枝。
+func TestDispatchCandidateMetaSelfContained(t *testing.T) {
+	if !scipGoAvailable() {
+		t.Skip("scip-go not found")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/dyncand\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "main.go"), `package dyncand
+
+type Record struct {
+	FinalFee float64
+}
+
+type Writer interface {
+	Write(r *Record)
+}
+
+type FileWriter struct{}
+
+func (w *FileWriter) Write(r *Record) {
+	r.FinalFee = 200
+}
+
+func run2() {
+	var w Writer = &FileWriter{} // 注册点（MakeInterface）
+	w.Write(&Record{})
+}
+
+func main() {}
+`)
+	if code := runCLI(t, "init", "--repo", dir); code != 0 {
+		t.Fatalf("init exit = %d", code)
+	}
+	// 动态 argument 边带候选元数据（register 0.9：注册点命中）
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := sqlite.NewRepo(db)
+	rows, err := repo.Query(`SELECT source_id, target_id, metadata FROM edges
+		WHERE kind = 'argument' AND json_extract(metadata, '$.candidate_origin') = 'register'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	metaOK := false
+	for rows.Next() {
+		var src, tgt, meta string
+		if err := rows.Scan(&src, &tgt, &meta); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(tgt, "(FileWriter).Write") && strings.Contains(meta, "dyncand.Writer") {
+			metaOK = true
+		}
+	}
+	if !metaOK {
+		t.Error("动态 argument 边缺候选元数据（interface/candidate_origin）")
+	}
+	// value-trace 标注候选边：以候选 argument 边 target（param）为锚点
+	rows.Close()
+	var anchor string
+	r2, err := repo.Query(`SELECT target_id FROM edges
+		WHERE kind = 'argument' AND json_extract(metadata, '$.candidate_origin') = 'register' LIMIT 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for r2.Next() {
+		if err := r2.Scan(&anchor); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r2.Close()
+	if anchor == "" {
+		t.Fatal("无 register 候选 argument 边")
+	}
+	code, out := runCLIOut(t, "query", "value-trace", anchor, "--repo", dir)
+	if code != 0 {
+		t.Fatalf("value-trace exit = %d", code)
+	}
+	if !strings.Contains(out, "动态候选") {
+		t.Errorf("value-trace 未标注动态候选边:\n%s", out[:min(len(out), 400)])
 	}
 }

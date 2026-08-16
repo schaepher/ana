@@ -69,12 +69,16 @@ func (r *Repo) SaveBatch(nodes []*domain.CodeEntity, edges []*domain.Fact) error
 // 并接受函数字段摘要行（function_field_summary）。
 // 端点节点不存在的边（如 Git 追踪到 SCIP 未索引的文件）静默跳过，不中断构建。
 func (r *Repo) SaveBatchStats(nodes []*domain.CodeEntity, edges []*domain.Fact,
-	summaries []*domain.FunctionFieldSummary) (*saveBatchResult, error) {
+	summaries []*domain.FunctionFieldSummary, origins ...[]*domain.SummaryOrigin) (*saveBatchResult, error) {
 	logger := zap.L()
 	logger.Debug("enter (Repo).SaveBatchStats")
 	defer logger.Debug("exit (Repo).SaveBatchStats")
 	result := &saveBatchResult{}
-	if len(nodes) == 0 && len(edges) == 0 && len(summaries) == 0 {
+	allOrigins := []*domain.SummaryOrigin{}
+	for _, os := range origins {
+		allOrigins = append(allOrigins, os...)
+	}
+	if len(nodes) == 0 && len(edges) == 0 && len(summaries) == 0 && len(allOrigins) == 0 {
 		return result, nil
 	}
 	tx, err := r.Begin()
@@ -141,6 +145,32 @@ func (r *Repo) SaveBatchStats(nodes []*domain.CodeEntity, edges []*domain.Fact,
 				}
 				stmt.Close()
 				return nil, fmt.Errorf("insert summary %s %s %s: %w", s.FunctionID, s.AccessKind, s.FieldPath, err)
+			}
+		}
+		stmt.Close()
+	}
+	if len(allOrigins) > 0 {
+		stmt, err := tx.Prepare(`INSERT OR IGNORE INTO summary_origins
+			(function_id, access_kind, field_path, call_line, callee_id)
+			VALUES (?, ?, ?, ?, ?)`)
+		if err != nil {
+			return nil, fmt.Errorf("prepare origin insert: %w", err)
+		}
+		for _, o := range allOrigins {
+			// origins 与摘要行配套：FunctionID/AccessKind/FieldPath 由
+			// 发射侧填全（此处来自 Item.Origins 的间接写场景，发射时
+			// 已带；兜底跳过缺失字段）
+			if o.FunctionID == "" || o.AccessKind == "" || o.FieldPath == "" {
+				continue
+			}
+			if _, err := stmt.Exec(string(o.FunctionID), o.AccessKind, o.FieldPath,
+				o.CallLine, string(o.CalleeID)); err != nil {
+				if isFKError(err) {
+					result.SkippedEdges++
+					continue
+				}
+				stmt.Close()
+				return nil, fmt.Errorf("insert origin %s %s %s: %w", o.FunctionID, o.AccessKind, o.FieldPath, err)
 			}
 		}
 		stmt.Close()
@@ -775,8 +805,9 @@ func (r *Repo) AllSummaries() ([]*domain.FunctionFieldSummary, error) {
 	return scanSummaries(rows)
 }
 
-// GetFunctionFields 查询函数的字段读写摘要（S1，field_trace.md §6.2）。
-// 直接查构建期预计算的 function_field_summary 表，无需动态遍历调用图。
+// GetFunctionFields 按函数查询字段摘要，附带 Q161 origins（间接写
+// 多来源：调用点 × 被调函数，origin/confidence 由 action 层 join
+// dispatch_to 边填充）。
 func (r *Repo) GetFunctionFields(funcID domain.CanonicalID) ([]*domain.FunctionFieldSummary, error) {
 	logger := zap.L()
 	logger.Debug("enter (Repo).GetFunctionFields")
@@ -787,7 +818,47 @@ func (r *Repo) GetFunctionFields(funcID domain.CanonicalID) ([]*domain.FunctionF
 	if err != nil {
 		return nil, err
 	}
-	return scanSummaries(rows)
+	out, err := scanSummaries(rows)
+	if err != nil {
+		return nil, err
+	}
+	// Q161：按函数加载全部 origins，挂到对应 indirect_write 行
+	orows, err := r.Query(`SELECT function_id, access_kind, field_path, call_line, callee_id
+		FROM summary_origins WHERE function_id = ? ORDER BY call_line`, string(funcID))
+	if err != nil {
+		return nil, err
+	}
+	defer orows.Close()
+	origins := map[string][]*domain.SummaryOrigin{} // access_kind|field_path → origins
+	for orows.Next() {
+		var (
+			o     domain.SummaryOrigin
+			fid   string
+			cline sql.NullInt64
+			cid   sql.NullString
+		)
+		if err := orows.Scan(&fid, &o.AccessKind, &o.FieldPath, &cline, &cid); err != nil {
+			return nil, err
+		}
+		o.FunctionID = domain.CanonicalID(fid)
+		if cline.Valid {
+			o.CallLine = int(cline.Int64)
+		}
+		if cid.Valid {
+			o.CalleeID = domain.CanonicalID(cid.String)
+		}
+		key := o.AccessKind + "|" + o.FieldPath
+		origins[key] = append(origins[key], &o)
+	}
+	if len(origins) > 0 {
+		for _, s := range out {
+			key := s.AccessKind + "|" + s.FieldPath
+			if os, ok := origins[key]; ok {
+				s.Origins = os
+			}
+		}
+	}
+	return out, nil
 }
 
 // scanSummaries 扫描摘要查询行（GetFunctionFields/AllSummaries 共用）。
@@ -1127,7 +1198,7 @@ func sortEdgeKinds(s string) string {
 	return strings.Join(parts, ",")
 }
 
-func (r *Repo) GetValueTrace(nodeID domain.CanonicalID, maxDepth int) ([]*domain.TraceRow, error) {
+func (r *Repo) GetValueTrace(nodeID domain.CanonicalID, maxDepth int, minConf float64) ([]*domain.TraceRow, error) {
 	logger := zap.L()
 	logger.Debug("enter (Repo).GetValueTrace")
 	defer logger.Debug("exit (Repo).GetValueTrace")
@@ -1154,6 +1225,9 @@ func (r *Repo) GetValueTrace(nodeID domain.CanonicalID, maxDepth int) ([]*domain
 	// 双 CTE 方案 vt 无深度限制全图扩散（148K 节点 2 分钟）不可行——
 	// 深度必须留在递归行内限制扩散。edge_kinds 语义为"入边类型集合
 	// （distinct）"（展示用途，Go 侧排序稳定）。
+	// Q161：--min-conf 剪枝——动态候选边（metadata 带 candidate_origin）
+	// 置信度低于阈值不展开；普通边（无候选 metadata）恒放行。候选边
+	// metadata 子查询取到达该行的一条（dir=0 入边 / dir=1 出边）。
 	rows, err := r.Query(`WITH RECURSIVE
 vt(id, dir, depth, kind, seed) AS (
     SELECT ?, 0, 0, (SELECT n0.kind FROM nodes n0 WHERE n0.id = ?), 1
@@ -1164,6 +1238,8 @@ vt(id, dir, depth, kind, seed) AS (
     JOIN nodes n_prev ON e.source_id = n_prev.id
     WHERE d.dir = 0 AND d.depth < ? AND e.kind IN ('data_flows_to','argument','returns','phi_operand','summary_io')
       AND (n_prev.kind != 'field_access' OR (`+backFilter+`))
+      AND (e.metadata IS NULL OR json_extract(e.metadata, '$.candidate_origin') IS NULL
+           OR json_extract(e.metadata, '$.confidence') >= ?)
     UNION
     -- 正向：从当前节点流出（使用链）；锚点（seed）双向可展开
     SELECT e.target_id, 1, d.depth + 1, n_next.kind, 0 FROM edges e INDEXED BY idx_edges_source
@@ -1171,6 +1247,8 @@ vt(id, dir, depth, kind, seed) AS (
     JOIN nodes n_next ON e.target_id = n_next.id
     WHERE (d.dir = 1 OR d.seed = 1) AND d.depth < ? AND e.kind IN ('data_flows_to','argument','returns','phi_operand','summary_io')
       AND (n_next.kind != 'field_access' OR (`+fwdFilter+`))
+      AND (e.metadata IS NULL OR json_extract(e.metadata, '$.candidate_origin') IS NULL
+           OR json_extract(e.metadata, '$.confidence') >= ?)
 )
 SELECT dp.id, MIN(dp.depth), n.name,
        (SELECT COALESCE(GROUP_CONCAT(DISTINCT e2.kind), '') FROM edges e2
@@ -1178,11 +1256,18 @@ SELECT dp.id, MIN(dp.depth), n.name,
            AND e2.kind IN ('data_flows_to','argument','returns','phi_operand','summary_io')),
        n.line_start, dp.dir, n.kind,
        json_extract(n.properties, '$.access_kind'), json_extract(n.properties, '$.func_id'),
-       json_extract(n.properties, '$.full_path')
+       json_extract(n.properties, '$.full_path'),
+       (CASE WHEN dp.dir = 0 THEN
+          COALESCE((SELECT e3.metadata FROM edges e3 WHERE e3.target_id = dp.id
+             AND json_extract(e3.metadata, '$.candidate_origin') IS NOT NULL LIMIT 1), '')
+        ELSE
+          COALESCE((SELECT e3.metadata FROM edges e3 WHERE e3.source_id = dp.id
+             AND json_extract(e3.metadata, '$.candidate_origin') IS NOT NULL LIMIT 1), '')
+        END)
 FROM vt dp JOIN nodes n ON n.id = dp.id
 GROUP BY dp.id, dp.dir
 ORDER BY dp.dir, MIN(dp.depth), dp.id`,
-		string(nodeID), string(nodeID), maxDepth, maxDepth)
+		string(nodeID), string(nodeID), maxDepth, minConf, maxDepth, minConf)
 	if err != nil {
 		return nil, err
 	}
@@ -1198,8 +1283,9 @@ ORDER BY dp.dir, MIN(dp.depth), dp.id`,
 			access   sql.NullString
 			funcID   sql.NullString
 			fullPath sql.NullString
+			edgeMeta string
 		)
-		if err := rows.Scan(&id, &row.Depth, &row.Name, &row.EdgeKinds, &line, &dir, &kind, &access, &funcID, &fullPath); err != nil {
+		if err := rows.Scan(&id, &row.Depth, &row.Name, &row.EdgeKinds, &line, &dir, &kind, &access, &funcID, &fullPath, &edgeMeta); err != nil {
 			return nil, err
 		}
 		row.ID = domain.CanonicalID(id)
@@ -1217,6 +1303,17 @@ ORDER BY dp.dir, MIN(dp.depth), dp.id`,
 		}
 		if line.Valid {
 			row.Line = int(line.Int64)
+		}
+		// Q161：候选边标注（动态 argument/returns 边的 interface/origin/confidence）
+		if edgeMeta != "" {
+			var m map[string]any
+			if json.Unmarshal([]byte(edgeMeta), &m) == nil {
+				row.EdgeIface, _ = m["interface"].(string)
+				row.EdgeOrigin, _ = m["candidate_origin"].(string)
+				if c, ok := m["confidence"].(float64); ok {
+					row.EdgeConf = c
+				}
+			}
 		}
 		out = append(out, &row)
 	}

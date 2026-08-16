@@ -25,7 +25,7 @@ type Reader interface {
 	GetFunctionFields(funcID domain.CanonicalID) ([]*domain.FunctionFieldSummary, error)
 	TraceBackward(field string, funcID domain.CanonicalID, maxDepth int) ([]*domain.TraceRow, error)
 	TraceForward(field string, funcID domain.CanonicalID, maxDepth int) ([]*domain.TraceRow, error)
-	GetValueTrace(nodeID domain.CanonicalID, maxDepth int) ([]*domain.TraceRow, error)
+	GetValueTrace(nodeID domain.CanonicalID, maxDepth int, minConf float64) ([]*domain.TraceRow, error) // Q161 minConf 候选剪枝
 	GetValueTraceMulti(anchors []domain.CanonicalID, ctxField string, maxDepth int) ([]*domain.TraceRow, error)
 	GetFunctionFlows(funcID domain.CanonicalID, maxDepth int) ([]*domain.TraceRow, error)
 	GetRoots() ([]*domain.CodeEntity, error)
@@ -164,7 +164,7 @@ func (a *Actions) downstreamTrampoline(anchor domain.CanonicalID) ([]*domain.Tra
 // （同字段读节点的使用链），行按 ID 去重（首个保留）。供
 // export graph --type lifecycle 与前端展示使用。
 func (a *Actions) Lifecycle(id domain.CanonicalID) ([]*domain.TraceRow, error) {
-	rows, err := a.repo.GetValueTrace(id, 8)
+	rows, err := a.repo.GetValueTrace(id, 8, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -238,6 +238,19 @@ func (a *Actions) FunctionFields(input string) (*domain.CodeEntity, []*domain.Fu
 	if err != nil {
 		return nil, nil, err
 	}
+	// Q161：origins 的 origin/confidence 从 dispatch_to 边 join（callee
+	// 是候选实现时带出 register/enum + 置信度；静态调用来源留空）
+	targets, terr := a.repo.GetDispatchTargets()
+	if terr == nil && len(targets) > 0 {
+		for _, s := range rows {
+			for _, o := range s.Origins {
+				if m, ok := targets[o.CalleeID]; ok {
+					o.Origin = m.Origin
+					o.Confidence = m.Confidence
+				}
+			}
+		}
+	}
 	return n, rows, nil
 }
 
@@ -282,8 +295,8 @@ func (a *Actions) RelationsAll() ([]*domain.TableRelation, error) {
 	return a.repo.GetAllTableRelations()
 }
 
-func (a *Actions) ValueTrace(nodeID domain.CanonicalID, maxDepth int) ([]*domain.TraceRow, error) {
-	rows, err := a.repo.GetValueTrace(nodeID, maxDepth)
+func (a *Actions) ValueTrace(nodeID domain.CanonicalID, maxDepth int, minConf float64) ([]*domain.TraceRow, error) {
+	rows, err := a.repo.GetValueTrace(nodeID, maxDepth, minConf)
 	if err != nil {
 		return nil, err
 	}
@@ -425,7 +438,7 @@ type SummaryStep struct {
 // 写锚点的下游（③）：写节点无出边——经"同 full_path 的读节点"跳板
 // 接入读的使用链（字段级关联：写入 → 后续读取消费）。
 func (a *Actions) SummaryChain(anchor domain.CanonicalID) ([]SummaryStep, error) {
-	rows, err := a.repo.GetValueTrace(anchor, 8)
+	rows, err := a.repo.GetValueTrace(anchor, 8, 0)
 	if err != nil {
 		return nil, err
 	}

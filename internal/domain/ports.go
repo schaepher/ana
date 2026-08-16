@@ -11,6 +11,21 @@ type Item struct {
 	Node    *CodeEntity
 	Fact    *Fact
 	Summary *FunctionFieldSummary
+	Origins []*SummaryOrigin // Q161 摘要来源（indirect_write 多分支）
+}
+
+// SummaryOrigin 摘要来源（Q161）：某字段 indirect_write 的一个来源
+// （调用点行号 + 被调函数）；落库三键 function_id/access_kind/field_path
+// 与摘要行配套；origin/confidence 查询期从 dispatch_to 边 join（callee
+// 是候选实现时带出 register/enum + 置信度）。
+type SummaryOrigin struct {
+	FunctionID CanonicalID
+	AccessKind string
+	FieldPath  string
+	CallLine   int
+	CalleeID   CanonicalID
+	Origin     string // register / enum（动态候选时，查询期填充）
+	Confidence float64
 }
 
 // FunctionFieldSummary 函数字段摘要行（function_field_summary 表，
@@ -22,6 +37,7 @@ type FunctionFieldSummary struct {
 	InstancePath string
 	LineStart   int
 	CodeSnippet string
+	Origins     []*SummaryOrigin // Q161 间接写多来源（查询期填充）
 }
 
 // 摘要 access_kind 常量。
@@ -48,6 +64,9 @@ type TraceRow struct {
 	DispatchCandidate bool    // 该行所属函数是接口候选实现（Q157 P1）
 	DispatchOrigin    string  // 候选来源（register / enum）
 	DispatchConf      float64 // 候选置信度
+	EdgeIface         string  // 到达该行的边是动态候选边（Q161）：接口类型
+	EdgeOrigin        string  // 候选来源（register / enum）
+	EdgeConf          float64 // 候选置信度（--min-conf 剪枝阈值用）
 }
 
 // DispatchMeta 接口派发元数据（Q157 P1：value-trace 候选标注用）。

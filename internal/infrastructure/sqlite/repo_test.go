@@ -810,7 +810,7 @@ func TestGetValueTrace(t *testing.T) {
 	})
 
 	// 以字段访问为锚点，反向应走到调用方实参（跨函数）
-	rows, err := r.GetValueTrace(fa.ID, 8)
+	rows, err := r.GetValueTrace(fa.ID, 8, 0)
 	if err != nil {
 		t.Fatalf("GetValueTrace: %v", err)
 	}
@@ -974,7 +974,7 @@ func TestValueTraceFieldAnchorNoCrossField(t *testing.T) {
 
 	// 锚点 = 字段写（T.A）：反向链含同字段读（faA.read）与值来源读跳板
 	// （faB.read → v0 → faA.write：v0 的 phi 合并来源，值流相关）
-	rows, err := r.GetValueTrace(domain.CanonicalID(funcID+"#faA.write@2"), 8)
+	rows, err := r.GetValueTrace(domain.CanonicalID(funcID+"#faA.write@2"), 8, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -995,7 +995,7 @@ func TestValueTraceFieldAnchorNoCrossField(t *testing.T) {
 	}
 	// 对象锚点（v0，无字段）：正向仅放行写、反向仅放行读——反向链应
 	// 含 A 读与 B 读（值来源），正向仅写
-	rows, err = r.GetValueTrace(domain.CanonicalID(funcID+"#v0"), 8)
+	rows, err = r.GetValueTrace(domain.CanonicalID(funcID+"#v0"), 8, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1203,7 +1203,7 @@ func TestValueTraceCycle(t *testing.T) {
 			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
 	}
 	save(t, r, nodes, edges)
-	rows, err := r.GetValueTrace(domain.CanonicalID(funcID+"#a"), 8)
+	rows, err := r.GetValueTrace(domain.CanonicalID(funcID+"#a"), 8, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1242,7 +1242,7 @@ func TestValueTraceConvergeDedup(t *testing.T) {
 	}
 	save(t, r, nodes, edges)
 
-	rows, err := r.GetValueTrace(domain.CanonicalID(funcID+"#v0"), 8)
+	rows, err := r.GetValueTrace(domain.CanonicalID(funcID+"#v0"), 8, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1485,5 +1485,58 @@ func TestTraceForwardStartTypeFiltered(t *testing.T) {
 	}
 	if !hasC || !hasWrite {
 		t.Errorf("目标类型起点/字段写缺失: %+v", rows)
+	}
+}
+
+// TestGetValueTraceMinConf：Q161——动态候选边（metadata 带
+// candidate_origin/confidence）低于阈值时被 BFS 剪枝；普通边（无
+// 候选 metadata）不受影响。
+func TestGetValueTraceMinConf(t *testing.T) {
+	r := newTestRepo(t)
+	callerID := "symbol:go:example.com/m:g"
+	funcID := "symbol:go:example.com/m:f"
+	caller := node(callerID, "function", "g", "g.go")
+	fn := node(funcID, "function", "f", "f.go")
+	argVal := node(callerID+"#t0", "ssa_value", "t0", "g.go")
+	argVal.Properties["func_id"] = callerID
+	paramVal := node(funcID+"#a", "ssa_value", "a", "f.go")
+	paramVal.Properties["func_id"] = funcID
+	fa := faNodeAccess(funcID+"#a.X.read@3", funcID, "example.com/m.T.X", "a.X", 3, "read")
+	save(t, r, []*domain.CodeEntity{caller, fn, argVal, paramVal, fa}, []*domain.Fact{
+		// 候选边：enum 0.7（metadata 带 candidate_origin）
+		{SourceID: argVal.ID, TargetID: paramVal.ID, Kind: domain.FactArgument, ToolSource: domain.ToolSSA,
+			Confidence: 1, Metadata: map[string]any{"interface": "example.com/m.Fee",
+				"candidate_origin": "enum", "confidence": 0.7}},
+		{SourceID: paramVal.ID, TargetID: fa.ID, Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+	})
+
+	// minConf=0：候选路径可见 + 边级标注（到达 paramVal 的 argument 边）
+	rows, err := r.GetValueTrace(fa.ID, 8, 0)
+	if err != nil {
+		t.Fatalf("GetValueTrace(0): %v", err)
+	}
+	found := false
+	for _, row := range rows {
+		if row.ID == paramVal.ID {
+			found = true
+			if row.EdgeOrigin != "enum" || row.EdgeConf != 0.7 || row.EdgeIface != "example.com/m.Fee" {
+				t.Errorf("候选边标注 = %s/%v/%s, want enum/0.7/example.com/m.Fee",
+					row.EdgeOrigin, row.EdgeConf, row.EdgeIface)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("minConf=0 时候选路径应可达 paramVal")
+	}
+
+	// minConf=0.8：候选边（0.7）被剪枝，argVal 不可达
+	rows, err = r.GetValueTrace(fa.ID, 8, 0.8)
+	if err != nil {
+		t.Fatalf("GetValueTrace(0.8): %v", err)
+	}
+	for _, row := range rows {
+		if row.ID == argVal.ID {
+			t.Error("minConf=0.8 时候选路径不应出现 argVal")
+		}
 	}
 }

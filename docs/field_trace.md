@@ -1393,3 +1393,32 @@ member_id→mm_account.member_id、category.parent_id↔product_category
 
 **边界**：全库 read/write 关联量级大（4 万+），AGENT 建议按 type 过滤取
 query 键关联；耗时 2.5 分钟级——适合批量分析而非交互。
+
+## 31. 动态候选溯源：边级元数据 + value-trace 标注/过滤 + 摘要 origins（Q161，2026-08-16）
+
+**动机**（用户 review 剩余问题）：
+1. 摘要来源折叠——function_field_summary 对 (function_id, access_kind,
+   field_path) 唯一，上游函数目标字段的 indirect_write 只显示一个来源行
+   （"置零"分支），动态实现写入的来源丢失
+2. 追踪精度保守——从 Payment 分支具体写点追踪仍出现 SppRefundMdr（不在
+   PaymentMdrFee 的 dispatch_to 候选内）；动态 argument/returns 边未携带
+   候选信息，value-trace 无法区分必达/候选路径
+
+**设计**（用户确认：展示 + --min-conf 过滤都做；origins 独立表）：
+- **A. 动态边候选元数据**（crossflow.go emitCall 动态分支）：fieldExtractor
+  缓存 collectDispatchRegistrations（一次扫描）；argument/returns 边
+  metadata 加 {interface, candidate_origin: register|enum, confidence:
+  0.9|0.7}（注册点命中优先，逻辑同 emitDispatches）
+- **B. value-trace 边级候选标注 + --min-conf**：GetValueTrace 递归 CTE
+  WHERE 加剪枝（metadata.candidate_origin 存在且 confidence < N → 不展开）；
+  SELECT 补到达行的候选边信息（EdgeIface/EdgeOrigin/EdgeConf）；CLI
+  `--min-conf N` 默认 0。Q157 函数级标注保留，边级合并展示
+- **C. 摘要 origins 独立表 summary_origins**（schema v3）：列
+  (function_id, access_kind, field_path, call_line, callee_id) UNIQUE；
+  origin/confidence 查询期从 dispatch_to 边 join（复用 Q157
+  GetDispatchTargets——callee 是候选实现时自然带出）；emit 在
+  INDIRECT_WRITE 边循环收集；query fields 展示多来源
+
+**影响**：schema user_version 2→3——验证仓库（radar/go2o）须
+clean --force + init 重建；value-trace SQL 每步加 json_extract 判断
+（metadata 多 NULL，实测确认开销）。

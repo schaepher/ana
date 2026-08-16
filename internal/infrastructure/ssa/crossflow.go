@@ -116,6 +116,14 @@ func (ext *fieldExtractor) emitCall(cc *ssa.CallCommon, callVal ssa.Value) error
 					if implSSA == nil {
 						continue
 					}
+					// Q161：候选边元数据（value-trace 区分必达/候选路径；
+					// 注册点命中 register 0.9，枚举兜底 enum 0.7，同 emitDispatches）
+					origin, conf := ext.dispatchOriginOf(iface, cc.Method.Name(), implFn)
+					candMeta := map[string]any{
+						"interface":        iface.String(),
+						"candidate_origin": origin,
+						"confidence":       conf,
+					}
 					// 动态 invoke 的 cc.Args 不含接收者（在 cc.Value）——
 					// 实参对应候选方法 Params[1:]（Params[0] 是 receiver）
 					for i, arg := range cc.Args {
@@ -133,7 +141,7 @@ func (ext *fieldExtractor) emitCall(cc *ssa.CallCommon, callVal ssa.Value) error
 						if err != nil || paramID == "" {
 							continue
 						}
-						if err := ext.emitEdgeKind(argID, paramID, domain.FactArgument); err != nil {
+						if err := ext.emitEdgeKindMeta(argID, paramID, domain.FactArgument, candMeta); err != nil {
 							return err
 						}
 					}
@@ -151,7 +159,7 @@ func (ext *fieldExtractor) emitCall(cc *ssa.CallCommon, callVal ssa.Value) error
 									}
 									opID, err := ext.emitValue(ret[0])
 									if err == nil && opID != "" {
-										if err := ext.emitEdgeKind(opID, callID, domain.FactReturns); err != nil {
+										if err := ext.emitEdgeKindMeta(opID, callID, domain.FactReturns, candMeta); err != nil {
 											return err
 										}
 									}
@@ -161,7 +169,7 @@ func (ext *fieldExtractor) emitCall(cc *ssa.CallCommon, callVal ssa.Value) error
 									for _, op := range ret {
 										opID, err := ext.emitValue(op)
 										if err == nil && opID != "" {
-											if err := ext.emitEdgeKind(opID, callID, domain.FactReturns); err != nil {
+											if err := ext.emitEdgeKindMeta(opID, callID, domain.FactReturns, candMeta); err != nil {
 												return err
 											}
 										}
@@ -182,7 +190,7 @@ func (ext *fieldExtractor) emitCall(cc *ssa.CallCommon, callVal ssa.Value) error
 									if len(rets) > 0 && idx < len(rets[0]) {
 										opID, err := ext.emitValue(rets[0][idx])
 										if err == nil && opID != "" {
-											if err := ext.emitEdgeKind(opID, exID, domain.FactReturns); err != nil {
+											if err := ext.emitEdgeKindMeta(opID, exID, domain.FactReturns, candMeta); err != nil {
 												return err
 											}
 										}
@@ -303,6 +311,26 @@ func (ext *fieldExtractor) emitCall(cc *ssa.CallCommon, callVal ssa.Value) error
 	// 摘要收集（间接写闭包计算用）——动态/静态调用统一走 recordCallInfo。
 	ext.recordCallInfo(cc, calleeID)
 	return nil
+}
+
+// dispatchOriginOf 判定候选实现的派发来源（Q161）：注册点命中
+// （MakeInterface 具体值 → 接口，见 emitDispatches）→ register 0.9；
+// 否则枚举兜底 enum 0.7。注册点收集一次缓存（全 prog 扫描开销大）。
+func (ext *fieldExtractor) dispatchOriginOf(iface *types.Named, method string, implFn *types.Func) (string, float64) {
+	if ext.dispatchRegs == nil {
+		ext.dispatchRegs = collectDispatchRegistrations(ext.prog, ext.repo.Modules)
+	}
+	for dyn, site := range ext.dispatchRegs[iface] {
+		t := dynamicTypeOf(dyn, ext.prog)
+		if t == nil {
+			continue
+		}
+		if fn := findMethod(t, method); fn != nil && candidateKey(fn) == candidateKey(implFn) {
+			_ = site // 注册行号保留位（当前仅用于 dispatch_to 边）
+			return "register", 0.9
+		}
+	}
+	return "enum", 0.7
 }
 
 // recordCallInfo 记录调用摘要条目（间接写闭包消费：emitSummaries 沿
@@ -495,5 +523,21 @@ func (ext *fieldExtractor) emitEdgeKind(from, to domain.CanonicalID, kind domain
 		Kind:       kind,
 		ToolSource: domain.ToolSSA,
 		Confidence: 1.0,
+	}})
+}
+
+// emitEdgeKindMeta 发射带元数据的边（Q161 动态候选边：
+// interface/candidate_origin/confidence——value-trace 标注与过滤用）。
+func (ext *fieldExtractor) emitEdgeKindMeta(from, to domain.CanonicalID, kind domain.FactKind, meta map[string]any) error {
+	logger := zap.L()
+	logger.Debug("enter (fieldExtractor).emitEdgeKindMeta")
+	defer logger.Debug("exit (fieldExtractor).emitEdgeKindMeta")
+	return ext.emit(domain.Item{Fact: &domain.Fact{
+		SourceID:   from,
+		TargetID:   to,
+		Kind:       kind,
+		ToolSource: domain.ToolSSA,
+		Confidence: 1.0,
+		Metadata:   meta,
 	}})
 }

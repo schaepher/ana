@@ -16,7 +16,8 @@ import (
 // SchemaVersion 数据库 schema 版本（PRAGMA user_version）。
 // v1.0 前无自动迁移：版本不匹配时提示手动重建（TD.md 10.2）。
 // v2：新增 function_field_summary 表（SSA 字段追溯，field_trace.md §5.2）。
-const SchemaVersion = 2
+// v3：新增 summary_origins 表（Q161 间接写多来源聚合）。
+const SchemaVersion = 3
 
 const schema = `
 CREATE TABLE IF NOT EXISTS nodes (
@@ -78,6 +79,19 @@ CREATE TABLE IF NOT EXISTS function_field_summary (
 );
 CREATE INDEX IF NOT EXISTS idx_summary_func_access ON function_field_summary(function_id, access_kind);
 CREATE INDEX IF NOT EXISTS idx_summary_field ON function_field_summary(field_path);
+
+-- 摘要来源表（Q161）：间接写多来源（调用点 × 被调函数），origin/confidence
+-- 查询期从 dispatch_to 边 join（callee 为候选实现时自然带出）
+CREATE TABLE IF NOT EXISTS summary_origins (
+    function_id TEXT NOT NULL,
+    access_kind TEXT NOT NULL CHECK(access_kind IN ('direct_read','direct_write','indirect_write')),
+    field_path TEXT NOT NULL,
+    call_line INTEGER,
+    callee_id TEXT,
+    FOREIGN KEY(function_id) REFERENCES nodes(id) ON DELETE CASCADE,
+    UNIQUE(function_id, access_kind, field_path, call_line, callee_id)
+);
+CREATE INDEX IF NOT EXISTS idx_summary_origins_func ON summary_origins(function_id, access_kind);
 
 -- 表达式索引：field_access 定位（S2/S3 起点），字段追溯，field_trace.md §5.2
 CREATE INDEX IF NOT EXISTS idx_nodes_field_path ON nodes(json_extract(properties, '$.full_path'));
