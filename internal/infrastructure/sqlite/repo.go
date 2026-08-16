@@ -1452,7 +1452,7 @@ func (r *Repo) GetTableRelations(table string) ([]*domain.TableRelation, error) 
 	const maxDepth = 12
 	dataKinds := "'data_flows_to','argument','returns','summary_io','alias','phi_operand'"
 	seen := map[string]*domain.TableRelation{} // "fromCol|toTable|toCol" → 关联（Type 取最高）
-	var out []*domain.TableRelation
+	var all []*domain.TableRelation
 	for _, st := range starts {
 		// BFS：沿 data 边双向扩展，收集其他表虚拟节点
 		visited := map[string]int{st.id: 0}
@@ -1606,7 +1606,36 @@ func (r *Repo) GetTableRelations(table string) ([]*domain.TableRelation, error) 
 				Hops: d, Type: rtype,
 			}
 			seen[key] = rel
-			out = append(out, rel)
+			all = append(all, rel)
+		}
+	}
+	// Q159：外键语义过滤——
+	// 1) id→id 一律丢弃（两表都不会拿各自自增主键互查）；
+	// 2) 同目标列多起点时外键形态列（xxx_id）优先——主键 id 起点是
+	//    对象值共享桥接噪音；保留形态：A.xxx_id → B.id（外键查主键）、
+	//    A.id → B.xxx_id（主键被外键引用查询，如 mm_member.id →
+	//    mm_account.member_id）、A.xxx_id → B.xxx_id（业务关联键）
+	byTarget := map[string][]*domain.TableRelation{}
+	for _, rel := range all {
+		byTarget[rel.ToTable+"."+rel.ToCol] = append(byTarget[rel.ToTable+"."+rel.ToCol], rel)
+	}
+	var out []*domain.TableRelation
+	for _, rels := range byTarget {
+		hasFK := false
+		for _, r := range rels {
+			if r.FromCol != "id" {
+				hasFK = true
+				break
+			}
+		}
+		for _, r := range rels {
+			if r.FromCol == "id" && r.ToCol == "id" {
+				continue // id→id：主键互查不存在
+			}
+			if hasFK && r.FromCol == "id" {
+				continue // 同目标有更直接的外键列起点
+			}
+			out = append(out, r)
 		}
 	}
 	return out, nil

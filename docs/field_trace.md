@@ -1346,3 +1346,26 @@ member_id 10 跳）；mm_member 3 条 query（id → 其他表 id/member_id）�
 与 seller_id 对应商户查询——键关联链现在贯通（buyer_id 值流 →
 GetMember 实参 → mm_member.id filter）。测试：TestWhereColDollar +
 TestInterfaceSQLSummary（$N + 接口 SQL 形态）。验证矩阵全绿。
+
+---
+
+## 29. ER 图外键语义过滤：丢弃主键互查噪音（Q159，2026-08-16）
+
+**动机**（用户 review）：ER 图（query 键关联）大量 `id→id` 边——业务
+系统不自增主键互查（B 表不会拿自己的自增 id 去关联 A），`id→id` 是
+BFS 对象值共享桥接噪音。
+
+**根因**：BFS 从本表**每列**独立出发（id 与 buyer_id 都是起点）——各自
+命中对端表 filter → 主键 id 起点与真实外键列起点并存。
+
+**修复**（GetTableRelations 收集后统一过滤）：
+- `FromCol == id && ToCol == id` 一律丢弃（主键互查不存在）
+- 同目标列多起点时外键形态列（xxx_id）优先——主键 id 起点丢弃
+- 保留形态：`A.xxx_id → B.xxx_id`（业务关联键：order_no/parent_id/
+  member_id/item_id）、`A.id → B.xxx_id`（主键被外键引用查询：
+  mm_member.id → mm_account.member_id）、`A.xxx_id → B.id`（外键查主键）
+
+**go2o 实测**：query 键关联 122 条 → 21 条（20 表对）——会员域各表
+member_id→mm_account.member_id、category.parent_id↔product_category
+（自引用）、sale_sub_order.order_no→order_list.order_no（2 跳高置信）、
+商品域 item_id→snapshot.item_id 等。ER 图脚本 tmp/er_diagram.py。
