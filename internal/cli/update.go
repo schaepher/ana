@@ -28,6 +28,7 @@ func cmdUpdate(ctx context.Context, args []string) int {
 	defer logger.Debug("exit cmdUpdate")
 	fs := flag.NewFlagSet("update", flag.ExitOnError)
 	repoPath := fs.String("repo", "", "仓库根目录（须已运行 codeintel init 且为 git 仓库）")
+	workers := fs.Int("workers", 1, "SSA 分析按包并发数（默认 1=串行）")
 	fs.Parse(args)
 
 	if *repoPath == "" {
@@ -83,6 +84,7 @@ func cmdUpdate(ctx context.Context, args []string) int {
 	defer db.Close()
 
 	orch := orchestrator.New(repo, db)
+	orch.SetWorkers(*workers)
 	result, err := orch.IncrementalBuild(ctx, changed)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

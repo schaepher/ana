@@ -24,6 +24,7 @@ func cmdInit(ctx context.Context, args []string) int {
 	defer logger.Debug("exit cmdInit")
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
 	repoPath := fs.String("repo", "", "仓库根目录（含 go.mod）")
+	workers := fs.Int("workers", 1, "SSA 分析按包并发数（默认 1=串行；内存充足可调大，如 4/8）")
 	fs.Parse(args)
 
 	if *repoPath == "" {
@@ -66,6 +67,7 @@ func cmdInit(ctx context.Context, args []string) int {
 	defer db.Close()
 
 	orch := orchestrator.New(repo, db)
+	orch.SetWorkers(*workers)
 	result, err := orch.FullBuild(ctx)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

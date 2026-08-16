@@ -20,7 +20,7 @@ make install
 ## 命令速查
 
 ```bash
-codeintel init --repo <path>               # 全量构建索引（须有 go.mod；go.work 根目录会提示进模块目录）
+codeintel init --repo <path> [--workers N] # 全量构建索引（--workers N：SSA 按包并发数，默认 1=串行；内存充足可调 4/8——须有 go.mod；go.work 根目录会提示进模块目录）
 codeintel update --repo <path>             # 增量更新（git 检测变更文件，全量分析+增量写入）
 codeintel serve --repo <path> --addr :8096 # 启动图探索 Web 服务（前端 AntV G6，端口默认 :8090）
 codeintel query <sub> ... --repo <path>    # 查询（见下；默认加 --json 取结构化输出）

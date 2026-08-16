@@ -39,6 +39,14 @@ type Adapter struct {
 	// dispatchRegs 接口注册点缓存（Q161 动态边候选元数据）：Index 级
 	// 共享一次扫描——放 extractor（每函数新建）会每函数全 prog 扫描
 	dispatchRegs dispatchReg
+	// workers 按包并发数（Q169/Q170）：默认 1=串行；命令行 --workers N
+	// 指定（orchestrator SetWorkers 注入）
+	workers int
+}
+
+// SetWorkers 设置按包并发数（Q170：--workers 参数；≤1 退串行）。
+func (a *Adapter) SetWorkers(n int) {
+	a.workers = n
 }
 
 // Name 实现 IndexerPort。
@@ -130,12 +138,12 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 	for _, fns := range byPkg {
 		totalFuncs += len(fns)
 	}
-	// Q169：按包并发——包间无共享可变状态（a.fd 由 emitFunction 内
-	// 互斥锁保护；emit 走 channel 并发安全；dispatchRegs/idents/specs
-	// 只读共享）。并发上限 min(核数, 8)——内存受限环境可调低。
-	workers := runtime.GOMAXPROCS(0)
-	if workers > 8 {
-		workers = 8
+	// Q169/Q170：按包并发——包间无共享可变状态（a.fd 由 emitFunction
+	// 内互斥锁保护；emit 走 channel 并发安全；dispatchRegs/idents/specs
+	// 只读共享）。并发度 = --workers（默认 1=串行；用户显式调大）。
+	workers := a.workers
+	if workers < 1 {
+		workers = 1
 	}
 	sem := make(chan struct{}, workers)
 	var wg sync.WaitGroup

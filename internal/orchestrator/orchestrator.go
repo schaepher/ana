@@ -77,6 +77,15 @@ func New(repo *domain.Repository, db *sqlite.DB) *Orchestrator {
 	}
 }
 
+// SetWorkers 设置 ssa 适配器按包并发数（Q170：CLI --workers 注入）。
+func (o *Orchestrator) SetWorkers(n int) {
+	for _, a := range o.Adapters {
+		if w, ok := a.(interface{ SetWorkers(int) }); ok {
+			w.SetWorkers(n)
+		}
+	}
+}
+
 // FullBuild 执行全量构建并返回报告（TD.md 5.2 并行流程）。
 func (o *Orchestrator) FullBuild(ctx context.Context) (*BuildResult, error) {
 	logger := logging.FromContext(ctx)
