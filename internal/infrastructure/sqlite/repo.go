@@ -1459,7 +1459,18 @@ func (r *Repo) GetTableRelations(table string) ([]*domain.TableRelation, error) 
 					WHERE n1.id = ? AND n2.kind = 'field_access'
 					  AND json_extract(n2.properties, '$.access_kind') = 'read'
 					  AND json_extract(n2.properties, '$.func_id') = json_extract(n1.properties, '$.func_id')
-					  AND instr(json_extract(n2.properties, '$.full_path'), ?) > 0`, cur, ts)
+					  AND instr(json_extract(n2.properties, '$.full_path'), ?) > 0
+					  -- 精确桥：仅桥下游 2 跳内可达 filter 节点的字段读取
+					  -- （字段 → 值 → filter：真正进 Where 的字段；防同类型全字段扩散）
+					  AND EXISTS (
+						SELECT 1 FROM edges e1
+						JOIN edges e2 ON e2.source_id = e1.target_id
+						JOIN nodes n3 ON n3.id = e2.target_id
+						WHERE e1.source_id = n2.id
+						  AND n3.kind = 'field_access'
+						  AND json_extract(n3.properties, '$.access_kind') = 'filter'
+						  AND json_extract(n3.properties, '$.is_external') = 'true'
+					  )`, cur, ts)
 				if err == nil {
 					var bridge []string
 					for fs.Next() {
@@ -1534,6 +1545,12 @@ func (r *Repo) GetTableRelations(table string) ([]*domain.TableRelation, error) 
 				rtype = domain.RelationQuery // WHERE 过滤列：键关联（高置信）
 			case "write":
 				rtype = domain.RelationWrite
+			}
+			// 键关联列名呼应：外键列名含主键列名（session_id 含 id；
+			// title/created_at → session_id 是同源共享误桥）——不呼应降级
+			if rtype == domain.RelationQuery && col != fromCol &&
+				!strings.HasSuffix(strings.ToLower(col), strings.ToLower(fromCol)) {
+				rtype = domain.RelationRead
 			}
 			if ex, ok := seen[key]; ok {
 				// 同列多节点（write/filter/read）：Type 取最高（query > write > read）
