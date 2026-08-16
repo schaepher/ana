@@ -50,8 +50,8 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 	logger.Debug("enter (Adapter).Index")
 	defer logger.Debug("exit (Adapter).Index")
 	packages.PrintErrors(pkgs) // 诊断信息打到 stderr，不中断
-	// 阶段进度日志（Q164 诊断：大仓库构建卡住/内存高时定位阶段；
-	// Info 级写入 .codeintel/codeintel.log）
+	// 阶段进度日志（Q164/Q165 诊断：大仓库构建卡住/内存高时定位阶段）——
+	// Info 级写入 .codeintel/codeintel.log（stdout/stderr 保持干净）
 	stageStart := time.Now()
 	stage := func(name string) {
 		var ms runtime.MemStats
