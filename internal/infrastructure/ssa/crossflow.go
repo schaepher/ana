@@ -13,8 +13,8 @@ import (
 	"strings"
 
 	"github.com/schaepher/codeintel/internal/domain"
-	"golang.org/x/tools/go/ssa"
 	"go.uber.org/zap"
+	"golang.org/x/tools/go/ssa"
 )
 
 // funcData 单个函数的摘要收集数据（构建期内存态）。
@@ -110,7 +110,8 @@ func (ext *fieldExtractor) emitCall(cc *ssa.CallCommon, callVal ssa.Value) error
 		// 具体实现（此前动态调用不产边，字段链路断在接口调用点）
 		if cc.Method != nil {
 			if iface := interfaceNamedOf(cc.Value.Type()); iface != nil {
-				for _, implFn := range implMethodsFor(ext.pkgs, ext.repo.Modules, iface, cc.Method.Name()) {
+				impls := implMethodsFor(ext.pkgs, ext.repo.Modules, iface, cc.Method.Name())
+				for _, implFn := range impls {
 					implSSA := ext.prog.FuncValue(implFn)
 					if implSSA == nil {
 						continue
@@ -196,6 +197,18 @@ func (ext *fieldExtractor) emitCall(cc *ssa.CallCommon, callVal ssa.Value) error
 					// 间接写断在接口调用点）
 					if implID, ok := ext.funcIDOf(implSSA); ok {
 						ext.recordCallInfo(cc, implID)
+					}
+				}
+				// Q156：候选实现为空（外部框架实现，如 gof fw.Repository）
+				// → 接口摘要（iface+method spec 匹配，表.列虚拟节点）
+				logger.Debug("dyn interface dispatch", zap.Int("impls", len(impls)), zap.String("call", cc.String()), zap.String("iface", cc.Value.Type().String()))
+				if len(impls) == 0 {
+					handled, err := ext.applyInterfaceSummary(cc, callVal)
+					if err != nil {
+						return err
+					}
+					if handled {
+						return nil
 					}
 				}
 			}

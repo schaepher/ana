@@ -1240,3 +1240,42 @@ INDEXED BY 修复）；query table ✓（wallet_log 4 列 + 读取方定位）�
 update 非 git 仓库正确拒绝；unused ✓（预聚合后 0.23s）。已知边界：
 gof 框架自定义仓储不在 GORM 摘要覆盖内（表虚拟节点少，relations 无
 关联输出）；alipay 等包自身编译错误降级跳过。
+
+---
+
+## 26. 通用接口摘要：动态 invoke 外部框架 ORM 映射（Q156，2026-08-16）
+
+**动机**（go2o 验证发现）：go2o 用 gof 框架（github.com/ixre/gof/ext/fw
+或模块内复制版 pkg/infra/fw）的 `Repository[M]` 泛型仓储——267 处
+`repo.Save/FindBy/Update` 全是接口方法调用（动态 invoke），候选实现
+`BaseRepository[M]` 在外部模块——动态派发枚举不到、摘要匹配不上 →
+表分析（query table）为 0 张表。gof 的 Repository 底层就是 GORM
+（`ORM = *gorm.DB`）。
+
+**设计（用户确认：通用接口摘要机制 + 全方法）**：
+- spec 新形态：`iface`（接口全路径）+ `method` + `kind`（write/read/
+  filter）+ `where_arg`/`obj_arg`/`id_arg`；field-summary.yaml 可自定义
+  （其他框架复制 gof 时开箱即用）
+- 挂接：emitCall 动态分支候选为空（外部实现）→ applyInterfaceSummary
+- 实体类型：泛型接口实例化（Repository[M]）TypeArgs[0]；非泛型接口
+  fallback 对象实参/返回值类型
+- 表名：实体 TableName() 方法 SSA Return 常量，fallback snake_case
+- 方法映射：Save/Update/Delete=对象写；FindBy/Get/FindList=读出 +
+  where/主键 filter（Get 主键列取 pk tag，fallback id）；Count/DeleteBy
+  =filter（无读出）
+- 内置注册 gof 原版 + go2o 复制版两个路径
+
+**顺带修复**：
+- `--verbose/--debug` 全局标志未被 main 从 args 移除 → 子命令 flag 解析
+  报错（`flag provided but not defined: -verbose`）——已修（main.go）
+- whereColsOf 占位符剥离通用化（= ?/=?/< ?/IN (?)/is null 等形态）
+
+**go2o 实测**：表.列虚拟节点从 6 个 → 1489 个（21 张表：mch_bill/
+mm_extra_field/mm_relation/pay_order/sys_log 等）；query table
+mch_bill 27 列 + 写入方/读取方精确定位（(billDomainImpl).Generate:319
+等）；mm_extra_field 14 列（TableName mm_extra_field 解析 ✓）。
+relations 无关联为数据形态使然（filter 值多来自参数而非其他表读出）。
+
+**测试**：TestInterfaceSummaryCustom（自定义 iface spec：write/read/
+filter/id/AND 拆分/TableName）+ TestGofRepositoryInterfaceSelfContained
+（真实 gof 依赖，tidy 后 init）。验证矩阵全绿。

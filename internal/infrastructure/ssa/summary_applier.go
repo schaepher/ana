@@ -13,13 +13,14 @@ import (
 	"go/types"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 
 	"github.com/schaepher/codeintel/internal/domain"
+	"go.uber.org/zap"
 	"golang.org/x/tools/go/ssa"
 	"gopkg.in/yaml.v3"
-	"go.uber.org/zap"
 )
 
 // fieldPattern 摘要字段模式："all" = 递归展开实参类型全部字段（Q16 保守策略）。
@@ -32,24 +33,36 @@ const (
 // summarySpec 单个外部函数的摘要。
 type summarySpec struct {
 	Func        string
+	Interface   string // Q156 接口摘要：接口全路径（动态 invoke 无静态 callee 时匹配）
+	Method      string // 接口方法名
+	Kind        string // 接口摘要类型：write（对象实参写）/ read（返回值读出）/ filter（where 过滤列）
+	WhereArg    int    // 接口摘要：where 字符串实参下标（-1 无）
+	ObjArg      int    // 接口摘要 write：对象实参下标
+	IDArg       int    // 接口摘要 read：主键实参下标（-1 无；映射主键列 filter）
 	Reads       []string
 	Writes      []string
 	ParamIndex  int // 操作第几个参数（0 为接收者）
 	ReadsAll    bool
 	WritesAll   bool
-	ReadArgsAll bool // fmt.Printf 风格：从 ParamIndex 起所有实参读全部字段
-	SQLStmt     bool // database/sql 语句调用：SQL 字符串在第 0 实参（Q97）
-	SQLWrite    bool // Exec 写 / Query 读
+	ReadArgsAll bool   // fmt.Printf 风格：从 ParamIndex 起所有实参读全部字段
+	SQLStmt     bool   // database/sql 语句调用：SQL 字符串在第 0 实参（Q97）
+	SQLWrite    bool   // Exec 写 / Query 读
 	TxBoundary  string // 事务边界标记（begin/commit/rollback，Q97）
-	ORMWrite    bool // ORM（GORM）写对象：字段→表.列 映射（②）
-	ScanOut     bool // Scan 写 out 实参：接收者值 → 实参指向变量（表关联链）
-	ORMRead     bool // ORM 读：对象读出 → 表.列 read 虚拟节点（键关联链）
+	ORMWrite    bool   // ORM（GORM）写对象：字段→表.列 映射（②）
+	ScanOut     bool   // Scan 写 out 实参：接收者值 → 实参指向变量（表关联链）
+	ORMRead     bool   // ORM 读：对象读出 → 表.列 read 虚拟节点（键关联链）
 }
 
 // userSummaryFile 对应 field-summary.yaml。
 type userSummaryFile struct {
 	Summaries []struct {
 		Func       string   `yaml:"func"`
+		Iface      string   `yaml:"iface"`     // Q156 接口摘要：接口全路径
+		Method     string   `yaml:"method"`    // 接口方法名
+		Kind       string   `yaml:"kind"`      // write/read/filter
+		WhereArg   int      `yaml:"where_arg"` // where 字符串实参下标
+		ObjArg     int      `yaml:"obj_arg"`   // write 对象实参下标
+		IDArg      int      `yaml:"id_arg"`    // read 主键实参下标
 		Reads      []string `yaml:"reads"`
 		Writes     []string `yaml:"writes"`
 		ParamIndex int      `yaml:"param_index"`
@@ -79,20 +92,35 @@ func loadSummaries(repoPath string) (map[string]summarySpec, []string) {
 		warnings = append(warnings, fmt.Sprintf("field-summary.yaml 解析失败，已忽略: %v", err))
 		return specs, warnings
 	}
-	// 用户条目可覆盖同名内置摘要（Q59：仅文件内重复定义报错）
+	// 用户条目可覆盖同名内置摘要（Q59：仅文件内重复定义报错）；
+	// iface 条目（Q156 接口摘要）键 = "iface:" + 接口全路径 + "." + 方法名
 	seenUser := map[string]bool{}
 	for _, s := range uf.Summaries {
-		if s.Func == "" {
-			warnings = append(warnings, "field-summary.yaml: 存在缺少 func 的条目，已跳过")
+		if s.Func == "" && s.Iface == "" {
+			warnings = append(warnings, "field-summary.yaml: 存在缺少 func/iface 的条目，已跳过")
 			continue
 		}
-		if seenUser[s.Func] {
-			warnings = append(warnings, fmt.Sprintf("field-summary.yaml: %s 重复定义，已忽略", s.Func))
+		key := s.Func
+		if s.Iface != "" {
+			if s.Method == "" {
+				warnings = append(warnings, fmt.Sprintf("field-summary.yaml: %s 缺少 method，已跳过", s.Iface))
+				continue
+			}
+			key = "iface:" + s.Iface + "." + s.Method
+		}
+		if seenUser[key] {
+			warnings = append(warnings, fmt.Sprintf("field-summary.yaml: %s 重复定义，已忽略", key))
 			continue
 		}
-		seenUser[s.Func] = true
-		specs[s.Func] = summarySpec{
+		seenUser[key] = true
+		specs[key] = summarySpec{
 			Func:       s.Func,
+			Interface:  s.Iface,
+			Method:     s.Method,
+			Kind:       s.Kind,
+			WhereArg:   s.WhereArg,
+			ObjArg:     s.ObjArg,
+			IDArg:      s.IDArg,
 			Reads:      s.Reads,
 			Writes:     s.Writes,
 			ParamIndex: s.ParamIndex,
@@ -175,6 +203,34 @@ func builtinSummaries() map[string]summarySpec {
 	specs["database/sql.(DB).Begin"] = summarySpec{Func: "database/sql.(DB).Begin", TxBoundary: "begin"}
 	specs["database/sql.(Tx).Commit"] = summarySpec{Func: "database/sql.(Tx).Commit", TxBoundary: "commit"}
 	specs["database/sql.(Tx).Rollback"] = summarySpec{Func: "database/sql.(Tx).Rollback", TxBoundary: "rollback"}
+	// gof 框架仓储接口（Q156）：Repository[M] 底层是 GORM——接口摘要
+	// （动态 invoke 无静态 callee，候选实现 BaseRepository[M] 在外部模块）。
+	// 注册两个已知路径：gof 原版 + go2o 的模块内复制版（pkg/infra/fw）——
+	// 其他项目复制 gof 时用 field-summary.yaml 自定义 iface 条目
+	for _, repoPath := range []string{
+		"github.com/ixre/gof/ext/fw.Repository",
+		"github.com/ixre/go2o/pkg/infra/fw.Repository",
+	} {
+		gofIface := "iface:" + repoPath + "."
+		for _, fn := range []string{"Save", "Update", "Delete"} {
+			specs[gofIface+fn] = summarySpec{Interface: repoPath,
+				Method: fn, Kind: "write", ObjArg: 0}
+		}
+		for _, fn := range []string{"FindBy", "FindList"} {
+			whereArg := 0
+			if fn == "FindList" {
+				whereArg = 1 // FindList(opt, where, args)
+			}
+			specs[gofIface+fn] = summarySpec{Interface: repoPath,
+				Method: fn, Kind: "read", WhereArg: whereArg}
+		}
+		specs[gofIface+"Get"] = summarySpec{Interface: repoPath,
+			Method: "Get", Kind: "read", IDArg: 0}
+		for _, fn := range []string{"Count", "DeleteBy"} {
+			specs[gofIface+fn] = summarySpec{Interface: repoPath,
+				Method: fn, Kind: "filter", WhereArg: 0}
+		}
+	}
 	return specs
 }
 
@@ -742,12 +798,13 @@ func (ext *fieldExtractor) applyTxBoundary(cc *ssa.CallCommon, calleeID domain.C
 
 // parseSQLStmt 从 SQL 语句提取表名、列名与 WHERE 过滤列（Q97 启发式，
 // 不做完整 SQL 解析）：
-//   INSERT INTO t(a, b) VALUES(?, ?)  → t, [a b], nil
-//   UPDATE t SET a=?, b=?             → t, [a b], nil
-//   DELETE FROM t                     → t, [], nil
-//   SELECT a, b FROM t                → t, [a b], nil（P0-2 读路径）
-//   SELECT * FROM t                   → t, [], nil（表级）
-//   ... WHERE y = ?                   → ..., [], [y]（表关联：值实参按 ? 顺序映射）
+//
+//	INSERT INTO t(a, b) VALUES(?, ?)  → t, [a b], nil
+//	UPDATE t SET a=?, b=?             → t, [a b], nil
+//	DELETE FROM t                     → t, [], nil
+//	SELECT a, b FROM t                → t, [a b], nil（P0-2 读路径）
+//	SELECT * FROM t                   → t, [], nil（表级）
+//	... WHERE y = ?                   → ..., [], [y]（表关联：值实参按 ? 顺序映射）
 func parseSQLStmt(sql string) (table string, cols []string, whereCols []string) {
 	upper := strings.ToUpper(sql)
 	rest := ""
@@ -763,7 +820,7 @@ func parseSQLStmt(sql string) (table string, cols []string, whereCols []string) 
 		fromIdx := strings.Index(upper, " FROM ")
 		rest = sql[fromIdx+len(" FROM "):]
 		if strings.Contains(upper, "SELECT ") {
-			selPart := strings.TrimSpace(sql[strings.Index(upper, "SELECT ")+len("SELECT "):fromIdx])
+			selPart := strings.TrimSpace(sql[strings.Index(upper, "SELECT ")+len("SELECT ") : fromIdx])
 			if selPart != "" && !strings.Contains(strings.ToUpper(selPart), "*") {
 				// 逗号分隔列（可能带表前缀 a.name、别名 a.name AS n——取末段）
 				for _, c := range strings.Split(selPart, ",") {
@@ -1149,7 +1206,6 @@ func fieldValueOf(obj ssa.Value, idx int) ssa.Value {
 	return nil
 }
 
-
 // derefType 解指针。
 func derefType(t types.Type) types.Type {
 	if p, ok := t.(*types.Pointer); ok {
@@ -1208,4 +1264,306 @@ func snakeCase(s string) string {
 		sb.WriteByte(value[len(value)-1])
 	}
 	return sb.String()
+}
+
+// applyInterfaceSummary 处理接口摘要（Q156）：动态 invoke 无静态 callee 且
+// 候选实现为空（外部框架实现，如 gof fw.Repository——底层是 GORM）时，
+// 按 "iface:" + 接口全路径 + "." + 方法名 匹配 spec（内置 + field-summary.yaml）：
+//   - write：对象实参字段展开 → 表.列 write 虚拟节点 + 边（值 → 节点）
+//   - read：返回值对象展开 → read 虚拟节点 + 边（节点 → 调用点值）
+//   - filter：where 字符串实参 → 列名（AND/OR 拆分 + 占位符剥离）→ filter 节点
+//   - IDArg >= 0：主键实参 → 主键列 filter（键关联）
+//
+// 表名：实体类型参数 M 的 TableName() 常量优先，fallback snakeCase(类型名)。
+func (ext *fieldExtractor) applyInterfaceSummary(cc *ssa.CallCommon, callVal ssa.Value) (bool, error) {
+	logger := zap.L()
+	logger.Debug("enter (fieldExtractor).applyInterfaceSummary")
+	defer logger.Debug("exit (fieldExtractor).applyInterfaceSummary")
+	iface := interfaceNamedOf(cc.Value.Type())
+	if iface == nil {
+		return false, nil
+	}
+	obj := iface.Obj()
+	if obj == nil || obj.Pkg() == nil {
+		return false, nil
+	}
+	key := "iface:" + obj.Pkg().Path() + "." + obj.Name() + "." + cc.Method.Name()
+	spec, ok := ext.specs[key]
+	if !ok {
+		logger.Debug("iface spec 未匹配", zap.String("key", key))
+		return false, nil
+	}
+	entity := entityTypeOf(cc, spec)
+	if entity == nil {
+		logger.Debug("iface entity 未解析", zap.String("key", key))
+		return false, nil
+	}
+	table := ext.tableNameOf(entity)
+	if table == "" {
+		logger.Debug("iface table 为空", zap.String("key", key))
+		return false, nil
+	}
+	line := ext.prog.Fset.PositionFor(cc.Pos(), false).Line
+	switch spec.Kind {
+	case "write":
+		if spec.ObjArg < 0 || spec.ObjArg >= len(cc.Args) {
+			return false, nil
+		}
+		arg := cc.Args[spec.ObjArg]
+		if mi, ok := arg.(*ssa.MakeInterface); ok {
+			arg = mi.X
+		}
+		objID, err := ext.emitValue(arg)
+		if err != nil {
+			return false, err
+		}
+		if err := ext.emitEntityFields(entity, table, "write", line, objID, cc); err != nil {
+			return false, err
+		}
+	case "read":
+		// 返回值对象读出 → read 虚拟节点 + 边（节点 → 调用点值）
+		var callID domain.CanonicalID
+		if callVal != nil {
+			if id, err := ext.emitValue(callVal); err == nil {
+				callID = id
+			}
+		}
+		if err := ext.emitEntityFields(entity, table, "read", line, callID, cc); err != nil {
+			return false, err
+		}
+		// 主键 filter（Get(id)）
+		if spec.IDArg >= 0 && spec.IDArg < len(cc.Args) {
+			if err := ext.emitWhereFilter(cc, []string{pkColumnOf(entity)}, spec.IDArg, table, line); err != nil {
+				return false, err
+			}
+		}
+	case "filter":
+		// 仅 where 过滤（Count/DeleteBy：无对象读出）
+	}
+	if spec.WhereArg >= 0 {
+		if spec.WhereArg >= len(cc.Args) {
+			return false, nil
+		}
+		if c, isConst := cc.Args[spec.WhereArg].(*ssa.Const); isConst && c.Value != nil {
+			cols := whereColsOf(constant.StringVal(c.Value))
+			if err := ext.emitWhereFilter(cc, cols, spec.WhereArg, table, line); err != nil {
+				return false, err
+			}
+		}
+	}
+	return true, nil
+}
+
+// emitEntityFields 为实体类型展开 表.列 虚拟节点（write/read）+ summary_io 边。
+// valID：write=对象值（边 值→节点）；read=调用点返回值（边 节点→值）。
+func (ext *fieldExtractor) emitEntityFields(entity types.Type, table, access string,
+	line int, valID domain.CanonicalID, cc *ssa.CallCommon) error {
+	if p, ok := entity.(*types.Pointer); ok {
+		entity = p.Elem()
+	}
+	named, ok := entity.(*types.Named)
+	if !ok {
+		return nil
+	}
+	st, ok := named.Underlying().(*types.Struct)
+	if !ok {
+		return nil
+	}
+	for i := 0; i < st.NumFields(); i++ {
+		field := st.Field(i)
+		if !field.Exported() {
+			continue
+		}
+		col := snakeCase(field.Name())
+		id := domain.CanonicalID(string(ext.funcID) + "#ext.gorm." + table + "." + col + "." + access + "@" + fmt.Sprintf("%d", line))
+		if err := ext.emit(domain.Item{Node: &domain.CodeEntity{
+			ID:        id,
+			Kind:      domain.KindFieldAccess,
+			Name:      table + "." + col,
+			FilePath:  ext.currentFile,
+			LineStart: line,
+			Properties: map[string]any{
+				"full_path":     table + "." + col,
+				"instance_path": table + "." + col,
+				"access_kind":   access,
+				"code_snippet":  cc.String(),
+				"type_string":   "gorm",
+				"is_external":   "true",
+				"func_id":       string(ext.funcID),
+			},
+		}}); err != nil {
+			return err
+		}
+		if valID != "" {
+			if access == "write" {
+				// 值流入节点（写方向）
+				if err := ext.emitEdgeKindLine(valID, id, domain.FactSummaryIO, line); err != nil {
+					return err
+				}
+			} else {
+				// 节点流出到值（读方向，与 GORM 读一致）
+				if err := ext.emitEdgeKindLine(id, valID, domain.FactSummaryIO, line); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// emitWhereFilter 为 where 列发射 filter 虚拟节点 + 值实参 → 节点边。
+// whereArg 是 where 字符串实参下标；值实参在其后（variadic 解包）。
+func (ext *fieldExtractor) emitWhereFilter(cc *ssa.CallCommon, cols []string,
+	whereArg int, table string, line int) error {
+	for i, col := range cols {
+		id := domain.CanonicalID(string(ext.funcID) + "#ext.gorm." + table + "." + col + ".filter@" + fmt.Sprintf("%d", line))
+		if err := ext.emit(domain.Item{Node: &domain.CodeEntity{
+			ID:        id,
+			Kind:      domain.KindFieldAccess,
+			Name:      table + "." + col,
+			FilePath:  ext.currentFile,
+			LineStart: line,
+			Properties: map[string]any{
+				"full_path":     table + "." + col,
+				"instance_path": table + "." + col,
+				"access_kind":   "filter",
+				"code_snippet":  cc.String(),
+				"type_string":   "gorm",
+				"is_external":   "true",
+				"func_id":       string(ext.funcID),
+			},
+		}}); err != nil {
+			return err
+		}
+		// 值实参（where 之后第 i 个）→ filter 列（键关联：值流入过滤列）
+		idx := whereArg + 1 + i
+		if idx < len(cc.Args) {
+			val := cc.Args[idx]
+			if mi, ok := val.(*ssa.MakeInterface); ok {
+				val = mi.X
+			}
+			if _, isConst := val.(*ssa.Const); isConst {
+				continue // 常量不产值边
+			}
+			valID, err := ext.emitValue(val)
+			if err != nil || valID == "" {
+				continue
+			}
+			if err := ext.emitEdgeKindLine(valID, id, domain.FactSummaryIO, line); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// entityTypeOf 取接口摘要的实体类型：泛型接口实例化（Repository[M]）的
+// 类型实参优先；fallback 按 kind 从对象实参/返回值类型取。
+func entityTypeOf(cc *ssa.CallCommon, spec summarySpec) types.Type {
+	t := cc.Value.Type()
+	if p, ok := t.(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	if named, ok := t.(*types.Named); ok && named.TypeArgs().Len() > 0 {
+		return named.TypeArgs().At(0)
+	}
+	// 非泛型接口：从方法签名取实体类型
+	switch spec.Kind {
+	case "write":
+		if spec.ObjArg >= 0 && spec.ObjArg < len(cc.Args) {
+			return derefType(cc.Args[spec.ObjArg].Type())
+		}
+	case "read":
+		// 接口方法签名首个结果类型
+		if sig, ok := cc.Method.Type().(*types.Signature); ok && sig.Results().Len() > 0 {
+			return derefType(sig.Results().At(0).Type())
+		}
+	}
+	return nil
+}
+
+// tableNameOf 实体类型表名：TableName() 方法（SSA Return 常量）优先，
+// fallback snakeCase(类型名)（GORM 默认命名）。
+func (ext *fieldExtractor) tableNameOf(entity types.Type) string {
+	if p, ok := entity.(*types.Pointer); ok {
+		entity = p.Elem()
+	}
+	named, ok := entity.(*types.Named)
+	if !ok {
+		return ""
+	}
+	if m := types.NewMethodSet(types.NewPointer(entity)).Lookup(nil, "TableName"); m != nil {
+		if fn, ok := m.Obj().(*types.Func); ok {
+			if ssaFn := ext.prog.FuncValue(fn); ssaFn != nil {
+				for _, ret := range returnOperands(ssaFn) {
+					for _, rv := range ret {
+						if c, ok := rv.(*ssa.Const); ok && c.Value != nil {
+							if s := constant.StringVal(c.Value); s != "" {
+								return s
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return snakeCase(named.Obj().Name())
+}
+
+// pkColumnOf 主键列名：字段 pk:"yes" tag（gorm column 优先）→ 该字段列名；
+// 无标记时 fallback "id"。
+func pkColumnOf(entity types.Type) string {
+	if p, ok := entity.(*types.Pointer); ok {
+		entity = p.Elem()
+	}
+	if named, ok := entity.(*types.Named); ok {
+		if st, ok := named.Underlying().(*types.Struct); ok {
+			for i := 0; i < st.NumFields(); i++ {
+				f := st.Field(i)
+				tag := reflect.StructTag(st.Tag(i))
+				if tag.Get("pk") == "yes" || tag.Get("pk") == "true" {
+					return gormColumnOf(tag, f.Name())
+				}
+			}
+		}
+	}
+	return "id"
+}
+
+// gormColumnOf 提取 gorm:"column:x" 的列名（无则 snake_case 字段名）。
+func gormColumnOf(tag reflect.StructTag, fieldName string) string {
+	g := tag.Get("gorm")
+	for _, part := range strings.Split(g, ";") {
+		part = strings.TrimSpace(part)
+		if strings.HasPrefix(part, "column:") {
+			if col := strings.TrimSpace(strings.TrimPrefix(part, "column:")); col != "" {
+				return col
+			}
+		}
+	}
+	return snakeCase(fieldName)
+}
+
+// whereColsOf 从 where 条件串提取列名：AND/OR 拆分 + 占位符剥离
+// （IN (?) 先处理；其余形态截到最后一个 ? 再 TrimRight 运算符——
+// 兼容 " = ?" / "=?" / " <?" / " LIKE ?" 等有无空格写法）。
+func whereColsOf(where string) []string {
+	var cols []string
+	for _, part := range strings.Split(where, " AND ") {
+		for _, p2 := range strings.Split(part, " OR ") {
+			if i := strings.Index(p2, " IN ("); i >= 0 {
+				p2 = p2[:i]
+			} else if strings.HasSuffix(strings.ToLower(p2), " is null") {
+				p2 = p2[:len(p2)-len(" is null")]
+			} else if i := strings.LastIndex(p2, "?"); i >= 0 {
+				p2 = p2[:i]
+			}
+			p2 = strings.TrimRight(p2, " =<>!()")
+			p2 = strings.TrimSpace(p2)
+			if p2 != "" {
+				cols = append(cols, p2)
+			}
+		}
+	}
+	return cols
 }
