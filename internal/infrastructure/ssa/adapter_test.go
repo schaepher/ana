@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"strings"
 	"testing"
 
@@ -47,6 +48,8 @@ func indexFixtureFullOrigins(t *testing.T, files map[string]string) ([]*domain.C
 	var facts []*domain.Fact
 	var summaries []*domain.FunctionFieldSummary
 	var origins []*domain.SummaryOrigin
+	// Q169：emit 回调并发安全（按包并发后多 goroutine 同时调 emit）
+	var emitMu sync.Mutex
 	adapter := &Adapter{}
 	repo := &domain.Repository{Path: dir, Module: "example.com/mtest", Modules: []string{"example.com/mtest"}}
 	pkgs, err := loadTestPackages(dir)
@@ -54,6 +57,8 @@ func indexFixtureFullOrigins(t *testing.T, files map[string]string) ([]*domain.C
 		t.Fatalf("load: %v", err)
 	}
 	err = adapter.Index(context.Background(), repo, pkgs, func(item domain.Item) error {
+		emitMu.Lock()
+		defer emitMu.Unlock()
 		if item.Node != nil {
 			nodes = append(nodes, item.Node)
 		}

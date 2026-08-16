@@ -157,11 +157,12 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 			}
 			doneMu.Lock()
 			doneFuncs += len(fns)
-			percent := doneFuncs * 100 / totalFuncs
+			done := doneFuncs
+			percent := done * 100 / totalFuncs
 			doneMu.Unlock()
 			logger.Info("build progress",
 				zap.String("pkg", pkgPath), zap.Int("funcs", len(fns)),
-				zap.Int("done", doneFuncs), zap.Int("total", totalFuncs),
+				zap.Int("done", done), zap.Int("total", totalFuncs),
 				zap.Int("percent", percent),
 				zap.Duration("elapsed", time.Since(pkgStart)))
 		}(pkgPath, fns)
@@ -300,11 +301,13 @@ func emitFunction(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
 	if err := emitSignatureNodes(fn, id, pos, filePath, emit); err != nil {
 		return err
 	}
+	fdMu.Lock()
 	fd := data[id]
 	if fd == nil {
 		fd = &funcData{}
 		data[id] = fd
 	}
+	fdMu.Unlock()
 	return emitFunctionFields(repo, prog, fn, id, idents, assignTargets, fd, specs, fallbackTotal, emit, pkgs, dispatchRegs)
 }
 
