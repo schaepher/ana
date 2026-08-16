@@ -1110,9 +1110,13 @@ radar 实测：sq_lite_atom ↔ sq_lite_knowledge_graph（140 条列关联，
 （链式 Model 范围对象溯源）。输出排序 query 优先、跳数升序。
 **--format mermaid**：列级图（表为子图、列节点、列间边，query 类型
 粗线 ==\>）。
-**盲区**：GORM 读路径（Find/First 读出到对象）无虚拟节点——键关联链
-断在读出端（radar 的 session.id 读出走 Find，relations 只显示同源
-write；ListSessions 的 Where filter 节点已产）。
+**盲区（Q151 已实现部分）**：GORM 读路径（Find/First/Take/Last）已
+映射——对象读出产 表.列 read 虚拟节点 + 边（读出值 → 对象，与写反向）；
+radar 实测 ListSessions 的 session.id.read 节点产且 s.ID → filter 边
+贯通。**剩余缺口**：range 循环变量的对象字段链（sessions alloc →
+迭代器 Extract → s.ID）缺边——ListSessions 的 `for _, s := range
+sessions` 场景 BFS 断在迭代器段，query 类型暂不显示（循环变量链为
+SSA 层独立扩展）。
 - 数据源：`kind='field_access' AND is_external=true AND (name=表 OR name LIKE 表.%)`
   （Q97 字符串 SQL + GORM 结构体写路径共用形态）
 - 输出：按列名**聚合**（同列多调用点合并一行），每列列出入写入方

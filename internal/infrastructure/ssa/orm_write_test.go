@@ -232,3 +232,89 @@ func countBySession(db *DB, s *Session) int {
 		t.Error("Where 值 → filter 节点边缺失（表关联键链断点）")
 	}
 }
+
+// TestORMReadFind：GORM 读路径——Find(&sessions) 对象读出产 read
+// 虚拟节点（表.列）+ 边（读出值 → 对象）；读出的 s.ID 作为 Where 实参
+// 时，键关联链贯通（session.id.read → ... → chat_message.session_id.filter）。
+func TestORMReadFind(t *testing.T) {
+	nodes, facts, _ := indexFixtureFull(t, map[string]string{
+		"go.mod":  moduleGoMod,
+		"field-summary.yaml": `summaries:
+  - func: example.com/mtest.(DB).Find
+    orm_read: true
+    param_index: 1
+  - func: example.com/mtest.(DB).Where
+    orm_write: true
+    param_index: 1
+  - func: example.com/mtest.(DB).Count
+    orm_read: true
+    param_index: 1
+`,
+		"main.go": `package m
+
+type DB struct{}
+
+func (db *DB) Model(v any) *DB { return db }
+
+func (db *DB) Find(out any) *DB { return db }
+
+func (db *DB) Where(cond string, args ...any) *DB { return db }
+
+func (db *DB) Count(c *int64) {}
+
+type Session struct {
+	ID    string
+	Title string
+}
+
+type ChatMessage struct {
+	SessionID string
+}
+
+func list(db *DB) int {
+	var sessions []Session
+	db.Find(&sessions)
+	count := 0
+	for _, s := range sessions {
+		var n int64
+		db.Model(&ChatMessage{}).Where("session_id = ?", s.ID).Count(&n)
+		count += int(n)
+	}
+	return count
+}
+`,
+	})
+	funcID := "symbol:go:example.com/mtest:list"
+	// ① Find 读出 → session 列 read 虚拟节点
+	idNode := findVirtualNode(t, nodes, funcID, "session.id")
+	if idNode.Property("access_kind") != "read" {
+		t.Errorf("session.id access_kind = %q, want read（Find 读出）", idNode.Property("access_kind"))
+	}
+	findVirtualNode(t, nodes, funcID, "session.title")
+	// ② 读边：read 节点 → 对象值（与写方向相反）
+	found := false
+	for _, f := range facts {
+		if f.Kind == domain.FactSummaryIO && string(f.SourceID) == string(idNode.ID) {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("Find 读边缺失（read 节点 → 对象值）")
+	}
+	// ③ Where 过滤节点仍在（写路径不受影响）
+	filterNode := findVirtualNode(t, nodes, funcID, "chat_message.session_id")
+	if filterNode.Property("access_kind") != "filter" {
+		t.Errorf("chat_message.session_id access_kind = %q, want filter", filterNode.Property("access_kind"))
+	}
+	// ④ 键关联链贯通：s.ID 字段读取 → filter 节点边（Find 读出 → 循环
+	// s.ID → Where 实参 → session_id 过滤——session 表读出的值查询消息表）
+	through := false
+	for _, f := range facts {
+		if f.Kind == domain.FactSummaryIO && string(f.TargetID) == string(filterNode.ID) {
+			through = true
+		}
+	}
+	if !through {
+		t.Error("s.ID → chat_message.session_id.filter 边缺失（键关联链断）")
+	}
+}

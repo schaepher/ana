@@ -43,6 +43,7 @@ type summarySpec struct {
 	TxBoundary  string // 事务边界标记（begin/commit/rollback，Q97）
 	ORMWrite    bool // ORM（GORM）写对象：字段→表.列 映射（②）
 	ScanOut     bool // Scan 写 out 实参：接收者值 → 实参指向变量（表关联链）
+	ORMRead     bool // ORM 读：对象读出 → 表.列 read 虚拟节点（键关联链）
 }
 
 // userSummaryFile 对应 field-summary.yaml。
@@ -53,6 +54,7 @@ type userSummaryFile struct {
 		Writes     []string `yaml:"writes"`
 		ParamIndex int      `yaml:"param_index"`
 		ORMWrite   bool     `yaml:"orm_write"` // ②：对象实参 → 表.列 映射（同内置 GORM 摘要）
+		ORMRead    bool     `yaml:"orm_read"`  // 读：对象读出 → 表.列 read 节点
 	} `yaml:"summaries"`
 }
 
@@ -95,6 +97,7 @@ func loadSummaries(repoPath string) (map[string]summarySpec, []string) {
 			Writes:     s.Writes,
 			ParamIndex: s.ParamIndex,
 			ORMWrite:   s.ORMWrite,
+			ORMRead:    s.ORMRead,
 		}
 	}
 	return specs, warnings
@@ -163,6 +166,12 @@ func builtinSummaries() map[string]summarySpec {
 	specs["gorm.io/gorm.(DB).Where"] = summarySpec{
 		Func: "gorm.io/gorm.(DB).Where", ParamIndex: 1, ORMWrite: true,
 	}
+	// GORM 读（键关联链贯通）：Find/First/Take/Last 对象读出 → 表.列 read
+	for _, fn := range []string{"Find", "First", "Take", "Last"} {
+		specs["gorm.io/gorm.(DB)."+fn] = summarySpec{
+			Func: "gorm.io/gorm.(DB)." + fn, ParamIndex: 1, ORMRead: true,
+		}
+	}
 	specs["database/sql.(DB).Begin"] = summarySpec{Func: "database/sql.(DB).Begin", TxBoundary: "begin"}
 	specs["database/sql.(Tx).Commit"] = summarySpec{Func: "database/sql.(Tx).Commit", TxBoundary: "commit"}
 	specs["database/sql.(Tx).Rollback"] = summarySpec{Func: "database/sql.(Tx).Rollback", TxBoundary: "rollback"}
@@ -224,6 +233,10 @@ func (ext *fieldExtractor) applySummary(cc *ssa.CallCommon, callee *ssa.Function
 	// ORM 写（②）：GORM 对象写 → 字段→表.列 映射
 	if spec.ORMWrite {
 		return true, ext.applyORMWrite(cc, calleeID)
+	}
+	// ORM 读（键关联链）：对象读出 → 表.列 read 虚拟节点
+	if spec.ORMRead {
+		return true, ext.applyORMRead(cc, calleeID)
 	}
 	// Scan 写 out 实参（表关联链）：接收者值 → 实参指向的局部变量。
 	// 不 return——继续逐参数应用（WritesAll 展开 dest 字段虚拟节点）
@@ -856,6 +869,89 @@ func extractWhereCols(rest string) []string {
 		}
 	}
 	return out
+}
+
+// derefSlice 解切片（*[]Session → Session；GORM 读对象形态）。
+func derefSlice(t types.Type) types.Type {
+	if p, ok := t.(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	if sl, ok := t.(*types.Slice); ok {
+		t = sl.Elem()
+	}
+	return t
+}
+
+// applyORMRead 处理 ORM 读调用（Find/First/Take/Last）：对象实参
+// （&sessions / &s）→ 表名（Model 链式溯源或对象类型）+ 字段展开 →
+// 表.列 read 虚拟节点 + 边（读出值 → 对象，与写方向相反）——
+// 读出的字段（s.ID）作为后续查询实参时，键关联链贯通。
+func (ext *fieldExtractor) applyORMRead(cc *ssa.CallCommon, calleeID domain.CanonicalID) error {
+	logger := zap.L()
+	logger.Debug("enter (fieldExtractor).applyORMRead")
+	defer logger.Debug("exit (fieldExtractor).applyORMRead")
+	if len(cc.Args) < 2 {
+		return nil
+	}
+	realArg := cc.Args[1]
+	if mi, ok := realArg.(*ssa.MakeInterface); ok {
+		realArg = mi.X
+	}
+	t := derefSlice(derefType(realArg.Type()))
+	named, ok := t.(*types.Named)
+	fmt.Fprintf(os.Stderr, "ORMRead: arg=%T type=%s named=%v\n", realArg, t.String(), ok)
+	if !ok {
+		return nil // 非对象读（如 Count(&n) 无字段展开）
+	}
+	// 表名：Model(&X{}) 链式溯源优先，否则对象类型名
+	table := ""
+	if scope := chainScopeObject(cc.Args[0]); scope != nil {
+		table = snakeCase(scope.Obj().Name())
+	} else {
+		table = snakeCase(named.Obj().Name())
+	}
+	st, ok := named.Underlying().(*types.Struct)
+	if !ok {
+		return nil
+	}
+	line := ext.prog.Fset.PositionFor(cc.Pos(), false).Line
+	objID, err := ext.emitValue(realArg)
+	if err != nil {
+		return err
+	}
+	for i := 0; i < st.NumFields(); i++ {
+		field := st.Field(i)
+		if !field.Exported() {
+			continue
+		}
+		col := snakeCase(field.Name())
+		id := domain.CanonicalID(string(ext.funcID) + "#ext.gorm." + table + "." + col + ".read@" + fmt.Sprintf("%d", line))
+		if err := ext.emit(domain.Item{Node: &domain.CodeEntity{
+			ID:        id,
+			Kind:      domain.KindFieldAccess,
+			Name:      table + "." + col,
+			FilePath:  ext.currentFile,
+			LineStart: line,
+			Properties: map[string]any{
+				"full_path":     table + "." + col,
+				"instance_path": table + "." + col,
+				"access_kind":   "read",
+				"code_snippet":  cc.String(),
+				"type_string":   "gorm",
+				"is_external":   "true",
+				"func_id":       string(ext.funcID),
+			},
+		}}); err != nil {
+			return err
+		}
+		// 读边：读出值 → 对象（与写方向相反，值流入对象字段）
+		if objID != "" {
+			if err := ext.emitEdgeKindLine(id, objID, domain.FactSummaryIO, line); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // applyORMWrite 处理 ORM 写调用（②⑦：GORM Create/Save/Updates/Delete/
