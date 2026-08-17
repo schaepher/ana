@@ -9,7 +9,7 @@ import (
 
 // TestAnalyzerVersionHash：分析器版本 = 二进制内容 hash——分析逻辑任何
 // 变化（提交/未提交）→ 重 build → 二进制变 → 缓存自动失效（Q181 确定
-// 机制：此前只按包源码 hash，逻辑变化不失效——radar 曾命中旧逻辑缓存）。
+// 机制：此前只按包源码 hash，逻辑变化不失效——验证仓库 曾命中旧逻辑缓存）。
 func TestAnalyzerVersionHash(t *testing.T) {
 	v1 := analyzerVersionHash()
 	if v1 == "" || v1 == "unknown" {

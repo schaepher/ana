@@ -2,7 +2,7 @@
 
 package integration
 
-// TestFieldPrecisionSelfContained：⑥ 字段精度自包含用例（不依赖 radar）——
+// TestFieldPrecisionSelfContained：⑥ 字段精度自包含用例（不依赖 验证仓库）——
 // 对象/SSA 值锚点不再扇出全部字段读；拷贝链（dest.ID = src.ID）经
 // 值来源跳板保持闭合。
 

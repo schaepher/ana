@@ -32,7 +32,7 @@
 
 codeintel 已提供符号导航（SCIP）、调用图与影响分析（AST/go/packages）、Git 历史（TD.md），但缺少**字段级别的数据流向**能力：结构体字段的读取、修改、传递是代码审查、重构与故障排查的核心需求，跨函数追踪字段来源（产生点）与去向（使用点）正是当前缺失的一环。
 
-此前数据流方案为 Joern（joern-parse gosrc2cpg + joern-slice），**已于 2026-08-13 移除**：外部 CLI 依赖重、仅产出方法内 REACHING_DEF（跨方法参数流无法覆盖）、radar 全量耗时 8-10 分钟。本设计以纯 Go 实现（`go/ssa` + `go/pointer`，x/tools 已在依赖中）接替，与 codeintel 现有技术栈一致，无新增第三方依赖。
+此前数据流方案为 Joern（joern-parse gosrc2cpg + joern-slice），**已于 2026-08-13 移除**：外部 CLI 依赖重、仅产出方法内 REACHING_DEF（跨方法参数流无法覆盖）、验证仓库 全量耗时 8-10 分钟。本设计以纯 Go 实现（`go/ssa` + `go/pointer`，x/tools 已在依赖中）接替，与 codeintel 现有技术栈一致，无新增第三方依赖。
 
 ### 1.2 目标
 
@@ -407,7 +407,7 @@ codeintel/
 - **集成测试**：integration 套件扩展——init 构建后执行 `query fields` / `trace-backward` / `trace-forward` / `export` 端到端断言（对齐现有 TestCLIFullFlow 模式）。
 - **SQL 查询测试**：单独测试递归 CTE 在 go-sqlite3 上的正确性（深度、去重、环、深度上限）。
 - **性能基准**：入口可达子图模式下的构建时间与 DB 大小记录于 TD.md §12 补充记录。
-- **前端 e2e（playwright）**：`make e2e E2E_REPO=<仓库>`（默认 ../radar）——参数/返回展开、节点配色、字段数据流文本树、定义顺序、所属函数显示、桥边跳转等 22 项断言（e2e/field-trace-e2e.mjs）。
+- **前端 e2e（playwright）**：`make e2e E2E_REPO=<仓库>`（默认 ../验证仓库）——参数/返回展开、节点配色、字段数据流文本树、定义顺序、所属函数显示、桥边跳转等 22 项断言（e2e/field-trace-e2e.mjs）。
 
 ---
 
@@ -577,7 +577,7 @@ SSA 语义与映射类决策全部保留：Q1（SSA_VALUE 统一建模）、Q2�
 → 目标变量名，MakeMap.Pos 落在字面量内部须区间匹配）；别名锚点扩展为
 对象创建点（alloc / MakeMap / MakeSlice，may 集泛化为 ssa.Value）。
 
-radar 实测：790 元素访问节点（`data["Active"]` 等）、736 行元素间接写。
+验证仓库 实测：790 元素访问节点（`data["Active"]` 等）、736 行元素间接写。
 
 ### 14.10 已确认 backlog（非 v1 范围）
 
@@ -677,7 +677,7 @@ Q1–Q19）。决策编号延续 §14 的 Q 体系。实现顺序见 15.7 里程
   → 2 调用点级回连 → 1+9 dispatch_to 边 + 置信度/缺失 → 3 条件标注
 - **M2（阶段 B）**：4 持久化识别 → 7 全局/DI 建模
 - **M3（阶段 C）**：5 生命周期图 → 6 跨层摘要
-- 每项独立提交（可回滚可审查）；验收 = 单元测试 + 集成测试场景 + radar
+- 每项独立提交（可回滚可审查）；验收 = 单元测试 + 集成测试场景 + 验证仓库
   实测 + 测试矩阵全绿 + git push
 
 ### 15.7 实现记录（2026-08-14 全部交付，测试先行）
@@ -718,7 +718,7 @@ Q1–Q19）。决策编号延续 §14 的 Q 体系。实现顺序见 15.7 里程
   + file:line；--json steps / --format mermaid
 
 **测试约定**：每项测试先行（先写单测+集成 → 实现 → 单测 → 集成 →
-radar 实测 → e2e 22/22 → push）；集成 fixture 覆盖全部场景
+验证仓库 实测 → e2e 22/22 → push）；集成 fixture 覆盖全部场景
 （TestCLIFullFlow 含派发/持久化/元素/别名/嵌套读链，TestIncrementalUpdate、
 TestOutputNoiseFree、TestServerEndToEnd）。
 
@@ -988,7 +988,7 @@ CLI `update`（全量分析+增量写入）已有；补**自动触发闭环**（
 
 ### 20.2 性能基准 benchmarks/（Q137）
 
-- `benchmarks/bench_test.go`：对指定仓库（`-bench-repo`，默认 radar）
+- `benchmarks/bench_test.go`：对指定仓库（`-bench-repo`，默认 验证仓库）
   跑**进程内** orchestrator.FullBuild，记录：
   - 各适配器耗时（AdapterResult.Duration）+ 总耗时
   - 峰值内存（runtime.MemStats，构建前/后采样）
@@ -1100,7 +1100,7 @@ sql/gorm）的列：A.x 读出 → Scan 写入变量 → 变量作为 B 查询�
   解包 + MakeInterface 解包；局部变量读取归一为变量名 ID）
 - emitValue 的 Extract 归一到 tuple 值（row 与调用点返回值同 ID）
 
-radar 实测：sq_lite_atom ↔ sq_lite_knowledge_graph（140 条列关联，
+验证仓库 实测：sq_lite_atom ↔ sq_lite_knowledge_graph（140 条列关联，
 6 跳——ingest 同源写入的原子与知识图谱）。
 
 **精度分级（Q150）**：关联按终点虚拟节点 access_kind 分三级——
@@ -1112,11 +1112,11 @@ radar 实测：sq_lite_atom ↔ sq_lite_knowledge_graph（140 条列关联，
 粗线 ==\>）。
 **盲区（Q151 已实现部分）**：GORM 读路径（Find/First/Take/Last）已
 映射——对象读出产 表.列 read 虚拟节点 + 边（读出值 → 对象，与写反向）；
-radar 实测 ListSessions 的 session.id.read 节点产且 s.ID → filter 边
+验证仓库 实测 ListSessions 的 session.id.read 节点产且 s.ID → filter 边
 贯通。**查询关联落地（Q152）**：range 循环链已贯通——SSA 层 Field 值字段
 读取补基值边 + UnOp MUL 归一放宽（IndexAddr/FieldAddr）+ Where
 variadic 实参解包；sqlite 层循环读出桥（BFS 到 ssa_value 桥接同函数
-同类型 read 字段节点）+ 同列多节点 Type 取最高。radar 实测：
+同类型 read 字段节点）+ 同列多节点 Type 取最高。验证仓库 实测：
 session.id → chat_message.session_id [查询关联 4 跳]（ListSessions
 读出 → Where session_id = s.ID）。已知权衡：同函数同类型字段读被桥
 接，session.title/created_at → session_id 也标查询关联（保守语义）。
@@ -1131,11 +1131,11 @@ session.id → chat_message.session_id [查询关联 4 跳]（ListSessions
   Prepare 调用点产 read 虚拟节点（access_kind=read）+ 读边
   （**虚拟节点 → 返回的 rows/row 值**，与写边值→节点反向）；query
   table 输出每列读取方（读虚拟节点出边的目标函数 + 行号）
-- radar 实测：sq_lite_atom 30 个写节点聚合为 10 列，写入方
+- 验证仓库 实测：sq_lite_atom 30 个写节点聚合为 10 列，写入方
   (sqliteAtomStore).Create:417 / DeleteOrphaned:492/499
 
 **确认（Q148）**：GORM 结构体写映射（②⑦ applyORMWrite）此前已生效
-（radar 216 个 gorm 节点）——早前"radar 无虚拟节点"结论是查询时用
+（验证仓库 216 个 gorm 节点）——早前"验证仓库 无虚拟节点"结论是查询时用
 kind 过滤排除了 field_access 的误判，非功能缺失。
 
 ---
@@ -1231,7 +1231,7 @@ initializes + var 初始化 data_flows_to LIKE 前缀扫描）——13K 行 ×
 - 主查询只 SELECT 节点属性，Go 侧 map O(1) 标记 called/referenced
 
 **实测**：go2o 全量 unused 从 150s+ 超时 → 0.23 秒（650×），输出
-11061 未调用 + 0 孤立链。radar 回归正常。验证矩阵全绿。
+11061 未调用 + 0 孤立链。验证仓库 回归正常。验证矩阵全绿。
 
 **go2o 验证汇总（Q154/Q155/§25）**：init 27s（148K 节点/152K 边）；
 动态派发 indirect_write 回传 ✓（profileManagerImpl.SaveProfile 22 字段）；
@@ -1419,7 +1419,7 @@ query 键关联；耗时 2.5 分钟级——适合批量分析而非交互。
   GetDispatchTargets——callee 是候选实现时自然带出）；emit 在
   INDIRECT_WRITE 边循环收集；query fields 展示多来源
 
-**影响**：schema user_version 2→3——验证仓库（radar/go2o）须
+**影响**：schema user_version 2→3——验证仓库（验证仓库/go2o）须
 clean --force + init 重建；value-trace SQL 每步加 json_extract 判断
 （metadata 多 NULL，实测确认开销）。
 
@@ -1593,7 +1593,7 @@ it + e2e 27 项全绿。
    进程内 once；Q183 取代 Q181 的二进制 hash）——只有影响索引产物
    的分析逻辑变化（含未提交改动）触发失效；CLI 输出/前端/日志等
    无关改动（即使 rebuild）不触发重建。此前（Q181）用二进制 hash，
-   任何 rebuild 都全量失效——过度；更早只按源码 hash，radar 曾命中
+   任何 rebuild 都全量失效——过度；更早只按源码 hash，验证仓库 曾命中
    Q178 前旧逻辑缓存（receiver 数据边全部陈旧）
 3. 缓存文件结构变化 → pkgCacheFormat 递增
 
@@ -1658,7 +1658,7 @@ build cache 已覆盖）、computeAliases/emitSummaries（全局依赖，
 
 **验证**：go2o 新旧结果对比——key 集合完全一致（0 独有），3030 条差异
 全部为 read→write rank 升级（旧实现不确定性修复）；新实现两次运行完全
-一致。单表缓存命中 39ms。schema v4 需 clean + 重建（go2o/radar 已重建）。
+一致。单表缓存命中 39ms。schema v4 需 clean + 重建（go2o/验证仓库 已重建）。
 
 **Q177 追加修复（大库验证中发现）**：
 - 桥 2 跳检查改为**定向出边**（allOut）——旧 SQL EXISTS（e1.source_id =

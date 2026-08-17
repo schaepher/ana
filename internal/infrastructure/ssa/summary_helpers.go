@@ -69,7 +69,7 @@ var commonInitialisms = []string{"API", "ASCII", "CPU", "CSS", "DNS", "EOF", "GU
 // 大写不拆，转小写前插线）。UserProfile → user_profile、SessionID →
 // session_id、SourceURL → source_url、APIKey → apikey、
 // SQLiteKnowledgeGraph → sq_lite_knowledge_graph（SQL 不在缩写表，
-// 与 GORM 默认一致；radar 用 TableName() 定制表名时无法静态推导）。
+// 与 GORM 默认一致；验证仓库 用 TableName() 定制表名时无法静态推导）。
 func snakeCase(s string) string {
 	value := s
 	for _, in := range commonInitialisms {

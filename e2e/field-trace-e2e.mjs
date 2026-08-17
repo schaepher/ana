@@ -1,15 +1,32 @@
 // codeintel 字段追溯 e2e（playwright）：参数/返回节点展开、信息栏类型、
 // 字段数据流按钮与文本树、符号搜索排除。
 //
-// 运行：make e2e E2E_REPO=<已构建的仓库>（默认 ../radar）
+// codeintel 字段追溯 e2e（playwright）：参数/返回节点展开、信息栏类型、
+// 字段数据流按钮与文本树、符号搜索排除。
+//
+// 运行（符号 ID 须从目标仓库索引获取，经环境变量注入——仓库名不落库）：
+//   make e2e E2E_REPO=<已构建的仓库> \
+//     FN_ID='symbol:go:<module>:<pkg>:(T).Method' \
+//     E2E_STORE_CREATE='...' E2E_IFACE_ID='...' E2E_TRAIN_ID='...'
 //   或手动：/path/to/codeintel serve --repo <repo> --addr :8096
-//           cd e2e && node field-trace-e2e.mjs
+//           cd e2e && FN_ID=... node field-trace-e2e.mjs
 import { chromium } from 'playwright';
 
 const BASE = process.env.BASE || 'http://localhost:8096/';
-const FN_ID = process.env.FN_ID || 'symbol:go:github.com/schaepher/radar/internal/agent:(Manager).Run';
+const FN_ID = process.env.FN_ID || '';
 const PARAM_ID = FN_ID + '#param.ctx';
 const RESULT_ID = FN_ID + '#result.0';
+
+// 符号 ID 由环境变量注入（目标仓库相关，不硬编码仓库名）
+const STORE_CREATE = process.env.E2E_STORE_CREATE || '';
+const IFACE_ID = process.env.E2E_IFACE_ID || '';
+const TRAIN_ID = process.env.E2E_TRAIN_ID || '';
+if (!FN_ID) {
+  console.log('未设置 FN_ID（目标仓库符号 ID）。示例：');
+  console.log('  make e2e E2E_REPO=<repo> FN_ID="symbol:go:<module>:<pkg>:(T).Method"');
+  console.log('    E2E_STORE_CREATE=... E2E_IFACE_ID=... E2E_TRAIN_ID=...');
+  process.exit(0);
+}
 
 const results = [];
 let passed = 0, failed = 0;
@@ -207,7 +224,8 @@ check('信息栏 receiver 独立分组（接收者（N））',
   'panel=' + recvPanel.slice(0, 80).replace(/\n/g, ' '));
 
 // 13c. ORM 持久化映射：store.Create 的 flows 含 表.列 虚拟节点（gorm）
-const STORE_CREATE = 'symbol:go:github.com/schaepher/radar/internal/store:(sqliteKnowledgeStore).Create';
+//      （E2E_STORE_CREATE 未注入时跳过）
+if (STORE_CREATE) {
 const createFlows = await api('/api/flows?id=' + encodeURIComponent(STORE_CREATE));
 const colNode = (createFlows.flows || []).find((f) => f.kind === 'field_access' &&
   f.name.indexOf('.') >= 0 && f.access === 'write' && f.name.indexOf('ext.') < 0 &&
@@ -215,9 +233,11 @@ const colNode = (createFlows.flows || []).find((f) => f.kind === 'field_access' 
 check('持久化映射：Create 的 flows 含 表.列 虚拟节点',
   colNode !== undefined && /^[a-z_]+\.[a-z_]+$/.test(colNode.name),
   'col=' + (colNode ? colNode.name : 'none'));
+}
 
 // 13d. 动态派发候选：接口节点 expand 返回 dispatch_to 边
-const IFACE_ID = 'symbol:go:github.com/schaepher/radar/internal/store:KnowledgeStore';
+//      （E2E_IFACE_ID 未注入时跳过）
+if (IFACE_ID) {
 const ifaceExp = await api('/api/expand?id=' + encodeURIComponent(IFACE_ID));
 check('动态派发：接口 expand 返回 dispatch_to 候选边',
   (ifaceExp.edges || []).some((e) => e.kind === 'dispatch_to'),
@@ -230,14 +250,17 @@ const ifacePanel = await page.evaluate(() => document.getElementById('panel-body
 check('信息栏接口节点显示"候选实现"分组（Q95 前端展示）',
   ifacePanel.indexOf('候选实现（') >= 0,
   'panel=' + ifacePanel.slice(0, 100).replace(/\n/g, ' '));
+}
 
 // 13. map/slice 元素访问（Q83）：/api/flows 返回元素路径（data["Active"] 等）
-const TRAIN_ID = 'symbol:go:github.com/schaepher/radar/internal/handler:(Handler).PageTrain';
+//      （E2E_TRAIN_ID 未注入时跳过）
+if (TRAIN_ID) {
 const trainFlows = await api('/api/flows?id=' + encodeURIComponent(TRAIN_ID));
 const elem = (trainFlows.flows || []).find((f) => f.kind === 'field_access' && f.name.indexOf('["') >= 0);
 check('元素访问节点出现在 flows（map 常量 key 路径）',
   elem !== undefined && elem.access === 'write' && elem.name.indexOf('data["') >= 0,
   'elem=' + (elem ? elem.name : 'none'));
+}
 
 console.log('\n===== 字段追溯 e2e: ' + passed + ' passed, ' + failed + ' failed =====');
 await browser.close();

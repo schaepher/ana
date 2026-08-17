@@ -110,7 +110,7 @@ const (
 // 大写不拆，转小写前插线）。UserProfile → user_profile、SessionID →
 // session_id、SourceURL → source_url、APIKey → apikey、
 // SQLiteKnowledgeGraph → sq_lite_knowledge_graph（SQL 不在缩写表，
-// 与 GORM 默认一致；radar 用 TableName() 定制表名时无法静态推导）。
+// 与 GORM 默认一致；验证仓库 用 TableName() 定制表名时无法静态推导）。
 
 // applyInterfaceSummary 处理接口摘要（Q156）：动态 invoke 无静态 callee 且
 // 候选实现为空（外部框架实现，如 gof fw.Repository——底层是 GORM）时，

@@ -86,7 +86,7 @@ func f(v any) string {
 func TestValueTraceConditions(t *testing.T) {
 	dir := seedFieldTrace(t)
 	// 种子节点行 5 所在行无 if——改断言为输出无 panic 且正常（条件叠加
-	// 为空时不输出 [条件]）；真实条件场景由集成测试（radar）覆盖
+	// 为空时不输出 [条件]）；真实条件场景由集成测试（验证仓库）覆盖
 	out := captureStdout(func() {
 		if code := cmdQuery([]string{"value-trace", "symbol:go:example.com/m:main#t.A.write@5",
 			"--repo", dir}); code != 0 {

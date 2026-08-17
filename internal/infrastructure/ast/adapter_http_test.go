@@ -220,7 +220,7 @@ import "example.com/mtest/http"
 
 const apiBase = "https://orders.example.com"
 
-// ① NewRequestWithContext（真实 http 包同签名，radar openai.go 在用）
+// ① NewRequestWithContext（真实 http 包同签名，验证仓库 openai.go 在用）
 func callWithCtx() {
 	http.NewRequestWithContext(nil, "GET", "https://orders.example.com/api/orders", nil)
 }

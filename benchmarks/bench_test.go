@@ -38,7 +38,7 @@ func moduleNameOf(repoPath string) string {
 }
 
 var (
-	benchRepo = flag.String("bench-repo", "../radar", "基准构建目标仓库（须含 go.mod）")
+	benchRepo = flag.String("bench-repo", ".", "基准构建目标仓库（须含 go.mod）")
 	benchJSON = flag.Bool("bench-json", false, "输出 JSON 结构化结果")
 )
 
