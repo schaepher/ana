@@ -67,10 +67,15 @@ func (ext *fieldExtractor) applySpecKind(cc *ssa.CallCommon, callVal ssa.Value, 
 			logger.Debug("iface entity 未解析", zap.String("key", key))
 			return false, nil
 		}
-		table = ext.tableNameOf(entity)
-		if table == "" && spec.ChainTable {
-
+		// Q177：显式 Table("x") 链式表名优先（真实仓库权威表名——
+		// Update 等实体名与显式表名不一致时以显式为准），否则实体
+		// TableName()/类型名
+		table = ""
+		if spec.ChainTable {
 			table = ext.chainTableName(cc)
+		}
+		if table == "" {
+			table = ext.tableNameOf(entity)
 		}
 		if table == "" {
 			logger.Debug("iface table 为空", zap.String("key", key))
@@ -290,6 +295,16 @@ func (ext *fieldExtractor) emitWhereFilterTyped(cc *ssa.CallCommon, cols []strin
 			val := cc.Args[idx]
 			if mi, ok := val.(*ssa.MakeInterface); ok {
 				val = mi.X
+			}
+			// Q177 真实形态：Where(query, args ...interface{}) 的实参被
+			// 变参打包（ssa.Slice）——解包取元素值（与 applyORMWrite ⑦
+			// 一致），链才连通（对象字段读 → filter）
+			if vals := variadicElems(val); len(vals) > 0 {
+				val = vals[0]
+				// 变参元素再被 MakeInterface 包装（[]interface{} 的元素）
+				if mi, ok := val.(*ssa.MakeInterface); ok {
+					val = mi.X
+				}
 			}
 			if _, isConst := val.(*ssa.Const); isConst {
 				continue

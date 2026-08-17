@@ -159,9 +159,14 @@ func (r *Repo) relationsForSQL(table string) ([]*domain.TableRelation, error) {
 				rtype = domain.RelationWrite
 			}
 
-			if rtype == domain.RelationQuery && col != fromCol &&
-				!strings.HasSuffix(strings.ToLower(col), strings.ToLower(fromCol)) {
-				rtype = domain.RelationRead
+			// 键关联列名呼应（双向）：外键含主键（user_id 含 id）或主键被
+			// 外键引用（a_id 以 id 结尾）都保留 query；title→session_id
+			// 等无关列降级 read（Q159）
+			if rtype == domain.RelationQuery && col != fromCol {
+				lc, lf := strings.ToLower(col), strings.ToLower(fromCol)
+				if !strings.HasSuffix(lc, lf) && !strings.HasSuffix(lf, lc) {
+					rtype = domain.RelationRead
+				}
 			}
 			if ex, ok := seen[key]; ok {
 

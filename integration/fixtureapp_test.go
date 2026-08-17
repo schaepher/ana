@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/schaepher/codeintel/internal/domain"
 	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
 )
 
@@ -152,5 +153,23 @@ func TestFixtureAppRealForms(t *testing.T) {
 	arows.Close()
 	if !dispatchOK {
 		t.Error("接口动态派发应产带候选元数据的 argument 边")
+	}
+
+	// 4. 键关联（Q177 验收标准）：orders.user_id → users.id（外键→主键，
+	//    变参值链：对象字段读 → filter）
+	allRels, err := repo.GetAllTableRelations("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyRel := false
+	for _, r := range allRels {
+		if r.Type == domain.RelationQuery && r.FromTable == "orders" &&
+			r.FromCol == "user_id" && r.ToTable == "users" && r.ToCol == "id" &&
+			r.Hops <= 4 {
+			keyRel = true
+		}
+	}
+	if !keyRel {
+		t.Errorf("应推断键关联 orders.user_id → users.id（query），实际: %v", allRels)
 	}
 }
