@@ -51,6 +51,8 @@ type summarySpec struct {
 	ORMWrite    bool   // ORM（GORM）写对象：字段→表.列 映射（②）
 	ScanOut     bool   // Scan 写 out 实参：接收者值 → 实参指向变量（表关联链）
 	ORMRead     bool   // ORM 读：对象读出 → 表.列 read 虚拟节点（键关联链）
+	Type        string // 虚拟节点 type_string（Q175：gorm/xorm，默认 gorm）
+	ChainTable  bool   // Q175：XORM 链式表名——表名来自链上 Table 调用
 }
 
 // userSummaryFile 对应 field-summary.yaml。
@@ -64,6 +66,8 @@ type userSummaryFile struct {
 		ObjArg     int      `yaml:"obj_arg"`   // write 对象实参下标
 		IDArg      int      `yaml:"id_arg"`    // read 主键实参下标
 		SQLWrite   bool     `yaml:"sql_write"` // kind=sql 时为写（ExecNonQuery）
+		Type       string   `yaml:"type"`      // 虚拟节点 type_string（gorm/xorm）
+		ChainTable bool     `yaml:"chain_table"` // XORM 链式表名
 		Reads      []string `yaml:"reads"`
 		Writes     []string `yaml:"writes"`
 		ParamIndex int      `yaml:"param_index"`
@@ -119,6 +123,8 @@ func loadSummaries(repoPath string) (map[string]summarySpec, []string) {
 			Interface:  s.Iface,
 			Method:     s.Method,
 			Kind:       s.Kind,
+			Type:       s.Type,
+			ChainTable: s.ChainTable,
 			WhereArg:   s.WhereArg,
 			ObjArg:     s.ObjArg,
 			IDArg:      s.IDArg,
@@ -201,6 +207,21 @@ func builtinSummaries() map[string]summarySpec {
 		specs["gorm.io/gorm.(DB)."+fn] = summarySpec{
 			Func: "gorm.io/gorm.(DB)." + fn, ParamIndex: 1, ORMRead: true,
 		}
+	}
+	// XORM 链式形态（Q175）：Engine.Table(name) 记链式表名；Session 的
+	// Where/Find/Get/Update/Insert/Delete 表名查链（ChainTable）。
+	for _, spec := range []summarySpec{
+		{Interface: "xorm.io/xorm.(Engine)", Method: "Table", Kind: "table", Type: "xorm"},
+		{Interface: "xorm.io/xorm.(Session)", Method: "Where", Kind: "filter", WhereArg: 0, ChainTable: true, Type: "xorm"},
+		{Interface: "xorm.io/xorm.(Session)", Method: "Find", Kind: "read", ObjArg: 0, ChainTable: true, Type: "xorm"},
+		{Interface: "xorm.io/xorm.(Session)", Method: "Get", Kind: "read", ObjArg: 0, IDArg: 1, ChainTable: true, Type: "xorm"},
+		{Interface: "xorm.io/xorm.(Session)", Method: "Update", Kind: "write", ObjArg: 0, ChainTable: true, Type: "xorm"},
+		{Interface: "xorm.io/xorm.(Session)", Method: "Insert", Kind: "write", ObjArg: 0, ChainTable: true, Type: "xorm"},
+		{Interface: "xorm.io/xorm.(Session)", Method: "Delete", Kind: "write", ObjArg: 0, ChainTable: true, Type: "xorm"},
+		{Interface: "xorm.io/xorm.(Session)", Method: "Exec", Kind: "sql", WhereArg: 0, SQLWrite: true, Type: "xorm"},
+		{Interface: "xorm.io/xorm.(Engine)", Method: "Exec", Kind: "sql", WhereArg: 0, SQLWrite: true, Type: "xorm"},
+	} {
+		specs["iface:"+spec.Interface+"."+spec.Method] = spec
 	}
 	specs["database/sql.(DB).Begin"] = summarySpec{Func: "database/sql.(DB).Begin", TxBoundary: "begin"}
 	specs["database/sql.(Tx).Commit"] = summarySpec{Func: "database/sql.(Tx).Commit", TxBoundary: "commit"}
@@ -1355,28 +1376,43 @@ func (ext *fieldExtractor) applyInterfaceSummary(cc *ssa.CallCommon, callVal ssa
 	defer logger.Debug("exit (fieldExtractor).applyInterfaceSummary")
 	iface := interfaceNamedOf(cc.Value.Type())
 	if iface == nil {
-		return false, nil
+				return false, nil
 	}
 	obj := iface.Obj()
 	if obj == nil || obj.Pkg() == nil {
-		return false, nil
+				return false, nil
 	}
 	key := "iface:" + obj.Pkg().Path() + "." + obj.Name() + "." + cc.Method.Name()
 	spec, ok := ext.specs[key]
-	if !ok {
-		logger.Debug("iface spec 未匹配", zap.String("key", key))
+		if !ok {
+				logger.Debug("iface spec 未匹配", zap.String("key", key))
 		return false, nil
 	}
-	// SQL 形态（kind=sql）无需实体类型/表名（SQL 字符串自带表名）
+	// 表名/实体解析按形态分流：
+	//  - sql/table（Q175 XORM Table）：无需实体/表名（SQL 自带 / 链式记录）
+	//  - filter（Q175 XORM Where）：无需实体，表名查链式 Table（ChainTable）
+	//  - write/read：实体类型 → TableName() → 链式表名兜底
 	var table string
 	var entity types.Type
-	if spec.Kind != "sql" {
+	switch spec.Kind {
+	case "filter":
+		if spec.ChainTable {
+			table = ext.chainTables[cc.Value]
+		}
+		if table == "" {
+			return false, nil
+		}
+	case "write", "read":
 		entity = entityTypeOf(cc, spec)
 		if entity == nil {
 			logger.Debug("iface entity 未解析", zap.String("key", key))
 			return false, nil
 		}
 		table = ext.tableNameOf(entity)
+		if table == "" && spec.ChainTable {
+			// Q175：XORM 链式表名——Table("x") 返回的 Session 值 → 表名
+			table = ext.chainTables[cc.Value]
+		}
 		if table == "" {
 			logger.Debug("iface table 为空", zap.String("key", key))
 			return false, nil
@@ -1384,6 +1420,41 @@ func (ext *fieldExtractor) applyInterfaceSummary(cc *ssa.CallCommon, callVal ssa
 	}
 	line := ext.prog.Fset.PositionFor(cc.Pos(), false).Line
 	switch spec.Kind {
+	case "table":
+		// Q175：XORM Table("name")——记录链式表名 + 发射整表节点
+		if len(cc.Args) > 0 {
+			if c, isConst := cc.Args[0].(*ssa.Const); isConst && c.Value != nil {
+				name := constant.StringVal(c.Value)
+				if name != "" {
+					if callVal != nil {
+						ext.chainTables[callVal] = name
+					}
+					typ := spec.Type
+					if typ == "" {
+						typ = "gorm"
+					}
+					id := domain.CanonicalID(string(ext.funcID) + "#ext." + typ + "." + name + ".write@" + fmt.Sprintf("%d", line))
+					if err := ext.emit(domain.Item{Node: &domain.CodeEntity{
+						ID:        id,
+						Kind:      domain.KindFieldAccess,
+						Name:      name,
+						FilePath:  ext.currentFile,
+						LineStart: line,
+						Properties: map[string]any{
+							"full_path":     name,
+							"instance_path": name,
+							"access_kind":   "write",
+							"code_snippet":  cc.String(),
+							"type_string":   typ,
+							"is_external":   "true",
+							"func_id":       string(ext.funcID),
+						},
+					}}); err != nil {
+						return false, err
+					}
+				}
+			}
+		}
 	case "write":
 		if spec.ObjArg < 0 || spec.ObjArg >= len(cc.Args) {
 			return false, nil
@@ -1396,7 +1467,7 @@ func (ext *fieldExtractor) applyInterfaceSummary(cc *ssa.CallCommon, callVal ssa
 		if err != nil {
 			return false, err
 		}
-		if err := ext.emitEntityFields(entity, table, "write", line, objID, cc); err != nil {
+		if err := ext.emitEntityFields(entity, table, "write", line, objID, cc, spec.Type); err != nil {
 			return false, err
 		}
 	case "read":
@@ -1417,7 +1488,7 @@ func (ext *fieldExtractor) applyInterfaceSummary(cc *ssa.CallCommon, callVal ssa
 				callID = id
 			}
 		}
-		if err := ext.emitEntityFields(entity, table, "read", line, callID, cc); err != nil {
+		if err := ext.emitEntityFields(entity, table, "read", line, callID, cc, spec.Type); err != nil {
 			return false, err
 		}
 		// 主键 filter（Get(id)）
@@ -1442,7 +1513,7 @@ func (ext *fieldExtractor) applyInterfaceSummary(cc *ssa.CallCommon, callVal ssa
 		}
 		if c, isConst := cc.Args[spec.WhereArg].(*ssa.Const); isConst && c.Value != nil {
 			cols := whereColsOf(constant.StringVal(c.Value))
-			if err := ext.emitWhereFilter(cc, cols, spec.WhereArg, table, line); err != nil {
+			if err := ext.emitWhereFilterTyped(cc, cols, spec.WhereArg, table, line, spec.Type); err != nil {
 				return false, err
 			}
 		}
@@ -1453,7 +1524,10 @@ func (ext *fieldExtractor) applyInterfaceSummary(cc *ssa.CallCommon, callVal ssa
 // emitEntityFields 为实体类型展开 表.列 虚拟节点（write/read）+ summary_io 边。
 // valID：write=对象值（边 值→节点）；read=调用点返回值（边 节点→值）。
 func (ext *fieldExtractor) emitEntityFields(entity types.Type, table, access string,
-	line int, valID domain.CanonicalID, cc *ssa.CallCommon) error {
+	line int, valID domain.CanonicalID, cc *ssa.CallCommon, vtype string) error {
+	if vtype == "" {
+		vtype = "gorm"
+	}
 	if p, ok := entity.(*types.Pointer); ok {
 		entity = p.Elem()
 	}
@@ -1483,7 +1557,7 @@ func (ext *fieldExtractor) emitEntityFields(entity types.Type, table, access str
 				"instance_path": table + "." + col,
 				"access_kind":   access,
 				"code_snippet":  cc.String(),
-				"type_string":   "gorm",
+				"type_string":   vtype,
 				"is_external":   "true",
 				"func_id":       string(ext.funcID),
 			},
@@ -1511,6 +1585,16 @@ func (ext *fieldExtractor) emitEntityFields(entity types.Type, table, access str
 // whereArg 是 where 字符串实参下标；值实参在其后（variadic 解包）。
 func (ext *fieldExtractor) emitWhereFilter(cc *ssa.CallCommon, cols []string,
 	whereArg int, table string, line int) error {
+	return ext.emitWhereFilterTyped(cc, cols, whereArg, table, line, "")
+}
+
+// emitWhereFilterTyped 同 emitWhereFilter，type 参数指定虚拟节点
+// type_string（Q175：xorm；空默认 gorm）。
+func (ext *fieldExtractor) emitWhereFilterTyped(cc *ssa.CallCommon, cols []string,
+	whereArg int, table string, line int, vtype string) error {
+	if vtype == "" {
+		vtype = "gorm"
+	}
 	for i, col := range cols {
 		id := domain.CanonicalID(string(ext.funcID) + "#ext.gorm." + table + "." + col + ".filter@" + fmt.Sprintf("%d", line))
 		if err := ext.emit(domain.Item{Node: &domain.CodeEntity{
@@ -1524,7 +1608,7 @@ func (ext *fieldExtractor) emitWhereFilter(cc *ssa.CallCommon, cols []string,
 				"instance_path": table + "." + col,
 				"access_kind":   "filter",
 				"code_snippet":  cc.String(),
-				"type_string":   "gorm",
+				"type_string":   vtype,
 				"is_external":   "true",
 				"func_id":       string(ext.funcID),
 			},
@@ -1577,7 +1661,12 @@ func entityTypeOf(cc *ssa.CallCommon, spec summarySpec) types.Type {
 			if mi, ok := arg.(*ssa.MakeInterface); ok {
 				arg = mi.X
 			}
-			return derefType(arg.Type())
+			t := derefType(arg.Type())
+			// Q175：XORM Find(&list) 输出切片——解 slice 取元素类型
+			if sl, ok := t.(*types.Slice); ok {
+				t = sl.Elem()
+			}
+			return t
 		}
 		if sig, ok := cc.Method.Type().(*types.Signature); ok && sig.Results().Len() > 0 {
 			return derefType(sig.Results().At(0).Type())

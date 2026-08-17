@@ -1912,7 +1912,7 @@ func (r *Repo) GetTables() ([]string, error) {
 	defer logger.Debug("exit (Repo).GetTables")
 	rows, err := r.Query(`SELECT DISTINCT substr(name, 1, instr(name, '.') - 1) FROM nodes
 		WHERE kind = 'field_access' AND json_extract(properties, '$.is_external') = 'true'
-		  AND json_extract(properties, '$.type_string') IN ('gorm', 'sql')
+		  AND json_extract(properties, '$.type_string') IN ('gorm', 'sql', 'xorm')
 		  AND name NOT LIKE '%.%.%' ORDER BY 1`)
 	if err != nil {
 		return nil, err

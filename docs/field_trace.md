@@ -1556,3 +1556,21 @@ indirect_write 是函数级 caller→callee 摘要，不能直接进 CTE。
 **验证**：outer(t)→inner(t)→fill(t.A=100)：默认空、--follow-indirect
 返回 fill 写点 t.A (9) + 赋值来源 100:int；sqlite/CLI 单测 + 12 包 +
 it + e2e 27 项全绿。
+
+## 36. XORM 支持（Q175，2026-08-17）
+
+**正确性**（review）：Settlement Service 用 XORM——表/列虚拟节点过滤
+限定 type_string IN ('gorm','sql') → relations 为空。实现：
+- **XORM 链式形态**：Engine.Table(name) 记录链式表名（extractor
+  chainTables map[ssa.Value]string）→ Session.Where/Find/Get/Update/
+  Insert/Delete 表名查链（spec.ChainTable）
+- **iface spec 扩展**：kind=table（整表节点）、type（type_string
+  gorm/xorm）、chain_table（链式表名）——内置 xorm.io/xorm 路径 +
+  用户 yaml 可自定义
+- **entityTypeOf 解 slice**：Find(&list) 输出切片取元素类型
+- **repo 过滤加 'xorm'**：relations/table 枚举识别 XORM 节点
+
+调试教训：临时调试打印需补 import（crossflow.go 缺 fmt/os 导致
+编译失败——测试从未执行）；spec 匹配成功的假象来自"测试二进制
+没编译"。验证：TestXORMSummarySelfContained（链式表名/filter/read
+节点 type=xorm）+ 12 包 + it + e2e 全绿。

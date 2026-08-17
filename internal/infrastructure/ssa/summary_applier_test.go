@@ -467,3 +467,82 @@ func use(c Connector, id int64) {
 		t.Error("ExecNonQuery 未生成 mm_member.id filter 节点")
 	}
 }
+
+// TestXORMSummarySelfContained：Q175——XORM 链式形态（Table().Where()
+// .Find()）的表名/字段/查询条件提取。
+func TestXORMSummarySelfContained(t *testing.T) {
+	src := `package m
+
+type Engine interface {
+	Table(name string) Session
+}
+
+type Session interface {
+	Where(cond string, args ...any) Session
+	Find(out any) error
+}
+
+type Settlement struct {
+	OrderID int64
+	Amount  int64
+}
+
+func query(engine Engine, list *[]Settlement) {
+	engine.Table("settlement").Where("order_id = ?", 1).Find(list)
+}
+`
+	yaml := `summaries:
+  - iface: "example.com/mtest.Engine"
+    method: "Table"
+    kind: "table"
+    type: "xorm"
+  - iface: "example.com/mtest.Session"
+    method: "Where"
+    kind: "filter"
+    where_arg: 0
+    chain_table: true
+    type: "xorm"
+  - iface: "example.com/mtest.Session"
+    method: "Find"
+    kind: "read"
+    obj_arg: 0
+    chain_table: true
+    type: "xorm"
+`
+	nodes, _, _ := indexFixtureFull(t, map[string]string{
+		"go.mod": moduleGoMod,
+		"main.go": src,
+		"field-summary.yaml": yaml,
+	})
+	var filterSeen, readSeen, tableSeen bool
+	for _, n := range nodes {
+		if n.Kind != domain.KindFieldAccess || n.Property("is_external") != "true" {
+			continue
+		}
+		switch n.Name {
+		case "settlement.order_id":
+			if n.Property("access_kind") == "filter" {
+				filterSeen = true
+			}
+			t.Logf("node %s access=%v type=%v id=%s", n.Name, n.Property("access_kind"), n.Property("type_string"), n.ID)
+			if n.Property("type_string") != "xorm" {
+				t.Errorf("XORM 节点 type_string = %v, want xorm", n.Property("type_string"))
+			}
+		case "settlement.amount":
+			if n.Property("access_kind") == "read" {
+				readSeen = true
+			}
+		case "settlement":
+			tableSeen = true
+		}
+	}
+	if !tableSeen {
+		t.Error("XORM Table 调用应发射整表节点 settlement")
+	}
+	if !filterSeen {
+		t.Error("XORM Where 应发射 filter 节点 settlement.order_id（表名来自链式 Table）")
+	}
+	if !readSeen {
+		t.Error("XORM Find 应发射字段 read 节点（settlement.amount）")
+	}
+}

@@ -65,6 +65,7 @@ func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Func
 		extSummaries: map[domain.CanonicalID]bool{},
 		rets:     map[*ssa.Function][][]ssa.Value{},
 		dispatchRegs: *dispatchRegs, // Index 级共享（Q161 一次扫描）
+		chainTables:  map[ssa.Value]string{}, // Q175 XORM 链式表名
 	}
 
 	// 第一遍：按使用方式判定 FieldAddr/IndexAddr 的读写（go/ssa v0.26 表示，
@@ -904,6 +905,7 @@ type fieldExtractor struct {
 	fallbackCount int                        // 静态类型解析失败回退数（警告汇总）
 	dispatchRegs dispatchReg                 // 接口注册点缓存（Q161 动态边候选元数据，一次扫描）
 	regHits     map[string]map[string]bool // Q168：iface.String() → candidateKey → register 命中（O(1) 判定）
+	chainTables map[ssa.Value]string       // Q175：XORM 链式表名（Table 调用返回值 → 表名）
 }
 
 // isSSAName 判断是否为 SSA 临时名（t0、t91 等），用于决定展示名回退。
