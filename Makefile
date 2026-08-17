@@ -7,7 +7,7 @@ GIT_COMMIT := $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
 VERSION_PKG := github.com/schaepher/codeintel/internal/cli
 LDFLAGS    := -X '$(VERSION_PKG).gitCommit=$(GIT_COMMIT)'
 
-.PHONY: build install test it e2e vet clean version
+.PHONY: build install test it e2e serve vet clean version
 
 ## build: 编译二进制（注入 commit hash）
 build:
@@ -29,6 +29,12 @@ it:
 ## bench: 性能基准（构建时间/内存/DB 大小；默认 radar，-bench-repo 指定仓库）
 bench:
 	go test -count=1 -tags benchmark ./benchmarks/ -bench-repo "$(BENCH_REPO)" $(BENCH_FLAGS)
+
+## serve: 启动图探索 Web 服务（E2E_REPO 指定仓库，默认 ../radar，须已
+##        构建索引；前台运行，Ctrl+C 退出；--addr 默认 :8096）
+serve:
+	go build -o /tmp/codeintel-e2e ./cmd/codeintel
+	@/tmp/codeintel-e2e serve --repo $(E2E_REPO) --addr :8096
 
 ## e2e: 前端回归（playwright）。serve 指定仓库（E2E_REPO，默认 ../radar，
 ##      须已构建索引）后运行 e2e/field-trace-e2e.mjs 全量断言。
