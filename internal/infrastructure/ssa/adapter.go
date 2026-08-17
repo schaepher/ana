@@ -147,59 +147,130 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 	sort.Slice(pkgOrder, func(i, j int) bool {
 		return len(byPkg[pkgOrder[i]]) > len(byPkg[pkgOrder[j]])
 	})
-	// Q169/Q170/Q174：按函数分块 worker pool——包级并发下单个慢包
-	// （如 68 函数 2m53s）独占 worker 造成长尾；改为每块 200 函数
-	// 的任务粒度，块间并行（sem = --workers，默认 1=串行），慢函数
-	// 可被多 worker 分摊。funcData 局部收集后锁内合并（mergeFuncData：
-	// 闭包与外层函数可能跨块，不再共享写同一 funcData）。
+	// Q169/Q170/Q174/Q176：按包 → 包内分块 worker pool——单慢包长尾
+	// 由包内分块并行分摊（每块 200 函数，块不跨包）；Q176 包级缓存：
+	// 未变更包跳过分析，从缓存加载产物（节点/边/fd）直接 emit + 合并。
 	workers := a.workers
 	if workers < 1 {
 		workers = 1
 	}
 	const blockSize = 200
-	var allFns []*ssa.Function // 按包序平铺（大包先——pkgOrder 已倒序）
-	for _, pkgPath := range pkgOrder {
-		allFns = append(allFns, byPkg[pkgPath]...)
-	}
 	sem := make(chan struct{}, workers)
 	var wg sync.WaitGroup
 	var fdMu sync.Mutex // 合并保护（mergeFuncData）
 	doneFuncs := 0
 	var doneMu sync.Mutex
-	blockStart := time.Now()
-	for start := 0; start < len(allFns); start += blockSize {
-		end := start + blockSize
-		if end > len(allFns) {
-			end = len(allFns)
-		}
-		block := allFns[start:end]
-		wg.Add(1)
-		go func(block []*ssa.Function) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			for _, fn := range block {
-				owner, fd, err := emitFunction(repo, prog, fn, idents, assignTargets, specs, &fallbackTotal, emit, typePkgs, &a.dispatchRegs)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "emitFunction %s: %v\n", fn.Name(), err)
-					return
-				}
-				mergeFuncData(&fdMu, a.fd, owner, fd)
+	cacheHits := 0
+	for _, pkgPath := range pkgOrder {
+		fns := byPkg[pkgPath]
+		// Q176：包级缓存——hash 命中直接加载产物
+		var pkg *packages.Package
+		for i := range pkgs {
+			if pkgs[i].PkgPath == pkgPath {
+				pkg = pkgs[i]
+				break
 			}
-			doneMu.Lock()
-			doneFuncs += len(block)
-			done := doneFuncs
-			percent := done * 100 / totalFuncs
-			doneMu.Unlock()
-			logger.Info("build progress",
-				zap.Int("funcs", len(block)),
-				zap.Int("done", done), zap.Int("total", totalFuncs),
-				zap.Int("percent", percent),
-				zap.Duration("elapsed", time.Since(blockStart)))
-		}(block)
+		}
+		hash := ""
+		if pkg != nil {
+			files := pkg.CompiledGoFiles
+			if len(files) == 0 {
+				files = pkg.GoFiles // 兜底：Mode 未开 NeedCompiledGoFiles
+			}
+			if h, err := pkgContentHash(files); err == nil {
+				hash = h
+			}
+		}
+		if hash != "" {
+			if cached := loadPkgCache(pkgCachePath(repo.Path, pkgPath), hash); cached != nil {
+				for _, n := range cached.Nodes {
+					if err := emit(domain.Item{Node: n}); err != nil {
+						return err
+					}
+				}
+				for _, f := range cached.Facts {
+					if err := emit(domain.Item{Fact: f}); err != nil {
+						return err
+					}
+				}
+				for id, cfd := range cached.FuncData {
+					mergeFuncData(&fdMu, a.fd, domain.CanonicalID(id), fromCachedFD(cfd))
+				}
+				doneMu.Lock()
+				doneFuncs += len(fns)
+				cacheHits++
+				done := doneFuncs
+				percent := done * 100 / totalFuncs
+				doneMu.Unlock()
+				logger.Info("build progress",
+					zap.String("pkg", pkgPath), zap.Int("funcs", len(fns)),
+					zap.Int("done", done), zap.Int("total", totalFuncs),
+					zap.Int("percent", percent), zap.Bool("cached", true))
+				continue
+			}
+		}
+		// 未命中：包内分块并行 + 产物收集（写缓存用）
+		var pkgNodes []*domain.CodeEntity
+		var pkgFacts []*domain.Fact
+		var pkgFD = map[domain.CanonicalID]*funcData{}
+		var pkgMu sync.Mutex
+		// 包内 emit 拦截：收集产物后转发原 emit
+		pkgEmit := func(item domain.Item) error {
+			pkgMu.Lock()
+			if item.Node != nil {
+				pkgNodes = append(pkgNodes, item.Node)
+			}
+			if item.Fact != nil {
+				pkgFacts = append(pkgFacts, item.Fact)
+			}
+			pkgMu.Unlock()
+			return emit(item)
+		}
+		blockStart := time.Now()
+		for start := 0; start < len(fns); start += blockSize {
+			end := start + blockSize
+			if end > len(fns) {
+				end = len(fns)
+			}
+			block := fns[start:end]
+			wg.Add(1)
+			go func(block []*ssa.Function) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				for _, fn := range block {
+					owner, fd, err := emitFunction(repo, prog, fn, idents, assignTargets, specs, &fallbackTotal, pkgEmit, typePkgs, &a.dispatchRegs)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "emitFunction %s: %v\n", fn.Name(), err)
+						return
+					}
+					if owner != "" && fd != nil {
+						pkgMu.Lock()
+						pkgFD[owner] = fd
+						pkgMu.Unlock()
+						mergeFuncData(&fdMu, a.fd, owner, fd)
+					}
+				}
+				doneMu.Lock()
+				doneFuncs += len(block)
+				done := doneFuncs
+				percent := done * 100 / totalFuncs
+				doneMu.Unlock()
+				logger.Info("build progress",
+					zap.String("pkg", pkgPath), zap.Int("funcs", len(block)),
+					zap.Int("done", done), zap.Int("total", totalFuncs),
+					zap.Int("percent", percent),
+					zap.Duration("elapsed", time.Since(blockStart)))
+			}(block)
+		}
+		wg.Wait()
+		// 写缓存（hash 可用时）
+		if hash != "" {
+			savePkgCache(pkgCachePath(repo.Path, pkgPath), hash, pkgNodes, pkgFacts, pkgFD)
+		}
 	}
-	wg.Wait()
-	stage("emitFunction 循环（分块并发）")
+	logger.Info("pkg cache", zap.Int("hits", cacheHits), zap.Int("total", len(pkgOrder)))
+	stage("emitFunction 循环（包内分块 + 缓存）")
 
 	if n := fallbackTotal.Load(); n > 0 {
 		fmt.Fprintf(os.Stderr, "warning: %d 个字段访问静态类型解析失败（匿名 struct 等），已回退源码字面量路径\n", n)

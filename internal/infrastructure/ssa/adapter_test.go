@@ -245,7 +245,7 @@ func plain(x bool) bool {
 // loadTestPackages 加载测试仓库的 packages（共享加载改造后由测试提供）。
 func loadTestPackages(dir string) ([]*packages.Package, error) {
 	cfg := &packages.Config{
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
+		Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedSyntax |
 			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps,
 		Dir: dir,
 	}

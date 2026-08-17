@@ -198,7 +198,7 @@ func (o *Orchestrator) loadPackages(ctx context.Context) ([]*packages.Package, e
 	var out []*packages.Package
 	for _, dir := range dirs {
 		cfg := &packages.Config{
-			Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
+			Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedSyntax |
 				packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps,
 			Dir: dir,
 			// Tests 默认 false：不加载 _test.go（与适配器既有语义一致）

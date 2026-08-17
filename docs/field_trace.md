@@ -1574,3 +1574,26 @@ it + e2e 27 项全绿。
 编译失败——测试从未执行）；spec 匹配成功的假象来自"测试二进制
 没编译"。验证：TestXORMSummarySelfContained（链式表名/filter/read
 节点 type=xorm）+ 12 包 + it + e2e 全绿。
+
+## 37. 包级分析缓存（Q176，2026-08-17）
+
+**目标**：init/update 时跳过未变更包的分析（emitFunction 是大头），
+从缓存文件加载产物直接写库。
+
+**缓存内容**（每包一个文件 `.codeintel/cache/<sha256(pkgPath)>.json`）：
+- 节点/边（emitFunction 产物——CodeEntity/Fact）
+- 函数摘要 fd（funcData——emitSummaries/computeAliases 的全局输入，
+  未变更包不分析时必须缓存才能保持全局闭包完整）
+- 元数据：格式版本 + 包源码 hash（CompiledGoFiles 内容 sha256）
+
+**失效键**：本包源码内容 hash（保守；依赖包签名变化的影响记录为
+已知边界——后续可加 imports hash 组合）。
+
+**流程**：Adapter.Index 按包处理——hash 命中 → 加载缓存 emit + fd
+合并进 a.fd；未命中 → 现有分析 + 写缓存。init 也受益（同代码重复
+重建秒级）。缓存加载走 emit 通道（orchestrator 的 keep 过滤天然
+丢弃未变更包产物——增量写入语义不变）。
+
+**不缓存**：SSA 构建（内存态、非大头 36ms）、loadPackages（Go
+build cache 已覆盖）、computeAliases/emitSummaries（全局依赖，
+每次重算但输入 fd 从缓存加载）。
