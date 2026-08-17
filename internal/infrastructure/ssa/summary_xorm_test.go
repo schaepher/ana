@@ -83,14 +83,14 @@ func TestXORMChainExtended(t *testing.T) {
 	src := `package m
 
 type Engine interface {
-	Table(name string) Session
+	Table(tableNameOrBean interface{}) Session
 }
 
 type Session interface {
-	Table(name string) Session
-	Where(cond string, args ...any) Session
-	In(cond string, args ...any) Session
-	NotIn(cond string, args ...any) Session
+	Table(tableNameOrBean interface{}) Session
+	Where(query interface{}, args ...interface{}) Session
+	In(query interface{}, args ...interface{}) Session
+	NotIn(query interface{}, args ...interface{}) Session
 	Iterate(out any) error
 }
 

@@ -297,3 +297,15 @@ func entityTypeOf(cc *ssa.CallCommon, spec summarySpec) types.Type {
 	}
 	return nil
 }
+
+// unwrapConst 取实参常量（Q177 真实 ORM 形态）：xorm 的
+// Table(tableNameOrBean interface{}) / Where(query interface{}, ...) /
+// Exec(sql interface{}, ...) 参数是 interface{}——字符串字面量在 SSA
+// 中为 *ssa.MakeInterface{X: *ssa.Const}，统一解包后再取常量。
+func unwrapConst(value ssa.Value) (*ssa.Const, bool) {
+	if wrapped, ok := value.(*ssa.MakeInterface); ok {
+		value = wrapped.X
+	}
+	constantValue, ok := value.(*ssa.Const)
+	return constantValue, ok && constantValue.Value != nil
+}

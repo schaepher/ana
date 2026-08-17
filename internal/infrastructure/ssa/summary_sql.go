@@ -25,7 +25,8 @@ func (ext *fieldExtractor) applySQLSummary(cc *ssa.CallCommon, calleeID domain.C
 		return nil
 	}
 	sqlStr := ""
-	if c, ok := cc.Args[sqlArg].(*ssa.Const); ok && c.Value != nil {
+	if c, ok := unwrapConst(cc.Args[sqlArg]); ok {
+		// Q177 真实形态：Exec(sql interface{}) 常量被 MakeInterface 包装
 		sqlStr = constant.StringVal(c.Value)
 	}
 	table, cols, whereCols := parseSQLStmt(sqlStr)

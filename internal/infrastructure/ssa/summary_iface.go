@@ -88,7 +88,9 @@ func (ext *fieldExtractor) applySpecKind(cc *ssa.CallCommon, callVal ssa.Value, 
 		// receiver——iface 时 Args[0] 即表名，遍历兼容两种形态）
 		var name string
 		for _, a := range cc.Args {
-			if c, isConst := a.(*ssa.Const); isConst && c.Value != nil {
+			// Q177 真实形态：Table(tableNameOrBean interface{}) 时字符串
+			// 字面量被 MakeInterface 包装——unwrapConst 统一解包
+			if c, ok := unwrapConst(a); ok {
 				if s := constant.StringVal(c.Value); s != "" {
 					name = s
 					break
@@ -177,7 +179,8 @@ func (ext *fieldExtractor) applySpecKind(cc *ssa.CallCommon, callVal ssa.Value, 
 		if spec.WhereArg >= len(cc.Args) {
 			return false, nil
 		}
-		if c, isConst := cc.Args[spec.WhereArg].(*ssa.Const); isConst && c.Value != nil {
+		if c, ok := unwrapConst(cc.Args[spec.WhereArg]); ok {
+			// Q177 真实形态：Where(query interface{}) 常量被包装
 			cols := whereColsOf(constant.StringVal(c.Value))
 			if err := ext.emitWhereFilterTyped(cc, cols, spec.WhereArg, table, line, spec.Type); err != nil {
 				return false, err
