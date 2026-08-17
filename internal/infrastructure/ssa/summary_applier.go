@@ -191,37 +191,13 @@ func builtinSummaries() map[string]summarySpec {
 			ReadArgsAll: true, // 观测：读实参字段（指标维度/值来源）
 		}
 	}
-	// GORM 写操作（②：ORM 更新映射字段→列）：实参对象类型→表名、
-	// 字段→列名（snake_case）
-	for _, fn := range []string{"Create", "Save", "Updates", "Delete", "Update"} {
-		specs["gorm.io/gorm.(DB)."+fn] = summarySpec{
-			Func: "gorm.io/gorm.(DB)." + fn, ParamIndex: 1, ORMWrite: true,
-		}
+	// GORM / XORM 独立实现（summary_gorm.go / summary_xorm.go）——
+	// 各自的 API 覆盖清单见对应文件头注释
+	for k, s := range gormSummarySpecs() {
+		specs[k] = s
 	}
-	// Where 过滤（表关联键）：Where("col = ?", v) 字符串列名 → filter 节点
-	specs["gorm.io/gorm.(DB).Where"] = summarySpec{
-		Func: "gorm.io/gorm.(DB).Where", ParamIndex: 1, ORMWrite: true,
-	}
-	// GORM 读（键关联链贯通）：Find/First/Take/Last 对象读出 → 表.列 read
-	for _, fn := range []string{"Find", "First", "Take", "Last"} {
-		specs["gorm.io/gorm.(DB)."+fn] = summarySpec{
-			Func: "gorm.io/gorm.(DB)." + fn, ParamIndex: 1, ORMRead: true,
-		}
-	}
-	// XORM 链式形态（Q175）：Engine.Table(name) 记链式表名；Session 的
-	// Where/Find/Get/Update/Insert/Delete 表名查链（ChainTable）。
-	for _, spec := range []summarySpec{
-		{Interface: "xorm.io/xorm.(Engine)", Method: "Table", Kind: "table", Type: "xorm"},
-		{Interface: "xorm.io/xorm.(Session)", Method: "Where", Kind: "filter", WhereArg: 0, ChainTable: true, Type: "xorm"},
-		{Interface: "xorm.io/xorm.(Session)", Method: "Find", Kind: "read", ObjArg: 0, ChainTable: true, Type: "xorm"},
-		{Interface: "xorm.io/xorm.(Session)", Method: "Get", Kind: "read", ObjArg: 0, IDArg: 1, ChainTable: true, Type: "xorm"},
-		{Interface: "xorm.io/xorm.(Session)", Method: "Update", Kind: "write", ObjArg: 0, ChainTable: true, Type: "xorm"},
-		{Interface: "xorm.io/xorm.(Session)", Method: "Insert", Kind: "write", ObjArg: 0, ChainTable: true, Type: "xorm"},
-		{Interface: "xorm.io/xorm.(Session)", Method: "Delete", Kind: "write", ObjArg: 0, ChainTable: true, Type: "xorm"},
-		{Interface: "xorm.io/xorm.(Session)", Method: "Exec", Kind: "sql", WhereArg: 0, SQLWrite: true, Type: "xorm"},
-		{Interface: "xorm.io/xorm.(Engine)", Method: "Exec", Kind: "sql", WhereArg: 0, SQLWrite: true, Type: "xorm"},
-	} {
-		specs["iface:"+spec.Interface+"."+spec.Method] = spec
+	for k, s := range xormSummarySpecs() {
+		specs[k] = s
 	}
 	specs["database/sql.(DB).Begin"] = summarySpec{Func: "database/sql.(DB).Begin", TxBoundary: "begin"}
 	specs["database/sql.(Tx).Commit"] = summarySpec{Func: "database/sql.(Tx).Commit", TxBoundary: "commit"}
@@ -1397,7 +1373,7 @@ func (ext *fieldExtractor) applyInterfaceSummary(cc *ssa.CallCommon, callVal ssa
 	switch spec.Kind {
 	case "filter":
 		if spec.ChainTable {
-			table = ext.chainTables[cc.Value]
+			table = ext.chainTableName(cc) // Q175 XORM 链式表名
 		}
 		if table == "" {
 			return false, nil
@@ -1411,7 +1387,7 @@ func (ext *fieldExtractor) applyInterfaceSummary(cc *ssa.CallCommon, callVal ssa
 		table = ext.tableNameOf(entity)
 		if table == "" && spec.ChainTable {
 			// Q175：XORM 链式表名——Table("x") 返回的 Session 值 → 表名
-			table = ext.chainTables[cc.Value]
+			table = ext.chainTableName(cc)
 		}
 		if table == "" {
 			logger.Debug("iface table 为空", zap.String("key", key))
@@ -1427,7 +1403,7 @@ func (ext *fieldExtractor) applyInterfaceSummary(cc *ssa.CallCommon, callVal ssa
 				name := constant.StringVal(c.Value)
 				if name != "" {
 					if callVal != nil {
-						ext.chainTables[callVal] = name
+						ext.recordChainTable(callVal, name) // Q175 XORM 链式表名
 					}
 					typ := spec.Type
 					if typ == "" {
