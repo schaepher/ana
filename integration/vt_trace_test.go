@@ -2,15 +2,6 @@
 
 package integration
 
-import (
-	"path/filepath"
-	"strings"
-	"testing"
-
-	"github.com/schaepher/codeintel/internal/domain"
-	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
-)
-
 // TestLoadValueTraceSelfContained：举一反三——Load 值起点（rec := *ptr
 // 解引用赋值后传参）。
 

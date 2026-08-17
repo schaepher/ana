@@ -2,14 +2,6 @@
 
 package integration
 
-import (
-	"path/filepath"
-	"strings"
-	"testing"
-
-	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
-)
-
 // TestClosureWriteInSummarySelfContained：继续查——闭包内写入应计入
 // 外层函数的字段摘要（direct_write，funcData 归外层）。
 

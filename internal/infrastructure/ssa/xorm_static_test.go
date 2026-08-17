@@ -1,6 +1,7 @@
 package ssa
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -147,25 +148,33 @@ func main() {}
 		t.Fatal(err)
 	}
 	defer rows.Close()
-	nodes := map[string]string{}
+	// 同名多节点（同列 filter+write 并存）——按 access 分组统计存在性
+	byAccess := map[string]map[string]bool{}
 	for rows.Next() {
 		var name, access string
 		if err := rows.Scan(&name, &access); err != nil {
 			t.Fatal(err)
 		}
-		nodes[name] = access
+		if byAccess[access] == nil {
+			byAccess[access] = map[string]bool{}
+		}
+		byAccess[access][name] = true
 	}
 	// And/Or filter（长链 Table→Where→And / →Or 表名传递）
-	if nodes["settlement.amount"] != "filter" {
-		t.Errorf("And 应产 filter settlement.amount，got %q", nodes["settlement.amount"])
+	if !byAccess["filter"]["settlement.amount"] {
+		t.Errorf("And 应产 filter settlement.amount，现有 filter: %v", byAccess["filter"])
 	}
-	if nodes["settlement.order_id"] != "filter" {
-		t.Errorf("Or 应产 filter settlement.order_id，got %q", nodes["settlement.order_id"])
+	if !byAccess["filter"]["settlement.order_id"] {
+		t.Errorf("Or 应产 filter settlement.order_id，现有 filter: %v", byAccess["filter"])
 	}
-	// Update/Insert/Delete write 节点（对象字段展开）
-	for _, col := range []string{"order_id", "amount"} {
-		if nodes["settlement."+col] != "write" && nodes["settlement."+col] != "filter" {
-			t.Errorf("Update/Insert/Delete 应产 write 节点 settlement.%s，got %q", col, nodes["settlement."+col])
+	// Update/Insert/Delete write 节点（对象字段展开——any 参数解 MakeInterface）
+	var writeSeen bool
+	for name := range byAccess["write"] {
+		if strings.HasPrefix(name, "settlement.") {
+			writeSeen = true
 		}
+	}
+	if !writeSeen {
+		t.Errorf("Update/Insert/Delete 应产 write 节点（settlement 字段展开），write=%v", byAccess["write"])
 	}
 }

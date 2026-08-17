@@ -2,14 +2,6 @@
 
 package integration
 
-import (
-	"path/filepath"
-	"strings"
-	"testing"
-
-	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
-)
-
 // TestClosureFieldTraceSelfContained：继续查——闭包内字段写入节点生成
 // （闭包字段访问归入外层函数，func_id=外层——追踪可用性验证）。
 

@@ -2,14 +2,6 @@
 
 package integration
 
-import (
-	"path/filepath"
-	"strings"
-	"testing"
-
-	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
-)
-
 // TestLocalObjectTraceSelfContained：⑭ 局部对象追踪——DAO 返回对象 →
 // 局部变量 → helper 传参（起点须纳入与目标字段同类型的 local/phi 值）。
 

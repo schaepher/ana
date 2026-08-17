@@ -269,7 +269,13 @@ func entityTypeOf(cc *ssa.CallCommon, spec summarySpec) types.Type {
 	switch spec.Kind {
 	case "write":
 		if spec.ObjArg >= 0 && spec.ObjArg < len(cc.Args) {
-			return derefType(cc.Args[spec.ObjArg].Type())
+			// 解 MakeInterface：参数类型为 any/interface{}（xorm 的
+			// Update(bean any) 等）时对象字面量被包装——与 read 一致
+			arg := cc.Args[spec.ObjArg]
+			if mi, ok := arg.(*ssa.MakeInterface); ok {
+				arg = mi.X
+			}
+			return derefType(arg.Type())
 		}
 	case "read":
 

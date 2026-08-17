@@ -1,0 +1,3 @@
+package fixtureapp
+
+func main() {}
