@@ -457,7 +457,7 @@ func (o *Orchestrator) finishBuild(start time.Time, results []AdapterResult, ski
 		SkippedEdges: skipped,
 	}
 
-	// 写构建元数据
+	// 写构建元数据（Nodes/Edges：relations --memory auto 判断缓存，P0④）
 	meta := &domain.BuildMeta{
 		BuildID:    newBuildID(),
 		CommitSHA:  build.CommitSHA,
@@ -465,6 +465,8 @@ func (o *Orchestrator) finishBuild(start time.Time, results []AdapterResult, ski
 		Status:     status,
 		DurationMs: duration.Milliseconds(),
 		ErrorMsg:   errorMsgs,
+		Nodes:      nodes,
+		Edges:      edges,
 	}
 	if err := o.RepoImpl.Save(meta); err != nil {
 		return build, fmt.Errorf("save build metadata: %w", err)

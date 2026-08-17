@@ -44,7 +44,7 @@ func TestGetTableRelations(t *testing.T) {
 	}
 	save(t, r, nodes, edges)
 
-	rels, err := r.GetTableRelations("table_a")
+	rels, err := r.GetTableRelations("table_a", "")
 	if err != nil {
 		t.Fatalf("GetTableRelations: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestGetTableRelations(t *testing.T) {
 		t.Errorf("relation type = %q, want query（终点 filter 列）", rels[0].Type)
 	}
 	// table_c 无链 → 不出现；无关联表 → 空
-	empty, err := r.GetTableRelations("table_c")
+	empty, err := r.GetTableRelations("table_c", "")
 	if err != nil || len(empty) != 0 {
 		t.Fatalf("table_c rels = %v, %v", empty, err)
 	}
@@ -146,7 +146,7 @@ func TestGetAllTableRelations(t *testing.T) {
 	}
 	save(t, r, nodes, edges)
 
-	rels, err := r.GetAllTableRelations()
+	rels, err := r.GetAllTableRelations("")
 	if err != nil {
 		t.Fatalf("GetAllTableRelations: %v", err)
 	}

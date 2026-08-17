@@ -141,6 +141,8 @@ type BuildMeta struct {
 	Status     string
 	DurationMs int64
 	ErrorMsg   string
+	Nodes      int // 构建产物节点数（--memory auto 判断缓存，P0④）
+	Edges      int // 构建产物边数
 }
 
 // BuildStatus 常量

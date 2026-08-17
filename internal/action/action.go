@@ -37,8 +37,8 @@ type Reader interface {
 	GetDispatchTargets() (map[domain.CanonicalID]domain.DispatchMeta, error) // Q157 P1
 	FindFieldReads(fullPath string) ([]*domain.CodeEntity, error)
 	GetTableColumns(table string) ([]*domain.TableColumn, error)
-	GetTableRelations(table string) ([]*domain.TableRelation, error)
-	GetAllTableRelations() ([]*domain.TableRelation, error) // Q160 全库聚合
+	GetTableRelations(table, memoryMode string) ([]*domain.TableRelation, error)
+	GetAllTableRelations(memoryMode string) ([]*domain.TableRelation, error) // Q160 全库聚合
 	GetUncalledFunctions() ([]*domain.UnusedFunc, error)
 	GetIsolatedChains() ([][]*domain.UnusedFunc, error)
 	GetPath(from, to domain.CanonicalID, maxDepth int, viaCalls bool) ([]*domain.TraceRow, error)
@@ -290,15 +290,16 @@ func (a *Actions) Table(table string) ([]*domain.TableColumn, error) {
 }
 
 // Relations 表间关联分析（query relations）：表名 → 沿数据流链关联
-// 的其他表.列（代码层推断，无外键依赖）。
-func (a *Actions) Relations(table string) ([]*domain.TableRelation, error) {
-	return a.repo.GetTableRelations(table)
+// 的其他表.列（代码层推断，无外键依赖）。memoryMode：--memory 参数
+// （""=auto/full/sql，见 repo.GetTableRelations）。
+func (a *Actions) Relations(table, memoryMode string) ([]*domain.TableRelation, error) {
+	return a.repo.GetTableRelations(table, memoryMode)
 }
 
 // RelationsAll 全库表间关联聚合（query relations --all / export relations，Q160）：
-// 一次遍历全部表返回所有表对关联（合并去重）。
-func (a *Actions) RelationsAll() ([]*domain.TableRelation, error) {
-	return a.repo.GetAllTableRelations()
+// 一次遍历全部表返回所有表对关联（合并去重）。memoryMode 同 Relations。
+func (a *Actions) RelationsAll(memoryMode string) ([]*domain.TableRelation, error) {
+	return a.repo.GetAllTableRelations(memoryMode)
 }
 
 func (a *Actions) ValueTrace(nodeID domain.CanonicalID, maxDepth int, minConf float64, includeContainer bool) ([]*domain.TraceRow, error) {

@@ -110,9 +110,9 @@ func cmdQuery(args []string) int {
 		return queryTable(acts, target, opts)
 	case "relations":
 		if f.all {
-			return queryRelationsAll(acts, f.format, opts) // Q160 全库聚合
+			return queryRelationsAll(acts, f.format, opts, &f) // Q160 全库聚合
 		}
-		return queryRelations(acts, target, f.format, opts)
+		return queryRelations(acts, target, f.format, opts, &f)
 	case "path":
 		return queryPath(acts, f.positional[0], f.positional[1], f)
 	case "callers", "callees", "impact":
@@ -149,6 +149,10 @@ type queryFlags struct {
 	minConfSet bool     // --min-conf 显式设置（Q163 默认 1.0）
 	includeContainer bool // value-trace --include-container：父容器扩展（Q163）
 	followIndirect  bool // trace-backward --follow-indirect：跨函数间接写链（Q172）
+	relTypes        []string // relations --type：关联类型过滤（query/write/read，可多次/逗号分隔；空=默认 query+write，P0④）
+	maxHops         int      // relations --max-hops：跳数上限（0=不限）
+	maxResults      int      // relations --max-results：条数上限（0=不限）
+	memory          string   // relations --memory：full/sql（默认 auto 按规模，P0④）
 }
 
 // parseQueryFlags 手动解析 query 子命令的参数，支持 flags 与位置参数任意顺序。
@@ -203,6 +207,26 @@ func parseQueryFlags(args []string) queryFlags {
 			f.followIndirect = true
 		case a == "--all":
 			f.all = true
+		case a == "--type" && i+1 < len(args):
+			f.relTypes = append(f.relTypes, strings.Split(args[i+1], ",")...)
+			i++
+		case strings.HasPrefix(a, "--type="):
+			f.relTypes = append(f.relTypes, strings.Split(strings.TrimPrefix(a, "--type="), ",")...)
+		case a == "--max-hops" && i+1 < len(args):
+			f.maxHops, _ = strconv.Atoi(args[i+1])
+			i++
+		case strings.HasPrefix(a, "--max-hops="):
+			f.maxHops, _ = strconv.Atoi(strings.TrimPrefix(a, "--max-hops="))
+		case a == "--max-results" && i+1 < len(args):
+			f.maxResults, _ = strconv.Atoi(args[i+1])
+			i++
+		case strings.HasPrefix(a, "--max-results="):
+			f.maxResults, _ = strconv.Atoi(strings.TrimPrefix(a, "--max-results="))
+		case a == "--memory" && i+1 < len(args):
+			f.memory = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--memory="):
+			f.memory = strings.TrimPrefix(a, "--memory=")
 		case a == "--json":
 			f.json = true
 		case a == "--compact":

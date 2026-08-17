@@ -293,7 +293,7 @@ func TestRelationsAll(t *testing.T) {
 		t.Fatalf("save: %v", err)
 	}
 	acts = New(r)
-	rels, err := acts.RelationsAll()
+	rels, err := acts.RelationsAll("")
 	if err != nil {
 		t.Fatalf("RelationsAll: %v", err)
 	}

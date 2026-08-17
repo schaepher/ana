@@ -1597,3 +1597,56 @@ it + e2e 27 项全绿。
 **不缓存**：SSA 构建（内存态、非大头 36ms）、loadPackages（Go
 build cache 已覆盖）、computeAliases/emitSummaries（全局依赖，
 每次重算但输入 fd 从缓存加载）。
+
+## 38. relations 性能优化：内存图 BFS + 结果缓存 + CLI 过滤（Q177，2026-08-17）
+
+**目标**：query relations 从逐节点 SQL 改为一次加载内存图 BFS（go2o 实测
+--all 数分钟 → 4.8s，单表首次 0.78s / 缓存命中 39ms）。
+
+**① 内存图**（`relations_graph.go`）：
+- `loadRelationGraph` 两条全表查询（边 15 万 + 节点 15 万，~40MB）：
+  - 全部边（kind 分流）→ dataAdj（数据流边双向，BFS 主边）/ allAdj
+    （全部边双向，循环读出桥 2 跳检查——桥 EXISTS 不限定边 kind）
+  - 全部节点元数据（access_kind/type_string/func_id/full_path/is_external）
+- `readsByFunc` 函数 → read field_access 节点索引（桥候选 O(1)）
+- BFS/bridge/byNode/Q159 过滤全部内存等价复刻旧 SQL 语义
+- **顺带修复两个旧 bug**：
+  - byNode 漏 xorm（只认 sql/gorm）→ xorm 表关联全丢（Q175 残留）
+  - 同列多节点 Type 升级只处理 query（write 不覆盖 read）→ 结果依赖 map
+    遍历顺序不确定（go2o 实测 3163 条 read↔write 漂移）→ 改 rank 比较
+    （query > write > read），与 --all 合并逻辑一致，输出确定性
+
+**② --memory 模式**（大仓库防爆内存逃生口）：
+- `--memory full` 强制内存图 / `--memory sql` 强制逐节点 SQL（旧实现保留
+  为 `relationsForSQL`，含 OR 邻接查询）/ 默认 auto
+- auto：build_metadata 缓存规模（Nodes/Edges，构建时写入——**不每次
+  COUNT**），节点 >50 万或边 >80 万走 SQL 路径（3.5G 机器安全线）
+- schema v4：build_metadata 加 nodes_count/edges_count 列
+
+**③ relation_candidates 缓存**（schema v4 新表）：
+- 键：build_id + (from_table, from_col, to_table, to_col)；`from_col=''`
+  为 marker 行（标记"该表已计算过、无关联"，避免无关联表每次重算）
+- 单表查询：缓存命中直接返回（与实现模式无关）；未命中现场算 + 写缓存
+- --all：全量重算（内存图一次加载）→ DELETE + 全表 marker + 真实行重建
+- build_id 变化（增量 update）→ 全缓存自然失效
+
+**④ CLI 过滤**：
+- `--type query|write|read`（可多次/逗号分隔）；默认 query + write
+  （read 低置信间接扩散隐藏）——全库 42596 条分布 write 34373 / read 8202
+  / query 21，read 是主要噪音源
+- `--max-hops N`（0=不限）/ `--max-results N`（0=不限）
+- 过滤在 CLI 层（缓存与 export 保持全量）
+
+**验证**：go2o 新旧结果对比——key 集合完全一致（0 独有），3030 条差异
+全部为 read→write rank 升级（旧实现不确定性修复）；新实现两次运行完全
+一致。单表缓存命中 39ms。schema v4 需 clean + 重建（go2o/radar 已重建）。
+
+**Q177 追加修复（大库验证中发现）**：
+- 桥 2 跳检查改为**定向出边**（allOut）——旧 SQL EXISTS（e1.source_id =
+  n2.id）是定向的；内存版最初用双向邻接导致桥过度宽松（go2o 内存 vs
+  SQL 路径差 3368 条 write 关联）。fixture 全正向边未暴露，大库对比
+  才定位。教训：**内存重写 SQL 时方向语义（定向/双向）必须逐条核对**
+- SQL fallback（relationsForSQL）的 Type 升级同步为 rank 比较（旧逻辑
+  只升级 query——恢复旧代码时未同步内存版修复，两路径差 3368 write）
+- 修复后 go2o 上两路径完全一致（33995 条、0 差异）；两次重建的库内容
+  微小差异（边差 3 → 关联差 759）为 degraded 构建非确定性（既有问题）

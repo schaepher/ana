@@ -128,7 +128,7 @@ func cmdExportRelations(args []string) int {
 	defer db.Close()
 	acts := action.New(sqlite.NewRepo(db))
 
-	rels, err := acts.RelationsAll()
+	rels, err := acts.RelationsAll("")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1

@@ -11,15 +11,49 @@ import (
 	"github.com/schaepher/codeintel/internal/domain"
 )
 
+// relationsFilter P0④ 输出过滤：--type/--max-hops/--max-results。
+// 默认类型：query + write（read 低置信间接扩散，--type read 显式展开）。
+func relationsFilter(f *queryFlags) func([]*domain.TableRelation) []*domain.TableRelation {
+	types := map[string]bool{}
+	for _, t := range f.relTypes {
+		if t = strings.TrimSpace(t); t != "" {
+			types[t] = true
+		}
+	}
+	if len(types) == 0 {
+		types[domain.RelationQuery] = true
+		types[domain.RelationWrite] = true
+	}
+	return func(rels []*domain.TableRelation) []*domain.TableRelation {
+		out := make([]*domain.TableRelation, 0, len(rels))
+		for _, r := range rels {
+			if !types[r.Type] {
+				continue
+			}
+			if f.maxHops > 0 && r.Hops > f.maxHops {
+				continue
+			}
+			out = append(out, r)
+		}
+		if f.maxResults > 0 && len(out) > f.maxResults {
+			out = out[:f.maxResults]
+		}
+		return out
+	}
+}
+
 // queryRelations 实现 `codeintel query relations <表名> [--mermaid]`：
 // 表间关联分析——本表列的值沿数据流链流入其他表列（A.x 读出 → B.y
-// 过滤/写入，代码层推断，无外键依赖）。--mermaid 输出列级 mermaid 图。
-func queryRelations(acts *action.Actions, table, format string, opts outputOpts) int {
-	rels, err := acts.Relations(table)
+// 过滤/写入，代码层推断，无外键依赖）。--mermaid 输出列级 mermaid 图；
+// --type/--max-hops/--max-results 过滤输出；--memory full|sql 选择实现
+// 路径（默认 auto 按规模）。
+func queryRelations(acts *action.Actions, table, format string, opts outputOpts, f *queryFlags) int {
+	rels, err := acts.Relations(table, f.memory)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
+	rels = relationsFilter(f)(rels)
 	if format == "mermaid" {
 		return printRelationsMermaid(table, rels)
 	}
@@ -67,12 +101,13 @@ func queryRelations(acts *action.Actions, table, format string, opts outputOpts)
 // queryRelationsAll 实现 `codeintel query relations --all`（Q160）：
 // 一次遍历全部表返回所有表对关联（合并去重），AGENT 单次调用拿全库。
 // --json 输出数组（与单表同构）；文本模式按表分组展示。
-func queryRelationsAll(acts *action.Actions, format string, opts outputOpts) int {
-	rels, err := acts.RelationsAll()
+func queryRelationsAll(acts *action.Actions, format string, opts outputOpts, f *queryFlags) int {
+	rels, err := acts.RelationsAll(f.memory)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
+	rels = relationsFilter(f)(rels)
 	if format == "mermaid" {
 		return printRelationsAllMermaid(rels)
 	}

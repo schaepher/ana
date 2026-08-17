@@ -766,9 +766,10 @@ func (r *Repo) Save(meta *domain.BuildMeta) error {
 	logger.Debug("enter (Repo).Save")
 	defer logger.Debug("exit (Repo).Save")
 	_, err := r.Exec(`INSERT OR REPLACE INTO build_metadata
-		(build_id, commit_sha, tool_name, status, duration_ms, error_message)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		meta.BuildID, meta.CommitSHA, meta.ToolName, meta.Status, meta.DurationMs, meta.ErrorMsg)
+		(build_id, commit_sha, tool_name, status, duration_ms, error_message, nodes_count, edges_count)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		meta.BuildID, meta.CommitSHA, meta.ToolName, meta.Status, meta.DurationMs, meta.ErrorMsg,
+		meta.Nodes, meta.Edges)
 	return err
 }
 
@@ -779,9 +780,11 @@ func (r *Repo) GetLatest() (*domain.BuildMeta, error) {
 	defer logger.Debug("exit (Repo).GetLatest")
 	m := &domain.BuildMeta{}
 	// timestamp 为秒级：同一秒内多次构建须按写入顺序取最新（rowid 递增）
-	err := r.QueryRow(`SELECT build_id, commit_sha, tool_name, status, duration_ms, error_message
+	err := r.QueryRow(`SELECT build_id, commit_sha, tool_name, status, duration_ms, error_message,
+		COALESCE(nodes_count, 0), COALESCE(edges_count, 0)
 		FROM build_metadata ORDER BY timestamp DESC, rowid DESC LIMIT 1`).
-		Scan(&m.BuildID, &m.CommitSHA, &m.ToolName, &m.Status, &m.DurationMs, &m.ErrorMsg)
+		Scan(&m.BuildID, &m.CommitSHA, &m.ToolName, &m.Status, &m.DurationMs, &m.ErrorMsg,
+			&m.Nodes, &m.Edges)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, domain.ErrNotFound
 	}
@@ -1669,240 +1672,35 @@ func (r *Repo) ResetGraphTables() error {
 }
 
 // GetTableRelations 表间关联分析（query relations）：对该表的全部列
-// 虚拟节点沿数据流边（data_flows_to/argument/returns/summary_io/
-// alias/phi_operand）BFS，收集命中其他表的虚拟节点（表.列，is_external）。
-// 无外键依赖——纯代码使用方式推断（A.x 读出值流入 B.y 过滤/写入）。
-func (r *Repo) GetTableRelations(table string) ([]*domain.TableRelation, error) {
+// 虚拟节点沿数据流边 BFS，收集命中其他表的虚拟节点（表.列，is_external）。
+// P0② 一次加载全图到内存（loadRelationGraph）替代逐节点 SQL；P0③ 结果
+// 按 build_id 缓存到 relation_candidates，命中直接返回（无 build_metadata
+// 时跳过缓存）。mode 为 --memory（""=auto 按规模、full=强制内存图、
+// sql=强制逐节点 SQL——大仓库防爆内存逃生口）。无外键依赖——纯代码使用
+// 方式推断（A.x 读出值流入 B.y 过滤/写入）。
+func (r *Repo) GetTableRelations(table, mode string) ([]*domain.TableRelation, error) {
 	logger := zap.L()
 	logger.Debug("enter (Repo).GetTableRelations")
 	defer logger.Debug("exit (Repo).GetTableRelations")
-	// 本表全部列虚拟节点
-	rows, err := r.Query(`SELECT id, name FROM nodes
-		WHERE kind = 'field_access' AND json_extract(properties, '$.is_external') = 'true'
-		  AND (name = ? OR name LIKE ?)`, table, table+".%")
+	// 缓存优先（relation_candidates 按 build_id 失效，与模式无关）
+	if rels, ok := r.loadRelationCandidates(table); ok {
+		return rels, nil
+	}
+	var rels []*domain.TableRelation
+	var err error
+	if r.useMemoryGraph(mode) {
+		var g *relationGraph
+		if g, err = loadRelationGraph(r); err == nil {
+			rels = g.relationsFor(table)
+		}
+	} else {
+		rels, err = r.relationsForSQL(table)
+	}
 	if err != nil {
 		return nil, err
 	}
-	type colNode struct{ id, name string }
-	var starts []colNode
-	for rows.Next() {
-		var c colNode
-		if err := rows.Scan(&c.id, &c.name); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		starts = append(starts, c)
-	}
-	rows.Close()
-
-	const maxDepth = 12
-	dataKinds := "'data_flows_to','argument','returns','summary_io','alias','phi_operand'"
-	seen := map[string]*domain.TableRelation{} // "fromCol|toTable|toCol" → 关联（Type 取最高）
-	var all []*domain.TableRelation
-	for _, st := range starts {
-		// BFS：沿 data 边双向扩展，收集其他表虚拟节点
-		visited := map[string]int{st.id: 0}
-		queue := []string{st.id}
-		for len(queue) > 0 {
-			cur := queue[0]
-			queue = queue[1:]
-			depth := visited[cur]
-			if depth >= maxDepth {
-				continue
-			}
-			// 出边 + 入边（双向：A 读 → 值流向 B；B 的写值也可能来自 A 的读）
-			ns, err := r.Query(`SELECT e.source_id, e.target_id FROM edges e
-				WHERE e.kind IN (`+dataKinds+`) AND (e.source_id = ? OR e.target_id = ?)`, cur, cur)
-			if err != nil {
-				return nil, err
-			}
-			var next []string
-			for ns.Next() {
-				var src, tgt string
-				if err := ns.Scan(&src, &tgt); err != nil {
-					ns.Close()
-					return nil, err
-				}
-				other := src
-				if src == cur {
-					other = tgt
-				}
-				if _, ok := visited[other]; ok {
-					continue
-				}
-				visited[other] = depth + 1
-				next = append(next, other)
-			}
-			ns.Close()
-			// 循环读出桥（Q152）：SSA 的 range 迭代器内部（Slice/phi/Next）
-			// 不建边——BFS 到 ssa_value 节点时，桥接同函数、同类型的字段
-			// 读取节点（s.ID.read）：对象读出的值在函数内经字段读取使用。
-			// 类型匹配（type_string 含类型名）限宽，防跨对象扩散
-			if ts, ok := r.typeNameOf(cur); ok && ts != "" {
-				fs, err := r.Query(`SELECT n2.id FROM nodes n1, nodes n2
-					WHERE n1.id = ? AND n2.kind = 'field_access'
-					  AND json_extract(n2.properties, '$.access_kind') = 'read'
-					  AND json_extract(n2.properties, '$.func_id') = json_extract(n1.properties, '$.func_id')
-					  AND instr(json_extract(n2.properties, '$.full_path'), ?) > 0
-					  -- 精确桥：仅桥下游 2 跳内可达 filter 节点的字段读取
-					  -- （字段 → 值 → filter：真正进 Where 的字段；防同类型全字段扩散）
-					  AND EXISTS (
-						SELECT 1 FROM edges e1
-						JOIN edges e2 ON e2.source_id = e1.target_id
-						JOIN nodes n3 ON n3.id = e2.target_id
-						WHERE e1.source_id = n2.id
-						  AND n3.kind = 'field_access'
-						  AND json_extract(n3.properties, '$.access_kind') = 'filter'
-						  AND json_extract(n3.properties, '$.is_external') = 'true'
-					  )`, cur, ts)
-				if err == nil {
-					var bridge []string
-					for fs.Next() {
-						var bid string
-						if err := fs.Scan(&bid); err == nil {
-							if _, ok := visited[bid]; !ok {
-								visited[bid] = depth + 1
-								bridge = append(bridge, bid)
-							}
-						}
-					}
-					fs.Close()
-					queue = append(queue, bridge...)
-				}
-			}
-			queue = append(queue, next...)
-		}
-		// 命中：其他表的虚拟节点（is_external field_access，表名不同）。
-		// 列名 = 节点 Name（表.列）；表名 = 前缀
-		byNode := map[string]string{} // nodeID → "name|access_kind"（预查）
-		if len(visited) > 1 {
-			ids := make([]any, 0, len(visited))
-			for id := range visited {
-				ids = append(ids, id)
-			}
-			q := `SELECT id, name, json_extract(properties, '$.access_kind') FROM nodes
-			  WHERE id IN (` + strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",") + `)
-			  AND json_extract(properties, '$.type_string') IN ('sql', 'gorm')`
-			ns, err := r.Query(q, ids...)
-			if err != nil {
-				return nil, err
-			}
-			for ns.Next() {
-				var id, name, access string
-				if err := ns.Scan(&id, &name, &access); err != nil {
-					ns.Close()
-					return nil, err
-				}
-				byNode[id] = name + "|" + access
-			}
-			ns.Close()
-		}
-		for id, d := range visited {
-			if id == st.id || d == 0 {
-				continue
-			}
-			meta := byNode[id]
-			if meta == "" {
-				continue
-			}
-			name := meta
-			access := ""
-			if i := strings.Index(meta, "|"); i >= 0 {
-				name, access = meta[:i], meta[i+1:]
-			}
-			if !strings.Contains(name, ".") {
-				continue // 非 表.列（ssa_value 等）
-			}
-			dot := strings.Index(name, ".")
-			otherTable, col := name[:dot], name[dot+1:]
-			if otherTable == table {
-				continue // 本表内部列，非关联
-			}
-			key := st.name + "|" + otherTable + "|" + col
-			fromCol := st.name
-			if i := strings.Index(fromCol, "."); i >= 0 {
-				fromCol = fromCol[i+1:]
-			}
-			rtype := domain.RelationRead
-			switch access {
-			case "filter":
-				rtype = domain.RelationQuery // WHERE 过滤列：键关联（高置信）
-			case "write":
-				rtype = domain.RelationWrite
-			}
-			// 键关联列名呼应：外键列名含主键列名（session_id 含 id；
-			// title/created_at → session_id 是同源共享误桥）——不呼应降级
-			if rtype == domain.RelationQuery && col != fromCol &&
-				!strings.HasSuffix(strings.ToLower(col), strings.ToLower(fromCol)) {
-				rtype = domain.RelationRead
-			}
-			if ex, ok := seen[key]; ok {
-				// 同列多节点（write/filter/read）：Type 取最高（query > write > read）
-				if rtype == domain.RelationQuery {
-					ex.Type = domain.RelationQuery
-				}
-				if d < ex.Hops {
-					ex.Hops = d
-				}
-				continue
-			}
-			rel := &domain.TableRelation{
-				FromTable: table, FromCol: fromCol,
-				ToTable: otherTable, ToCol: col,
-				Hops: d, Type: rtype,
-			}
-			seen[key] = rel
-			all = append(all, rel)
-		}
-	}
-	// Q159：外键语义过滤——
-	// 1) id→id 一律丢弃（两表都不会拿各自自增主键互查）；
-	// 2) 同目标列多起点时外键形态列（xxx_id）优先——主键 id 起点是
-	//    对象值共享桥接噪音；保留形态：A.xxx_id → B.id（外键查主键）、
-	//    A.id → B.xxx_id（主键被外键引用查询，如 mm_member.id →
-	//    mm_account.member_id）、A.xxx_id → B.xxx_id（业务关联键）
-	byTarget := map[string][]*domain.TableRelation{}
-	for _, rel := range all {
-		byTarget[rel.ToTable+"."+rel.ToCol] = append(byTarget[rel.ToTable+"."+rel.ToCol], rel)
-	}
-	var out []*domain.TableRelation
-	for _, rels := range byTarget {
-		hasFK := false
-		for _, r := range rels {
-			if r.FromCol != "id" {
-				hasFK = true
-				break
-			}
-		}
-		for _, r := range rels {
-			if r.FromCol == "id" && r.ToCol == "id" {
-				continue // id→id：主键互查不存在
-			}
-			if hasFK && r.FromCol == "id" {
-				continue // 同目标有更直接的外键列起点
-			}
-			out = append(out, r)
-		}
-	}
-	return out, nil
-}
-
-// typeNameOf 查节点 type_string 并提取类型名（[]example.com/m.Session →
-// Session；*Session → Session；无类型/非 ssa_value 返回 ok=false）。
-func (r *Repo) typeNameOf(id string) (string, bool) {
-	var ts sql.NullString
-	if err := r.QueryRow(`SELECT json_extract(properties, '$.type_string') FROM nodes WHERE id = ?`, id).Scan(&ts); err != nil || !ts.Valid {
-		return "", false
-	}
-	t := ts.String
-	if i := strings.LastIndex(t, "."); i >= 0 {
-		t = t[i+1:]
-	}
-	t = strings.Trim(t, "[]*")
-	if t == "" || t == "any" || t == "string" || t == "int" || t == "int64" || t == "bool" || t == "error" || t == "byte" {
-		return "", false // 基本类型无字段
-	}
-	return t, true
+	r.saveRelationCandidates(table, rels)
+	return rels, nil
 }
 
 // GetTables 枚举全库外部表名（gorm/sql 虚拟节点表名去重，Q160）。
@@ -1932,26 +1730,27 @@ func (r *Repo) GetTables() ([]string, error) {
 	return tables, rows.Err()
 }
 
-// GetAllTableRelations 全库关联聚合（Q160）：每表 GetTableRelations 结果
-// 合并去重——同 from/to 列对取 hops 最小 + Type 最高（query > write > read）。
-// 输出按 from/to 稳定排序，AGENT 一次调用拿全库（query relations --all / export relations）。
-// 注：曾试 8 路并发——go2o 实测 2m34s 反而劣化到 5m53s（SQLite 连接池
-// 锁竞争 + 低内存 swap），保持顺序执行。
-func (r *Repo) GetAllTableRelations() ([]*domain.TableRelation, error) {
+// GetAllTableRelations 全库关联聚合（Q160）：一次加载图（loadRelationGraph），
+// 全部表内存 BFS 合并去重——同 from/to 列对取 hops 最小 + Type 最高
+// （query > write > read）。结果按 build_id 全量写入 relation_candidates
+// （--all 重建缓存，后续单表查询命中缓存）。输出按 from/to 稳定排序，
+// AGENT 一次调用拿全库（query relations --all / export relations）。
+// mode 同 GetTableRelations（--memory）；sql 模式逐表走 relationsForSQL。
+func (r *Repo) GetAllTableRelations(mode string) ([]*domain.TableRelation, error) {
 	logger := zap.L()
 	logger.Debug("enter (Repo).GetAllTableRelations")
 	defer logger.Debug("exit (Repo).GetAllTableRelations")
-	tables, err := r.GetTables()
+	if !r.useMemoryGraph(mode) {
+		return r.getAllTableRelationsSQL()
+	}
+	g, err := loadRelationGraph(r)
 	if err != nil {
 		return nil, err
 	}
+	tables := g.tables()
 	seen := map[string]*domain.TableRelation{} // ft|fc|tt|tc → 最佳关联
 	for _, t := range tables {
-		rels, err := r.GetTableRelations(t)
-		if err != nil {
-			return nil, err
-		}
-		for _, rel := range rels {
+		for _, rel := range g.relationsFor(t) {
 			key := rel.FromTable + "|" + rel.FromCol + "|" + rel.ToTable + "|" + rel.ToCol
 			ex, ok := seen[key]
 			if !ok || rel.Hops < ex.Hops || (rel.Hops == ex.Hops && relTypeRank(rel.Type) > relTypeRank(ex.Type)) {
@@ -1976,6 +1775,7 @@ func (r *Repo) GetAllTableRelations() ([]*domain.TableRelation, error) {
 		}
 		return a.ToCol < b.ToCol
 	})
+	r.rebuildRelationCandidates(out, tables)
 	return out, nil
 }
 

@@ -17,7 +17,8 @@ import (
 // v1.0 前无自动迁移：版本不匹配时提示手动重建（TD.md 10.2）。
 // v2：新增 function_field_summary 表（SSA 字段追溯，field_trace.md §5.2）。
 // v3：新增 summary_origins 表（Q161 间接写多来源聚合）。
-const SchemaVersion = 3
+// v4：新增 relation_candidates 表（P0③ 表关联缓存）+ 边复合索引（P0①）。
+const SchemaVersion = 4
 
 const schema = `
 CREATE TABLE IF NOT EXISTS nodes (
@@ -54,6 +55,10 @@ CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
 CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
 CREATE INDEX IF NOT EXISTS idx_edges_kind ON edges(kind);
 CREATE INDEX IF NOT EXISTS idx_edges_confidence ON edges(confidence) WHERE confidence >= 0.8;
+-- 边复合索引（P0①）：邻接查询（source_id=? 或 target_id=?）按方向各走
+-- 一个索引；kind 等值过滤在索引内完成（覆盖旧单列索引的查询形态）
+CREATE INDEX IF NOT EXISTS idx_edges_source_kind ON edges(source_id, kind);
+CREATE INDEX IF NOT EXISTS idx_edges_target_kind ON edges(target_id, kind);
 
 CREATE TABLE IF NOT EXISTS build_metadata (
     build_id TEXT PRIMARY KEY,
@@ -62,6 +67,8 @@ CREATE TABLE IF NOT EXISTS build_metadata (
     status TEXT,              -- 'success', 'degraded', 'failed'
     duration_ms INTEGER,
     error_message TEXT,
+    nodes_count INTEGER,      -- 构建产物规模（--memory auto 判断缓存，P0④）
+    edges_count INTEGER,
     timestamp INTEGER DEFAULT (strftime('%s', 'now'))
 );
 CREATE INDEX IF NOT EXISTS idx_build_commit ON build_metadata(commit_sha);
@@ -96,6 +103,21 @@ CREATE INDEX IF NOT EXISTS idx_summary_origins_func ON summary_origins(function_
 -- 表达式索引：field_access 定位（S2/S3 起点），字段追溯，field_trace.md §5.2
 CREATE INDEX IF NOT EXISTS idx_nodes_field_path ON nodes(json_extract(properties, '$.full_path'));
 CREATE INDEX IF NOT EXISTS idx_nodes_func_id ON nodes(json_extract(properties, '$.func_id'));
+
+-- 表关联候选缓存（P0③）：relations 结果按 build_id 持久化（--all 全量
+-- 重建 / 单表查询命中直接返回）；from_col='' 为 marker 行（标记"该表已
+-- 计算过、无关联"），避免无关联表每次查询重算
+CREATE TABLE IF NOT EXISTS relation_candidates (
+    build_id TEXT NOT NULL,
+    from_table TEXT NOT NULL,
+    from_col TEXT NOT NULL,
+    to_table TEXT NOT NULL,
+    to_col TEXT NOT NULL,
+    hops INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    PRIMARY KEY (build_id, from_table, from_col, to_table, to_col)
+);
+CREATE INDEX IF NOT EXISTS idx_relcand_build_from ON relation_candidates(build_id, from_table);
 `
 
 // Open 打开（或创建）仓库根目录下的 .codeintel/codeintel.db，并校验 schema 版本。

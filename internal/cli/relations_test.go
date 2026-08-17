@@ -64,8 +64,9 @@ func TestQueryRelationsAll(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &rels); err != nil {
 		t.Fatalf("relations --all JSON: %v\n%s", err, out)
 	}
-	if len(rels) != 2 {
-		t.Fatalf("rels = %d 条, want 2（正向 query + 反向 read）: %s", len(rels), out)
+	// P0④ 默认只输出 query+write——反向 read 关联被隐藏
+	if len(rels) != 1 {
+		t.Fatalf("rels = %d 条, want 1（默认过滤 read，仅正向 query）: %s", len(rels), out)
 	}
 	fwd := rels[0]
 	if fwd["from_table"] != "table_a" || fwd["to_table"] != "table_b" ||
@@ -74,6 +75,18 @@ func TestQueryRelationsAll(t *testing.T) {
 	}
 	if fwd["type"] != "query" {
 		t.Errorf("fwd type = %v, want query", fwd["type"])
+	}
+	// --type read：反向 read 关联（table_b.a_id → table_a.id）显式展开
+	out = captureStdout(func() {
+		if code := cmdQuery([]string{"relations", "--all", "--repo", dir, "--json", "--type", "read"}); code != 0 {
+			t.Errorf("relations --all --type read exit = %d", code)
+		}
+	})
+	if err := json.Unmarshal([]byte(out), &rels); err != nil {
+		t.Fatalf("relations --all --type read JSON: %v", err)
+	}
+	if len(rels) != 1 || rels[0]["from_table"] != "table_b" || rels[0]["type"] != "read" {
+		t.Fatalf("--type read = %v, want table_b.a_id → table_a.id (read)", rels)
 	}
 }
 
@@ -85,7 +98,7 @@ func TestQueryRelationsAllText(t *testing.T) {
 			t.Errorf("relations --all exit = %d", code)
 		}
 	})
-	for _, want := range []string{"table_a", "table_b", "查询关联", "2 条"} {
+	for _, want := range []string{"table_a", "table_b", "查询关联", "1 条"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("relations --all text missing %q:\n%s", want, out)
 		}
@@ -380,5 +393,97 @@ func TestTraceBackwardIndirectCLI(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("--follow-indirect 输出缺 %q:\n%s", want, out)
 		}
+	}
+}
+
+// TestQueryRelationsFilters：--type/--max-hops/--max-results 过滤与默认
+// 行为（P0④）——默认只输出 query+write（read 低置信隐藏），--type read
+// 显式展开，--memory sql 走逐节点 SQL 路径结果一致。
+func TestQueryRelationsFilters(t *testing.T) {
+	dir := seedTableRelations(t)
+	// 追加一条 read 关联（table_a.id → table_c.z）
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	r := sqlite.NewRepo(db)
+	funcID := domain.CanonicalID("symbol:go:example.com/m:find")
+	if _, err := r.SaveBatchStats([]*domain.CodeEntity{
+		{ID: funcID + "#ext.sql.table_c.z.read@20", Kind: domain.KindFieldAccess,
+			Name: "table_c.z", FilePath: "a.go", LineStart: 20,
+			Properties: map[string]any{"full_path": "table_c.z", "access_kind": "read",
+				"type_string": "sql", "is_external": "true", "func_id": string(funcID)}},
+	}, []*domain.Fact{
+		{SourceID: funcID + "#ext.sql.table_a.id.read@6", TargetID: funcID + "#ext.sql.table_c.z.read@20",
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+	}, nil); err != nil {
+		t.Fatalf("save read rel: %v", err)
+	}
+
+	// 默认：query 关联可见（table_b），read 关联（table_c）隐藏
+	out := captureStdout(func() {
+		if code := cmdQuery([]string{"relations", "table_a", "--repo", dir, "--json"}); code != 0 {
+			t.Errorf("relations exit = %d", code)
+		}
+	})
+	var rels []*domain.TableRelation
+	if err := json.Unmarshal([]byte(out), &rels); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if len(rels) != 1 || rels[0].ToTable != "table_b" {
+		t.Fatalf("默认输出 = %+v, want 仅 table_b（read 隐藏）", rels)
+	}
+
+	// --type read：展开 read 关联
+	out = captureStdout(func() {
+		if code := cmdQuery([]string{"relations", "table_a", "--repo", dir, "--json", "--type", "read"}); code != 0 {
+			t.Errorf("relations --type read exit = %d", code)
+		}
+	})
+	if err := json.Unmarshal([]byte(out), &rels); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if len(rels) != 1 || rels[0].ToTable != "table_c" {
+		t.Fatalf("--type read = %+v, want table_c", rels)
+	}
+
+	// --type query,write 等价默认
+	out = captureStdout(func() {
+		if code := cmdQuery([]string{"relations", "table_a", "--repo", dir, "--json", "--type=query,write"}); code != 0 {
+			t.Errorf("--type=query,write exit = %d", code)
+		}
+	})
+	if err := json.Unmarshal([]byte(out), &rels); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if len(rels) != 1 || rels[0].ToTable != "table_b" {
+		t.Fatalf("--type=query,write = %+v, want table_b", rels)
+	}
+
+	// --max-hops 1：query 链 3 跳被过滤 → 空
+	out = captureStdout(func() {
+		if code := cmdQuery([]string{"relations", "table_a", "--repo", dir, "--json", "--max-hops", "1"}); code != 0 {
+			t.Errorf("--max-hops exit = %d", code)
+		}
+	})
+	if err := json.Unmarshal([]byte(out), &rels); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if len(rels) != 0 {
+		t.Fatalf("--max-hops 1 = %+v, want 空", rels)
+	}
+
+	// --memory sql：SQL 路径结果一致（query 关联）
+	out = captureStdout(func() {
+		if code := cmdQuery([]string{"relations", "table_a", "--repo", dir, "--json", "--memory", "sql"}); code != 0 {
+			t.Errorf("--memory sql exit = %d", code)
+		}
+	})
+	if err := json.Unmarshal([]byte(out), &rels); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if len(rels) != 1 || rels[0].ToTable != "table_b" {
+		t.Fatalf("--memory sql = %+v, want table_b", rels)
 	}
 }

@@ -49,8 +49,8 @@ codeintel version
 | `unused` | 未调用函数与孤立链分析（死代码/流程衔接检查） | `--since <ref>`、`--fail-on unused\|isolated` |
 | `path <from> <to>` | 节点间最短路径（数据流/调用断言） | `--kind data\|calls`、`--max-depth N` 默认 50 |
 | `table <表名>` | 表级数据流聚合：列虚拟节点 + 写入方函数与行号（Q97 字符串 SQL + GORM 结构体写路径） | 从数据库表反推数据流；`--json` 结构化 |
-| `relations <表名>` | 表间关联推断：本表列的值沿数据流链流入其他表列（A.x 读出 → B.y 过滤，无外键依赖）；类型分级 query（键关联）/write（同源）/read（间接） | `--json`、`--format mermaid`（列级图，query 粗线） |
-| `relations --all` | 全库关联单次聚合（Q160）：遍历全部表合并去重（同列对取 hops 最小 + type 最高），AGENT 一次调用拿全库键关联 | 无需表名；`--json` 数组；全库 read/write 量大（4 万+），AGENT 按 type 过滤取 query；go2o 实测 2.5 分钟 |
+| `relations <表名>` | 表间关联推断：本表列的值沿数据流链流入其他表列（A.x 读出 → B.y 过滤，无外键依赖）；类型分级 query（键关联）/write（同源）/read（间接） | `--json`、`--format mermaid`（列级图，query 粗线）；P0④：`--type query\|write\|read`（默认 query+write，read 需显式展开）、`--max-hops N`、`--max-results N`、`--memory full\|sql`（auto 按规模，>50 万节点自动逐节点 SQL 防爆内存） |
+| `relations --all` | 全库关联单次聚合（Q160）：一次加载内存图 BFS 全部表合并去重（同列对取 hops 最小 + type 最高），AGENT 一次调用拿全库键关联 | 无需表名；`--json` 数组；过滤参数同单表；结果按 build_id 缓存（relation_candidates，增量 update 后自动失效）；go2o 实测 4.8s |
 
 - **执行约定：查询命令默认加 `--json`**——所有 query 子命令默认附加 `--json` 取结构化输出（AGENT 可直接解析字段/断言 reachable）；仅当结果要直接展示给人看（表格/树形）时才省略。`--compact` 去缩进可与 `--json` 叠加
 - **`--since <ref>`**（unused/symbol/fields/callers/callees/impact）：基于 `git diff <ref>` 对本次新增/修改的函数标注 `[new]`/`[mod]`——需求写完检查"本次改动的函数是否接线"
