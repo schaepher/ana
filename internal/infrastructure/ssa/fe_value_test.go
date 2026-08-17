@@ -92,3 +92,47 @@ func g(b bool) {
 		return
 	}
 }
+
+// TestTempValueNestedNoMismatch：Q193——嵌套表达式误配回归。
+// err := outer(inner())：inner() 的返回值（内层，经 argument 边发射）
+// 不得恢复为 err（err 是 outer 的结果）——保持寄存器名；outer() 的
+// 返回值（顶层 RHS）恢复为 err。
+func TestTempValueNestedNoMismatch(t *testing.T) {
+	nodes, _ := indexFixture(t, map[string]string{
+		"go.mod": moduleGoMod,
+		"main.go": `package m
+
+type T struct {
+	A int
+}
+
+func inner() *T { return &T{} }
+
+func outer(y *T) *T { return y }
+
+func callNested() {
+	err := outer(inner())
+	_ = err.A
+}
+`,
+	})
+	funcID := "symbol:go:example.com/mtest:callNested"
+	names := map[string]bool{}
+	for _, n := range nodes {
+		if n.Kind != domain.KindSSAValue || n.Property("func_id") != funcID {
+			continue
+		}
+		names[n.Name] = true
+	}
+	// 顶层 RHS（outer 调用）恢复为 err
+	if !names["err"] {
+		t.Errorf("顶层调用应恢复为 err，got %v", names)
+	}
+	// 内层调用（inner，#t0）不得误配为 err——保持寄存器名
+	// （按节点 ID 精确断言，避免 alias 双发射的 #t1|t1 干扰）
+	for _, n := range nodes {
+		if n.ID == "symbol:go:example.com/mtest:callNested#t0" && n.Name == "err" {
+			t.Errorf("内层嵌套值 #t0 误配为 err（应为寄存器名 t0）")
+		}
+	}
+}

@@ -141,14 +141,22 @@ func (ext *fieldExtractor) instancePathDepth(v ssa.Value, depth int) string {
 // recoverVarName 临时寄存器（tN）→ 源码变量名：lifting 后变量提升为
 // 寄存器、变量名在 IR 中丢失；tN 的 Pos 精确指向其定义表达式
 // （u := f() 的 f()），assignTargets 区间匹配 RHS → 目标变量 u。
+// Q193：仅当 tN 的 Pos == RHS 起始（非调用表达式）或 == RHS 直接调用的
+// '(' 位置（go/ssa 的 Call.Pos 语义）才恢复——嵌套子表达式
+// （err := g(f()) 中的 f()）的 Pos 不匹配，不恢复，避免误配外层目标 err
+// （此前区间匹配曾把 db.DB() 的返回值误配为外层 err 变量）。
 // 非临时名 / 无 Pos（phi、合成值）→ 原样返回。
 func (ext *fieldExtractor) recoverVarName(v ssa.Value) string {
 	name := v.Name()
 	if !isSSAName(name) {
 		return name
 	}
-	if orig := ext.lookupAssignTarget(v.Pos()); orig != "" && !isSSAName(orig) {
-		return orig
+	orig, start, callPos := ext.lookupAssignTargetStart(v.Pos())
+	if orig != "" && !isSSAName(orig) {
+		p := v.Pos()
+		if p == start || (callPos != 0 && p == callPos) {
+			return orig
+		}
 	}
 	return name
 }

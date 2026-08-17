@@ -15,13 +15,21 @@ import (
 // 切片按 start 排序：二分找最后一个 start <= pos 的区间，检查 end 覆盖。
 // 嵌套赋值（f(x := 1)）内层 start 更大，二分自然命中内层区间。
 func (ext *fieldExtractor) lookupAssignTarget(pos token.Pos) string {
+	name, _, _ := ext.lookupAssignTargetStart(pos)
+	return name
+}
+
+// lookupAssignTargetStart 同 lookupAssignTarget，额外返回命中区间的 start
+// （Q193：Q179 变量名恢复校验"值定义位置 == 赋值 RHS 起始"——嵌套子
+// 表达式（err := g(f()) 中的 f()）不恢复，避免误配外层目标 err）。
+func (ext *fieldExtractor) lookupAssignTargetStart(pos token.Pos) (string, token.Pos, token.Pos) {
 	i := sort.Search(len(ext.assignTargets), func(i int) bool {
 		return ext.assignTargets[i].start > pos
 	}) - 1
 	if i < 0 || pos > ext.assignTargets[i].end {
-		return ""
+		return "", 0, 0
 	}
-	return ext.assignTargets[i].name
+	return ext.assignTargets[i].name, ext.assignTargets[i].start, ext.assignTargets[i].topCallPos
 }
 
 // emitGlobalInit 全局变量初始化溯源（Q98）：遍历模块内全部函数（含隐式

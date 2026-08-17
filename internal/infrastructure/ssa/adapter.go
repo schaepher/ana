@@ -66,6 +66,9 @@ type assignTarget struct {
 	name  string
 	start token.Pos
 	end   token.Pos
+	// Q193：RHS 直接调用（顶层表达式是 CallExpr）的 '(' 位置——go/ssa
+	// 的 Call.Pos 语义（嵌套子调用不记录，其 Pos 无法恢复为变量名）
+	topCallPos token.Pos
 }
 
 // buildAssignTargets 构建 赋值表达式区间 → 目标变量名（Q83：lifting 后

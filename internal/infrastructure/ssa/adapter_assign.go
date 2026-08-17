@@ -27,13 +27,21 @@ func buildAssignTargets(pkgs []*packages.Package, modules []string) []assignTarg
 					for i, rhs := range st.Rhs {
 						name := lhsIdentName(st.Lhs, i)
 						if name != "" {
-							targets = append(targets, assignTarget{name: name, start: rhs.Pos(), end: rhs.End()})
+							t := assignTarget{name: name, start: rhs.Pos(), end: rhs.End()}
+							if ce, ok := rhs.(*ast.CallExpr); ok {
+								t.topCallPos = ce.Lparen
+							}
+							targets = append(targets, t)
 						}
 					}
 				case *ast.ValueSpec:
 					for i, v := range st.Values {
 						if i < len(st.Names) {
-							targets = append(targets, assignTarget{name: st.Names[i].Name, start: v.Pos(), end: v.End()})
+							t := assignTarget{name: st.Names[i].Name, start: v.Pos(), end: v.End()}
+							if ce, ok := v.(*ast.CallExpr); ok {
+								t.topCallPos = ce.Lparen
+							}
+							targets = append(targets, t)
 						}
 					}
 				}
