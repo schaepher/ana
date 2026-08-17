@@ -9,7 +9,7 @@ import (
 
 func TestFieldReadWrite(t *testing.T) {
 	nodes, facts := indexFixture(t, map[string]string{
-		"go.mod":	moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 type T struct {
@@ -74,7 +74,7 @@ func f(x *T, v int) int {
 func TestFieldCompoundReadWrite(t *testing.T) {
 
 	nodes, _ := indexFixture(t, map[string]string{
-		"go.mod":	moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 type T struct {
@@ -99,7 +99,7 @@ func g(x *T) {
 func TestFieldNested(t *testing.T) {
 
 	nodes, _ := indexFixture(t, map[string]string{
-		"go.mod":	moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 type Inner struct {
@@ -128,7 +128,7 @@ func n(o *Outer) {
 func TestFieldEmbedded(t *testing.T) {
 
 	nodes, _ := indexFixture(t, map[string]string{
-		"go.mod":	moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 type Emb struct {
@@ -154,7 +154,7 @@ func e(o *O2) {
 func TestFieldGlobal(t *testing.T) {
 
 	nodes, _ := indexFixture(t, map[string]string{
-		"go.mod":	moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 type T struct {

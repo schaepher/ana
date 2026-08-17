@@ -1,24 +1,19 @@
 package ssa
 
-import (
-	"testing"
+import "testing"
 
-	"github.com/schaepher/codeintel/internal/domain"
-)
-
-// TestORMChainUpdateColumnName：⑦ 链式 ORM——Model(&X{主键}).Where(...)
-// .Update("col", v) 字符串列名形态：表名溯源链式 Model 范围对象，
-// 列名取字符串实参（此前仅结构体实参可映射，该形态零节点）。
-// Model 本身非写操作不配 orm_write——范围对象经 receiver 定义链解析。
-func TestORMChainUpdateColumnName(t *testing.T) {
-	nodes, facts, _ := indexFixtureFull(t, map[string]string{
-		"go.mod": moduleGoMod,
+// TestORMChainDAOSelfContained：⑦ 链式 ORM 自包含用例——自定义 DAO 封装
+// （Model(&X{主键}).Where(...).Update("col", v)）经 field-summary.yaml 的
+// orm_write 条目映射为 表.列 虚拟节点（不依赖真实 gorm 模块）。
+func TestORMChainDAOSelfContained(t *testing.T) {
+	repo := indexFixtureRepo(t, map[string]string{
 		"field-summary.yaml": `summaries:
   - func: example.com/mtest.(DB).Update
     orm_write: true
     param_index: 1
 `,
-		"main.go": `package m
+		"go.mod": "module example.com/mtest\n\ngo 1.21\n",
+		"main.go": `package dao
 
 type DB struct{}
 
@@ -33,180 +28,195 @@ func (d *DB) Where(q string, v any) *DB { return d }
 
 func (d *DB) Update(col string, v any) {}
 
-func f(db *DB) {
-	db.Model(&Session{ID: "s1"}).Where("status = ?", "x").Update("status", "done")
+// 自定义 DAO 封装：带条件的会话更新（仅含主键的范围对象 + 字符串列名）
+func UpdateStatus(db *DB, id, status string) {
+	db.Model(&Session{ID: id}).Where("id = ?", id).Update("status", status)
 }
+
+func main() {}
 `,
 	})
-	funcID := "symbol:go:example.com/mtest:f"
-	// 表名溯源 Model(&Session{}) → session，列名取字符串实参 → status
-	var vCol *domain.CodeEntity
-	for _, n := range nodes {
-		if n.Kind == domain.KindFieldAccess && n.Property("func_id") == funcID &&
-			n.Property("type_string") == "gorm" && n.Name == "session.status" {
-			vCol = n
-		}
+	funcID := "symbol:go:example.com/mtest:UpdateStatus"
+	rows, err := repo.Query(`SELECT id, name FROM nodes WHERE kind='field_access'
+			AND json_extract(properties, '$.func_id') = ?
+			AND json_extract(properties, '$.type_string') = 'gorm'`, funcID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if vCol == nil {
-		t.Fatalf("链式 Update 未生成 session.status 虚拟节点: %+v", nodes)
-	}
-	if vCol.Property("access_kind") != "write" {
-		t.Errorf("access = %q, want write", vCol.Property("access_kind"))
-	}
-
+	defer rows.Close()
 	found := false
-	for _, f := range facts {
-		if f.Kind == domain.FactSummaryIO && string(f.TargetID) == string(vCol.ID) {
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			t.Fatal(err)
+		}
+		if name == "session.status" {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("链式 Update 缺 summary_io 边（值 → session.status）")
-	}
-
-	for _, n := range nodes {
-		if n.Kind == domain.KindFieldAccess && n.Property("func_id") == funcID &&
-			n.Property("type_string") == "gorm" && n.Name != "session.status" {
-			t.Errorf("Model 范围对象不应产生表.列节点: %s", n.Name)
-		}
+		t.Error("DAO 链式 Update 未生成 session.status 表.列 虚拟节点")
 	}
 }
 
-// TestORMWhereFilter：GORM Where("session_id = ?", v) 字符串列名形态——
-// 列名剥离 " = ?" 后缀产 filter 虚拟节点（表关联键：值 → 过滤列）。
-// 用本地模拟 DB 类型（链式 Model/Where/Count，同 gorm 形态）。
-func TestORMWhereFilter(t *testing.T) {
-	nodes, facts, _ := indexFixtureFull(t, map[string]string{
-		"go.mod": moduleGoMod,
+// TestORMChainFormsSelfContained：⑪ ORM 链式形态覆盖——结构体 Updates
+// 链式（Model().Where().Updates(&Y{})）与无 Model 的字符串列名 Update
+// （Where().Update("col", v)——表名无法溯源时跳过而非报错）。
+func TestORMChainFormsSelfContained(t *testing.T) {
+	repo := indexFixtureRepo(t, map[string]string{
 		"field-summary.yaml": `summaries:
-  - func: example.com/mtest.(DB).Where
+  - func: example.com/mtest.(DB).Update
+    orm_write: true
+    param_index: 1
+  - func: example.com/mtest.(DB).Updates
     orm_write: true
     param_index: 1
 `,
-		"main.go": `package m
+		"go.mod": "module example.com/mtest\n\ngo 1.21\n",
+		"main.go": `package ormf
 
 type DB struct{}
 
-func (db *DB) Model(v any) *DB { return db }
-
-func (db *DB) Where(cond string, args ...any) *DB { return db }
-
-func (db *DB) Count(c *int64) {}
-
-type ChatMessage struct {
-	SessionID string
-	Content   string
-}
-
 type Session struct {
-	ID string
+	ID     string
+	Status string
 }
 
-func countBySession(db *DB, s *Session) int {
-	var count int64
-	db.Model(&ChatMessage{}).Where("session_id = ?", s.ID).Count(&count)
-	return int(count)
+func (d *DB) Model(v any) *DB { return d }
+
+func (d *DB) Where(q string, v any) *DB { return d }
+
+func (d *DB) Update(col string, v any) {}
+
+func (d *DB) Updates(v any) {}
+
+// 结构体 Updates 链式：Model(范围对象).Where(条件).Updates(结构体)
+func UpdateAll(db *DB, id, status string) {
+	db.Model(&Session{ID: id}).Where("id = ?", id).Updates(&Session{Status: status})
 }
+
+// 无 Model 的字符串列名 Update：receiver 链无结构体实参 → 表名不可推导，
+// 应安全跳过（不产节点、不报错）
+func UpdateRaw(db *DB, id, status string) {
+	db.Where("id = ?", id).Update("status", status)
+}
+
+func main() {}
 `,
 	})
-	funcID := "symbol:go:example.com/mtest:countBySession"
-	vnode := findVirtualNode(t, nodes, funcID, "chat_message.session_id")
-	if vnode.Property("access_kind") != "filter" {
-		t.Errorf("chat_message.session_id access_kind = %q, want filter（Where 过滤列）", vnode.Property("access_kind"))
+	rows, err := repo.Query(`SELECT name FROM nodes WHERE kind='field_access'
+			AND json_extract(properties, '$.func_id') = 'symbol:go:example.com/mtest:UpdateAll'
+			AND json_extract(properties, '$.type_string') = 'gorm'`)
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	found := false
-	for _, f := range facts {
-		if f.Kind == domain.FactSummaryIO && string(f.TargetID) == string(vnode.ID) {
-			found = true
+	defer rows.Close()
+	names := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
 		}
+		names[name] = true
 	}
-	if !found {
-		t.Error("Where 值 → filter 节点边缺失（表关联键链断点）")
+	if !names["session.status"] {
+		t.Errorf("Updates 结构体链式未生成 session.status: %v", names)
+	}
+	rows2, err := repo.Query(`SELECT count(*) FROM nodes WHERE kind='field_access'
+			AND json_extract(properties, '$.func_id') = 'symbol:go:example.com/mtest:UpdateRaw'
+			AND json_extract(properties, '$.type_string') = 'gorm'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if rows2.Next() {
+		_ = rows2.Scan(&n)
+	}
+	rows2.Close()
+	if n != 0 {
+		t.Errorf("无 Model 的 Update 不应产表.列节点（表名不可推导），got %d", n)
 	}
 }
 
-// TestORMReadFind：GORM 读路径——Find(&sessions) 对象读出产 read
-// 虚拟节点（表.列）+ 边（读出值 → 对象）；读出的 s.ID 作为 Where 实参
-// 时，键关联链贯通（session.id.read → ... → chat_message.session_id.filter）。
-func TestORMReadFind(t *testing.T) {
-	nodes, facts, _ := indexFixtureFull(t, map[string]string{
-		"go.mod": moduleGoMod,
+// TestORMUpdateRecordScopeSelfContained：⑪ ORM——session.Where(...)
+// .Update(record, scope) 对象实参形态：record 变量 → 表.列 节点 +
+// 对象兜底持久化边（summary_io）。
+func TestORMUpdateRecordScopeSelfContained(t *testing.T) {
+	repo := indexFixtureRepo(t, map[string]string{
 		"field-summary.yaml": `summaries:
-  - func: example.com/mtest.(DB).Find
-    orm_read: true
-    param_index: 1
-  - func: example.com/mtest.(DB).Where
+  - func: example.com/mtest.(Session).Update
     orm_write: true
     param_index: 1
-  - func: example.com/mtest.(DB).Count
-    orm_read: true
-    param_index: 1
 `,
-		"main.go": `package m
+		"go.mod": "module example.com/mtest\n\ngo 1.21\n",
+		"main.go": `package orms
 
-type DB struct{}
+type Session struct{}
 
-func (db *DB) Model(v any) *DB { return db }
-
-func (db *DB) Find(out any) *DB { return db }
-
-func (db *DB) Where(cond string, args ...any) *DB { return db }
-
-func (db *DB) Count(c *int64) {}
-
-type Session struct {
-	ID    string
-	Title string
+type Record struct {
+	FinalFee float64
 }
 
-type ChatMessage struct {
-	SessionID string
+func (s *Session) Where(q string, v any) *Session { return s }
+
+func (s *Session) Update(record *Record, scope any) {}
+
+// DAO：带条件的会话更新（对象实参 + 附加条件参数）
+func UpdateFee(s *Session, record *Record) {
+	s.Where("state = ?", "active").Update(record, nil)
 }
 
-func list(db *DB) int {
-	var sessions []Session
-	db.Find(&sessions)
-	count := 0
-	for _, s := range sessions {
-		var n int64
-		db.Model(&ChatMessage{}).Where("session_id = ?", s.ID).Count(&n)
-		count += int(n)
-	}
-	return count
-}
+func main() {}
 `,
 	})
-	funcID := "symbol:go:example.com/mtest:list"
-
-	idNode := findVirtualNode(t, nodes, funcID, "session.id")
-	if idNode.Property("access_kind") != "read" {
-		t.Errorf("session.id access_kind = %q, want read（Find 读出）", idNode.Property("access_kind"))
+	funcID := "symbol:go:example.com/mtest:UpdateFee"
+	rows, err := repo.Query(`SELECT id, name FROM nodes WHERE kind='field_access'
+			AND json_extract(properties, '$.func_id') = ? AND json_extract(properties, '$.type_string') = 'gorm'`, funcID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	findVirtualNode(t, nodes, funcID, "session.title")
+	defer rows.Close()
+	names := map[string]bool{}
+	ids := map[string]bool{}
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			t.Fatal(err)
+		}
+		names[name] = true
+		ids[id] = true
+	}
+	if !names["record.final_fee"] {
+		t.Errorf("Update(record, scope) 未生成 record.final_fee 表.列 节点: %v", names)
+	}
+	rows2, err := repo.Query(`SELECT count(*) FROM edges WHERE kind = 'summary_io' AND target_id = ?`,
+		funcID+"#ext.gorm.record.final_fee.write@0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if rows2.Next() {
+		_ = rows2.Scan(&n)
+	}
+	rows2.Close()
+	if n == 0 {
 
-	found := false
-	for _, f := range facts {
-		if f.Kind == domain.FactSummaryIO && string(f.SourceID) == string(idNode.ID) {
-			found = true
+		for id := range ids {
+			var cnt int
+			rows3, err := repo.Query(`SELECT count(*) FROM edges WHERE kind='summary_io' AND target_id = ?`, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rows3.Next() {
+				_ = rows3.Scan(&cnt)
+			}
+			rows3.Close()
+			if cnt > 0 {
+				n = cnt
+			}
 		}
 	}
-	if !found {
-		t.Error("Find 读边缺失（read 节点 → 对象值）")
-	}
-
-	filterNode := findVirtualNode(t, nodes, funcID, "chat_message.session_id")
-	if filterNode.Property("access_kind") != "filter" {
-		t.Errorf("chat_message.session_id access_kind = %q, want filter", filterNode.Property("access_kind"))
-	}
-
-	through := false
-	for _, f := range facts {
-		if f.Kind == domain.FactSummaryIO && string(f.TargetID) == string(filterNode.ID) {
-			through = true
-		}
-	}
-	if !through {
-		t.Error("s.ID → chat_message.session_id.filter 边缺失（键关联链断）")
+	if n == 0 {
+		t.Error("Update(record, scope) 缺 summary_io 持久化边（对象值 → 表.列 节点）")
 	}
 }

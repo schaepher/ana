@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/schaepher/codeintel/internal/domain"
+	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -254,4 +255,45 @@ func loadTestPackages(dir string) ([]*packages.Package, error) {
 		return nil, err
 	}
 	return pkgs, nil
+}
+
+// indexFixtureRepo 构建 fixture 索引并落库（SelfContained 系列迁移用）：
+// indexFixtureFull 内存收集 → 临时 SQLite 落库 → 返回仓储。脱离
+// scip/CLI 管道，随 make test 跑。
+func indexFixtureRepo(t *testing.T, files map[string]string) *sqlite.Repo {
+	t.Helper()
+	nodes, facts, summaries := indexFixtureFull(t, files)
+	db, err := sqlite.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	r := sqlite.NewRepo(db)
+	if _, err := r.SaveBatchStats(nodes, facts, summaries); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	return r
+}
+
+// fieldAccessID 查 field_access 节点 ID（instance_path + access_kind）。
+func fieldAccessID(t *testing.T, repo *sqlite.Repo, funcID, instance, access string) string {
+	t.Helper()
+	rows, err := repo.Query(`SELECT id FROM nodes
+		WHERE kind = 'field_access'
+		  AND json_extract(properties, '$.func_id') = ?
+		  AND json_extract(properties, '$.instance_path') = ?
+		  AND json_extract(properties, '$.access_kind') = ?
+		LIMIT 1`, funcID, instance, access)
+	if err != nil {
+		t.Fatalf("fieldAccessID: %v", err)
+	}
+	defer rows.Close()
+	var id string
+	if rows.Next() {
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan fieldAccessID: %v", err)
+		}
+		return id
+	}
+	return ""
 }
