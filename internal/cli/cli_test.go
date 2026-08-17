@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -15,19 +14,6 @@ import (
 )
 
 // captureStdout 捕获 stdout 输出（CLI 结果断言用）。
-func captureStdout(f func()) string {
-	old := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-	f()
-	w.Close()
-	os.Stdout = old
-	var buf strings.Builder
-	if _, err := io.Copy(&buf, r); err != nil {
-		return ""
-	}
-	return buf.String()
-}
 
 func TestMainDispatch(t *testing.T) {
 	ctx := context.Background()
@@ -68,121 +54,8 @@ func TestClean(t *testing.T) {
 }
 
 // seedRepo 建临时仓库 + 预填一个小图（query 的 resolveRepo 要求 go.mod）。
-func seedRepo(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/m\n\ngo 1.21\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	db, err := sqlite.Open(dir)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer db.Close()
-	r := sqlite.NewRepo(db)
-	nodes := []*domain.CodeEntity{
-		{ID: "symbol:go:example.com/m:main", Kind: domain.KindFunction, Name: "main", FilePath: "main.go"},
-		{ID: "symbol:go:example.com/m/svc:(Svc).Run", Kind: domain.KindMethod, Name: "(Svc).Run", FilePath: "svc/svc.go"},
-	}
-	if _, err := r.SaveBatchStats(nodes, nil, nil); err != nil {
-		t.Fatalf("save nodes: %v", err)
-	}
-	if _, err := r.SaveBatchStats(nil, []*domain.Fact{{
-		SourceID: "symbol:go:example.com/m:main", TargetID: "symbol:go:example.com/m/svc:(Svc).Run",
-		Kind: domain.FactCalls, Confidence: 0.9,
-	}}, nil); err != nil {
-		t.Fatalf("save edge: %v", err)
-	}
-	return dir
-}
-
-func TestQuerySymbol(t *testing.T) {
-	dir := seedRepo(t)
-	if code := cmdQuery([]string{"symbol", "main", "--repo", dir}); code != 0 {
-		t.Errorf("query symbol main = %d, want 0", code)
-	}
-	// 未知符号 → 非 0
-	if code := cmdQuery([]string{"symbol", "nope_nope", "--repo", dir}); code == 0 {
-		t.Error("query unknown symbol should fail")
-	}
-}
-
-func TestQueryCalleesCallers(t *testing.T) {
-	dir := seedRepo(t)
-	if code := cmdQuery([]string{"callees", "main", "--repo", dir}); code != 0 {
-		t.Errorf("query callees = %d, want 0", code)
-	}
-	if code := cmdQuery([]string{"callers", "symbol:go:example.com/m/svc:(Svc).Run", "--repo", dir}); code != 0 {
-		t.Errorf("query callers = %d, want 0", code)
-	}
-	// 缺符号参数 → 2
-	if code := cmdQuery([]string{"callees"}); code != 2 {
-		t.Errorf("callees without symbol = %d, want 2", code)
-	}
-	// 无子命令 → 2
-	if code := cmdQuery([]string{}); code != 2 {
-		t.Errorf("query without subcommand = %d, want 2", code)
-	}
-}
-
-func TestQueryNoRepo(t *testing.T) {
-	// 不存在的 repo 目录 → 1
-	if code := cmdQuery([]string{"symbol", "main", "--repo", filepath.Join(t.TempDir(), "nope")}); code != 1 {
-		t.Errorf("query with bad repo = %d, want 1", code)
-	}
-}
 
 // seedFieldTrace 预填字段追溯数据：函数节点 + 摘要行 + field_access/ssa_value 图。
-func seedFieldTrace(t *testing.T) string {
-	t.Helper()
-	dir := seedRepo(t)
-	db, err := sqlite.Open(dir)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer db.Close()
-	r := sqlite.NewRepo(db)
-	funcID := "symbol:go:example.com/m:main"
-	// 摘要行
-	r.SaveBatchStats(nil, nil, []*domain.FunctionFieldSummary{
-		{FunctionID: domain.CanonicalID(funcID), AccessKind: domain.SummaryDirectWrite,
-			FieldPath: "example.com/m.T.A", InstancePath: "t.A", LineStart: 5, CodeSnippet: "t.A = v"},
-		{FunctionID: domain.CanonicalID(funcID), AccessKind: domain.SummaryDirectRead,
-			FieldPath: "example.com/m.T.A", InstancePath: "t.A", LineStart: 7, CodeSnippet: "return t.A"},
-	})
-	// 追溯图：value → 写节点（data_flows_to）；读节点 → result
-	writeNode := &domain.CodeEntity{ID: domain.CanonicalID(funcID + "#t.A.write@5"),
-		Kind: domain.KindFieldAccess, Name: "t.A", FilePath: "main.go", LineStart: 5,
-		Properties: map[string]any{"full_path": "example.com/m.T.A", "instance_path": "t.A",
-			"access_kind": "write", "func_id": funcID}}
-	readNode := &domain.CodeEntity{ID: domain.CanonicalID(funcID + "#t.A.read@7"),
-		Kind: domain.KindFieldAccess, Name: "t.A", FilePath: "main.go", LineStart: 7,
-		Properties: map[string]any{"full_path": "example.com/m.T.A", "instance_path": "t.A",
-			"access_kind": "read", "func_id": funcID}}
-	val := &domain.CodeEntity{ID: domain.CanonicalID(funcID + "#t0"), Kind: domain.KindSSAValue,
-		Name: "t0", Properties: map[string]any{"func_id": funcID}}
-	result := &domain.CodeEntity{ID: domain.CanonicalID(funcID + "#t1"), Kind: domain.KindSSAValue,
-		Name: "t1", Properties: map[string]any{"func_id": funcID}}
-	r.SaveBatchStats([]*domain.CodeEntity{writeNode, readNode, val, result}, []*domain.Fact{
-		{SourceID: val.ID, TargetID: writeNode.ID, Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
-		{SourceID: readNode.ID, TargetID: result.ID, Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
-	}, nil)
-	return dir
-}
-
-func TestQueryFields(t *testing.T) {
-	dir := seedFieldTrace(t)
-	out := captureStdout(func() {
-		if code := cmdQuery([]string{"fields", "main", "--repo", dir}); code != 0 {
-			t.Errorf("query fields exit = %d", code)
-		}
-	})
-	for _, want := range []string{"[direct_read]", "[direct_write]", "example.com/m.T.A", "t.A = v"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("query fields output missing %q:\n%s", want, out)
-		}
-	}
-}
 
 // TestValueTracePersist：value-trace 经过 SQL 持久化虚拟节点
 // （Q97：字段 → 表.列 映射可见）。
@@ -216,83 +89,9 @@ func TestValueTracePersist(t *testing.T) {
 
 // TestQuerySymbolCandidates：接口类型 symbol 详情展示候选实现
 // （Q95：candidates + 置信度 + 注册点）。
-func TestQuerySymbolCandidates(t *testing.T) {
-	dir := seedRepo(t)
-	db, err := sqlite.Open(dir)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer db.Close()
-	r := sqlite.NewRepo(db)
-	// 接口类型节点 + dispatch_to 边（注册点 0.9；target 须为已存在节点）
-	ifaceID := "symbol:go:example.com/m/svc:Handler"
-	implID := "symbol:go:example.com/m/svc:(Svc).Run"
-	r.SaveBatchStats([]*domain.CodeEntity{
-		{ID: domain.CanonicalID(ifaceID), Kind: domain.KindInterface, Name: "Handler", FilePath: "svc/svc.go", LineStart: 3},
-	}, []*domain.Fact{{
-		SourceID: domain.CanonicalID(ifaceID), TargetID: domain.CanonicalID(implID),
-		Kind: domain.FactDispatchTo, ToolSource: domain.ToolSSA, Confidence: 0.9,
-		Metadata: map[string]any{"origin": "register", "interface_method": "Handle",
-			"register_site": float64(5), "confidence": 0.9},
-	}}, nil)
-
-	out := captureStdout(func() {
-		if code := cmdQuery([]string{"symbol", ifaceID, "--repo", dir}); code != 0 {
-			t.Errorf("query symbol iface exit = %d", code)
-		}
-	})
-	for _, want := range []string{"候选实现", "(Svc).Run", "0.9"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("symbol 候选实现输出缺 %q:\n%s", want, out)
-		}
-	}
-	// --json：candidates 数组
-	out = captureStdout(func() {
-		if code := cmdQuery([]string{"symbol", ifaceID, "--repo", dir, "--json"}); code != 0 {
-			t.Errorf("query symbol iface --json exit = %d", code)
-		}
-	})
-	if !strings.Contains(out, `"candidates"`) {
-		t.Errorf("symbol --json 应含 candidates:\n%s", out)
-	}
-}
 
 // TestQueryFieldsCallSite：indirect_write 摘要展示调用点（Q90 调用点级回连）：
 // INDIRECT_WRITE 边 metadata 的调用点行号与实参变量名出现在 fields 输出。
-func TestQueryFieldsCallSite(t *testing.T) {
-	dir := seedFieldTrace(t)
-	db, err := sqlite.Open(dir)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer db.Close()
-	r := sqlite.NewRepo(db)
-	// 追加间接写摘要行 + INDIRECT_WRITE 边（metadata 携带调用点；
-	// target 须为已存在节点，否则 FK 跳过）
-	funcID := "symbol:go:example.com/m:main"
-	calleeID := "symbol:go:example.com/m/svc:(Svc).Run"
-	r.SaveBatchStats(nil, nil, []*domain.FunctionFieldSummary{
-		{FunctionID: domain.CanonicalID(funcID), AccessKind: domain.SummaryIndirectWrite,
-			FieldPath: "example.com/m.T.A", InstancePath: "t.A", LineStart: 9, CodeSnippet: "t.A = v"},
-	})
-	if _, err := r.SaveBatchStats(nil, []*domain.Fact{{
-		SourceID: domain.CanonicalID(funcID), TargetID: domain.CanonicalID(calleeID),
-		Kind: domain.FactIndirectWrite, ToolSource: domain.ToolSSA, Confidence: 1,
-		Metadata: map[string]any{"call_line": float64(16), "call_args": "t"},
-	}}, nil); err != nil {
-		t.Fatalf("save indirect edge: %v", err)
-	}
-	out := captureStdout(func() {
-		if code := cmdQuery([]string{"fields", "main", "--repo", dir}); code != 0 {
-			t.Errorf("query fields exit = %d", code)
-		}
-	})
-	for _, want := range []string{"调用点", "16", "t"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("query fields 输出应含调用点信息 %q:\n%s", want, out)
-		}
-	}
-}
 
 func TestQueryTraceBackward(t *testing.T) {
 	dir := seedFieldTrace(t)
@@ -380,187 +179,22 @@ func TestInitGoWorkReject(t *testing.T) {
 }
 
 // TestQuerySummary：跨层摘要（Q100）——主链提取 + 步骤类型标注。
-func TestQuerySummary(t *testing.T) {
-	dir := seedFieldTrace(t)
-	writeNode := "symbol:go:example.com/m:main#t.A.write@5"
-	out := captureStdout(func() {
-		if code := cmdQuery([]string{"summary", writeNode, "--repo", dir}); code != 0 {
-			t.Errorf("query summary exit = %d", code)
-		}
-	})
-	for _, want := range []string{"生命周期", "t.A", "[write]"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("query summary 输出缺 %q:\n%s", want, out)
-		}
-	}
-	// --json：steps 数组
-	out = captureStdout(func() {
-		if code := cmdQuery([]string{"summary", writeNode, "--repo", dir, "--json"}); code != 0 {
-			t.Errorf("query summary --json exit = %d", code)
-		}
-	})
-	if !strings.Contains(out, `"steps"`) {
-		t.Errorf("summary --json 应含 steps:\n%s", out)
-	}
-	// --format mermaid
-	out = captureStdout(func() {
-		if code := cmdQuery([]string{"summary", writeNode, "--repo", dir, "--format", "mermaid"}); code != 0 {
-			t.Errorf("query summary mermaid exit = %d", code)
-		}
-	})
-	if !strings.Contains(out, "flowchart") {
-		t.Errorf("summary mermaid 应输出 flowchart:\n%s", out)
-	}
-}
 
 // TestQuerySummaryFieldPath：③ 回归——类型限定字段路径（非符号）作为
 // 锚点输入可解析（此前被识别为"不存在的符号"）。
-func TestQuerySummaryFieldPath(t *testing.T) {
-	dir := seedFieldTrace(t)
-	out := captureStdout(func() {
-		if code := cmdQuery([]string{"summary", "example.com/m.T.A", "--repo", dir}); code != 0 {
-			t.Errorf("query summary 字段路径 exit = %d", code)
-		}
-	})
-	if !strings.Contains(out, "生命周期") {
-		t.Errorf("字段路径摘要应输出生命周期链:\n%s", out)
-	}
-	// 未知字段路径 → 报错（非 0）
-	if code := cmdQuery([]string{"summary", "example.com/m.Nope.X", "--repo", dir}); code == 0 {
-		t.Error("未知字段路径应失败")
-	}
-}
 
 // TestVersionNoOTLNoise：④ 回归——version 命令 stdout 不含 OTel JSON。
-func TestVersionNoOTLNoise(t *testing.T) {
-	out := captureStdout(func() {
-		if code := Main(context.Background(), []string{"version"}); code != 0 {
-			t.Errorf("version exit = %d", code)
-		}
-	})
-	if strings.Contains(out, `"Name": "codeintel.main"`) || strings.Contains(out, "SpanContext") {
-		t.Errorf("version stdout 不应含 OTel span JSON:\n%s", out[:min(len(out), 200)])
-	}
-}
 
 // TestQueryTable：query table——表级聚合：列虚拟节点 + 写入方（summary_io 入边）。
-func TestQueryTable(t *testing.T) {
-	dir := t.TempDir()
-	writeTestFile(t, filepath.Join(dir, "go.mod"), "module example.com/m\n\ngo 1.21\n")
-	db, err := sqlite.Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	r := sqlite.NewRepo(db)
-	funcID := "symbol:go:example.com/m:save"
-	vn := func(name string, line int) *domain.CodeEntity {
-		return &domain.CodeEntity{
-			ID:   domain.CanonicalID(funcID + "#ext.sql." + name + ".write@" + strconv.Itoa(line)),
-			Kind: domain.KindFieldAccess, Name: name, FilePath: "a.go", LineStart: line,
-			Properties: map[string]any{"full_path": name, "access_kind": "write",
-				"type_string": "sql", "is_external": "true", "func_id": funcID},
-		}
-	}
-	nodes := []*domain.CodeEntity{
-		{ID: domain.CanonicalID(funcID), Kind: domain.KindFunction, Name: "save", FilePath: "a.go"},
-		{ID: domain.CanonicalID(funcID + "#t0"), Kind: domain.KindSSAValue, Name: "t0"},
-		vn("users.name", 5),
-		vn("users.age", 6),
-	}
-	if _, err := r.SaveBatchStats(nodes, []*domain.Fact{
-		{SourceID: domain.CanonicalID(funcID + "#t0"), TargetID: domain.CanonicalID(funcID + "#ext.sql.users.name.write@5"),
-			Kind: domain.FactSummaryIO, ToolSource: domain.ToolSSA, Confidence: 1,
-			Metadata: map[string]any{"line_num": 5}},
-	}, nil); err != nil {
-		t.Fatal(err)
-	}
-
-	out := captureStdout(func() {
-		if code := cmdQuery([]string{"table", "users", "--repo", dir}); code != 0 {
-			t.Errorf("query table exit = %d", code)
-		}
-	})
-	if !strings.Contains(out, "users.name") || !strings.Contains(out, "users.age") {
-		t.Errorf("table 输出缺列: %s", out)
-	}
-	if !strings.Contains(out, "save") || !strings.Contains(out, ":5") {
-		t.Errorf("table 输出缺写入方: %s", out)
-	}
-	// 无虚拟节点的表 → 空提示不报错
-	if code := cmdQuery([]string{"table", "nope", "--repo", dir}); code != 0 {
-		t.Errorf("empty table exit = %d", code)
-	}
-}
 
 // TestQueryGraphOutputs：⑬ 猎 bug——impact/callees 文本输出与 JSON 输出
 // 的 nodeBriefs/printNodes/printFacts 格式路径。
-func TestQueryGraphOutputs(t *testing.T) {
-	dir := seedRepo(t)
-	// impact 文本输出（printNodes）
-	out := captureStdout(func() {
-		if code := cmdQuery([]string{"impact", "main", "--repo", dir}); code != 0 {
-			t.Errorf("impact exit = %d", code)
-		}
-	})
-	for _, want := range []string{"影响范围", "function", "main"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("impact 输出缺 %q:\n%s", want, out)
-		}
-	}
-	// impact --json（nodeBriefs）
-	out = captureStdout(func() {
-		if code := cmdQuery([]string{"impact", "main", "--repo", dir, "--json"}); code != 0 {
-			t.Errorf("impact --json exit = %d", code)
-		}
-	})
-	if !strings.Contains(out, `"nodes"`) {
-		t.Errorf("impact --json 缺 nodes:\n%s", out)
-	}
-	// callees --json（factIDs）
-	out = captureStdout(func() {
-		if code := cmdQuery([]string{"callees", "main", "--repo", dir, "--json"}); code != 0 {
-			t.Errorf("callees --json exit = %d", code)
-		}
-	})
-	if !strings.Contains(out, `"rows"`) || !strings.Contains(out, `symbol:go:example.com/m/svc:(Svc).Run`) {
-		t.Errorf("callees --json 缺 rows:\n%s", out)
-	}
-}
 
 // TestExportGraphValueTraceDot：⑬ 猎 bug——export graph value-trace 的
 // DOT 渲染路径（renderValueTraceDot，此前 0% 覆盖）。
-func TestExportGraphValueTraceDot(t *testing.T) {
-	dir := seedFieldTrace(t)
-	writeNode := "symbol:go:example.com/m:main#t.A.write@5"
-	out := captureStdout(func() {
-		if code := cmdExportGraph([]string{"--type", "value-trace", "--target", writeNode,
-			"--format", "dot", "--repo", dir}); code != 0 {
-			t.Errorf("export graph dot exit = %d", code)
-		}
-	})
-	for _, want := range []string{"digraph", "->", "t.A"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("dot 输出缺 %q:\n%s", want, out)
-		}
-	}
-}
 
 // TestUpdateNoGitRepo：⑬ 猎 bug——update 在非 git 仓库（无 .git）应
 // 报错而非 panic/静默成功（变更检测依赖 git）。
-func TestUpdateNoGitRepo(t *testing.T) {
-	dir := t.TempDir()
-	// 无 go.mod 也无 .git：update 应返回非 0
-	if code := cmdUpdate(context.Background(), []string{"--repo", dir}); code == 0 {
-		t.Error("update 非 git 仓库应失败")
-	}
-}
 
 // TestInitNoGoMod：⑬ 猎 bug——init 在无 go.mod 目录（ensureGoEnv 路径）
 // 应报错而非 panic。
-func TestInitNoGoMod(t *testing.T) {
-	dir := t.TempDir()
-	if code := cmdInit(context.Background(), []string{"--repo", dir}); code == 0 {
-		t.Error("init 无 go.mod 应失败")
-	}
-}
