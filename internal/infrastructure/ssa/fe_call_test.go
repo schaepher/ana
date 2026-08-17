@@ -69,12 +69,12 @@ func run5() {
 
 	found := false
 	for _, f := range facts {
-		if f.Kind == domain.FactArgument && strings.Contains(string(f.TargetID), ":handler#r") {
+		if f.Kind == domain.FactArgument && strings.Contains(string(f.TargetID), ":handler#param.r") {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("函数值调用未建 argument 边（→ handler#r）")
+		t.Errorf("函数值调用未建 argument 边（→ handler#param.r）")
 	}
 }
 
@@ -109,7 +109,7 @@ func run6() {
 	})
 	hasArg, hasRet := false, false
 	for _, f := range facts {
-		if f.Kind == domain.FactArgument && strings.Contains(string(f.TargetID), "(FileWriter).Write#r") {
+		if f.Kind == domain.FactArgument && strings.Contains(string(f.TargetID), "(FileWriter).Write#param.r") {
 			hasArg = true
 		}
 		if f.Kind == domain.FactReturns && strings.Contains(string(f.SourceID), "(FileWriter).Write") {

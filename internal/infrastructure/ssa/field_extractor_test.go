@@ -32,11 +32,13 @@ func findFieldAccess(t *testing.T, nodes []*domain.CodeEntity, funcID, instance,
 	return nil
 }
 
-// findSSAValue 按 (函数, slot 前缀) 查找 ssa_value 节点（slot 用前缀匹配，SSA 临时名不稳定）。
+// findSSAValue 按 (函数, slot 前缀) 查找值节点——ssa_value 或参数节点
+// （Q178：参数统一用签名参数节点 #param.<name>，kind=parameter）。
+// slot 用前缀匹配，SSA 临时名不稳定。
 func findSSAValue(t *testing.T, nodes []*domain.CodeEntity, funcID, slotPrefix string) *domain.CodeEntity {
 	t.Helper()
 	for _, n := range nodes {
-		if n.Kind != domain.KindSSAValue {
+		if n.Kind != domain.KindSSAValue && n.Kind != domain.KindParameter {
 			continue
 		}
 		if n.Property("func_id") != funcID {

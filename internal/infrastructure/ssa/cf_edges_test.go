@@ -37,11 +37,13 @@ func main() {
 	if arg == nil {
 		t.Fatal("argument edge main#t -> use#t not found")
 	}
-	if string(arg.TargetID) != useID+"#t" {
-		t.Errorf("argument target = %s, want %s#t", arg.TargetID, useID)
+	// Q178：argument 边 target 是签名参数节点（#param.t），与
+	// emitSignatureNodes 一致——value-trace 可经参数节点回连调用点实参
+	if string(arg.TargetID) != useID+"#param.t" {
+		t.Errorf("argument target = %s, want %s#param.t", arg.TargetID, useID)
 	}
 
-	param := nodeByID(t, nodes, useID+"#t")
+	param := nodeByID(t, nodes, useID+"#param.t")
 	if param.Property("func_id") != useID {
 		t.Errorf("param func_id = %q", param.Property("func_id"))
 	}
@@ -77,8 +79,9 @@ func phi(c bool, a, b *T) int {
 	})
 	phiID := "symbol:go:example.com/mtest:phi"
 
-	a := findFactByKindPrefix(facts, domain.FactPhiOperand, phiID+"#a")
-	b := findFactByKindPrefix(facts, domain.FactPhiOperand, phiID+"#b")
+	// Q178：operand 是参数 → 源是签名参数节点 #param.a / #param.b
+	a := findFactByKindPrefix(facts, domain.FactPhiOperand, phiID+"#param.a")
+	b := findFactByKindPrefix(facts, domain.FactPhiOperand, phiID+"#param.b")
 	if a == nil || b == nil {
 		t.Fatalf("phi_operand edges missing: a=%v b=%v", a, b)
 	}

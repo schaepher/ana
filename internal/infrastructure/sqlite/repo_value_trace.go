@@ -9,23 +9,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// paramValueID 将 parameter/receiver 节点 ID 转换为对应的 ssa_value 参数 ID：
-// #param.recv.<name> / #param.<name> → #<name>；非参数 slot 返回空。
-func paramValueID(id string) string {
-	hash := strings.LastIndex(id, "#")
-	if hash < 0 {
-		return ""
-	}
-	prefix, slot := id[:hash], id[hash+1:]
-	switch {
-	case strings.HasPrefix(slot, "param.recv."):
-		return prefix + "#" + strings.TrimPrefix(slot, "param.recv.")
-	case strings.HasPrefix(slot, "param."):
-		return prefix + "#" + strings.TrimPrefix(slot, "param.")
-	}
-	return ""
-}
-
 // GetValueTrace 追踪一个数据值在整条链路上的处理过程（跨函数，无 func_id 限制）：
 // 以任意数据节点（field_access / ssa_value / parameter）为锚点，双向遍历
 // data_flows_to / argument / returns / phi_operand；

@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/schaepher/codeintel/internal/domain"
@@ -105,17 +106,17 @@ func TestExpandParameterDataFlow(t *testing.T) {
 	caller := node(callerID, "function", "g", "g.go")
 
 	param := mkParamNode(funcID+"#param.a", "a", 0, funcID)
-	paramVal := node(funcID+"#a", "ssa_value", "a", "f.go")
-	paramVal.Properties["func_id"] = funcID
 
 	fa := faNodeAccess(funcID+"#a.X.read@3", funcID, "example.com/m.T.X", "a.X", 3, "read")
 
 	argVal := node(callerID+"#t0", "ssa_value", "t0", "g.go")
 	argVal.Properties["func_id"] = callerID
-	save(t, r, []*domain.CodeEntity{fn, caller, param, paramVal, fa, argVal}, []*domain.Fact{
+	// Q178：数据边直接挂在参数节点上（旧设计挂在 ssa_value 副本 #a 上，
+	// Expand 需桥接——已废弃）
+	save(t, r, []*domain.CodeEntity{fn, caller, param, fa, argVal}, []*domain.Fact{
 		{SourceID: fn.ID, TargetID: param.ID, Kind: domain.FactHasParam, ToolSource: domain.ToolSSA, Confidence: 1},
-		{SourceID: paramVal.ID, TargetID: fa.ID, Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
-		{SourceID: argVal.ID, TargetID: paramVal.ID, Kind: domain.FactArgument, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: param.ID, TargetID: fa.ID, Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: argVal.ID, TargetID: param.ID, Kind: domain.FactArgument, ToolSource: domain.ToolSSA, Confidence: 1},
 	})
 
 	facts, neighbors, err := r.Expand(param.ID)
@@ -130,21 +131,17 @@ func TestExpandParameterDataFlow(t *testing.T) {
 		t.Errorf("expand param facts kinds = %v, want data_flows_to+argument", kinds)
 	}
 
-	bridged := false
 	for _, f := range facts {
-		if f.SourceID == param.ID && f.TargetID == paramVal.ID {
-			bridged = true
+		if f.SourceID == param.ID && strings.HasSuffix(string(f.TargetID), "#a") && f.Kind == domain.FactDataFlowsTo {
+			t.Errorf("bridge edge param->ssa_value 副本不应存在（Q178 已废弃）：%+v", f)
 		}
-	}
-	if !bridged {
-		t.Errorf("bridge edge param->value missing: %+v", facts)
 	}
 
 	nid := map[string]bool{}
 	for _, n := range neighbors {
 		nid[string(n.ID)] = true
 	}
-	for _, want := range []string{string(fa.ID), string(argVal.ID), string(paramVal.ID)} {
+	for _, want := range []string{string(fa.ID), string(argVal.ID)} {
 		if !nid[want] {
 			t.Errorf("expand param neighbors missing %s (have %v)", want, nid)
 		}

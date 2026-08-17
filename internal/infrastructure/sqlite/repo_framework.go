@@ -124,19 +124,11 @@ func (r *Repo) Expand(id domain.CanonicalID) (facts []*domain.Fact, nodes []*dom
 	logger.Debug("enter (Repo).Expand")
 	defer logger.Debug("exit (Repo).Expand")
 
+	// Q178：参数/接收者节点（#param.<name>）本身承载数据边（data_flows_to/
+	// argument/phi_operand 等），不再桥接到 ssa_value 参数副本（旧设计
+	// #<name>，已废弃）；has_param 边也落库——直接按 id 查边即可
 	queryID := string(id)
-	var bridgeID string // 桥边：parameter → ssa_value（不落库，仅响应）
 	cur, gerr := r.GetSymbol(id)
-	if gerr == nil && (cur.Kind == domain.KindParameter || cur.Kind == domain.KindReceiver) {
-		queryID = paramValueID(string(id))
-		if queryID != "" {
-			if _, gerr := r.GetSymbol(domain.CanonicalID(queryID)); gerr == nil {
-				bridgeID = queryID
-			}
-		}
-	}
-	// ssa_value 参数（param/receiver）：附加所属函数桥边（函数 → 参数值，
-	// has_param，不落库）——链上参数可展开到其所属函数
 	var funcBridgeID string
 	if gerr == nil && cur.Kind == domain.KindSSAValue {
 		ok := cur.Property("origin_kind") == "param" || cur.Property("origin_kind") == "receiver"
@@ -165,16 +157,6 @@ LIMIT 500`, queryID, queryID, queryID, queryID)
 	facts, err = scanFacts(rows)
 	if err != nil {
 		return nil, nil, err
-	}
-
-	if bridgeID != "" {
-		facts = append(facts, &domain.Fact{
-			SourceID:   id,
-			TargetID:   domain.CanonicalID(bridgeID),
-			Kind:       domain.FactDataFlowsTo,
-			ToolSource: domain.ToolSSA,
-			Confidence: 1.0,
-		})
 	}
 
 	if funcBridgeID != "" {

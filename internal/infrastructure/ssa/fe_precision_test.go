@@ -66,7 +66,7 @@ func main() {}
 
 	// src 参数 ssa_value 节点（对象锚点）
 	var srcVal string
-	r2, err := repo.Query(`SELECT id FROM nodes WHERE kind='ssa_value'
+	r2, err := repo.Query(`SELECT id FROM nodes WHERE kind='parameter'
 		AND json_extract(properties, '$.func_id') = ? AND name = 'src'`, funcID)
 	if err != nil {
 		t.Fatal(err)
@@ -76,7 +76,7 @@ func main() {}
 	}
 	r2.Close()
 	if srcVal == "" {
-		t.Fatal("src 参数 ssa_value 节点缺失")
+		t.Fatal("src 参数节点缺失")
 	}
 
 	rows, err = repo.GetValueTrace(domain.CanonicalID(srcVal), 8, 0, false)

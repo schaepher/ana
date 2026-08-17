@@ -184,10 +184,11 @@ SELECT id, depth, name, edge_kinds, line FROM def_trace ORDER BY depth, id`
     -- local/phi/global——① 传参、⑩ 局部对象、⑭ DAO 返回对象→局部变量→
     -- helper、global 溯源）。B2：类型不匹配的参数与全局变量（gitCommit
     -- 等 string）不再是起点——此前 origin_kind IN ('param','receiver',
-    -- 'alloc','global') 无条件放行，全部参数与全局变量入链（噪音）
+    -- 'alloc','global') 无条件放行，全部参数与全局变量入链（噪音）。
+    -- Q178：参数统一为签名参数节点（kind=parameter，#param.<name>）
     SELECT n.id, 0, n.name, '', n.line_start, 0, n.kind
     FROM nodes n
-    WHERE n.kind = 'ssa_value'
+    WHERE n.kind IN ('ssa_value', 'parameter')
       AND (json_extract(n.properties, '$.func_id') = ?
            OR json_extract(n.properties, '$.origin_kind') = 'global')
       AND (json_extract(n.properties, '$.type_string') = ?

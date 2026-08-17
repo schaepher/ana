@@ -265,11 +265,14 @@ func main() {}
 	if srcID == "" {
 		t.Fatal("orderID 参数值 → t_orders.order_id filter 的 summary_io 边缺失（变参值链断）")
 	}
-	var srcName string
-	if err := repo.QueryRow(`SELECT name FROM nodes WHERE id = ?`, srcID).Scan(&srcName); err != nil {
+	var srcName, srcKind string
+	if err := repo.QueryRow(`SELECT name, kind FROM nodes WHERE id = ?`, srcID).Scan(&srcName, &srcKind); err != nil {
 		t.Fatalf("值节点 %s: %v", srcID, err)
 	}
-	if srcName != "orderID" {
-		t.Errorf("filter 入边值应为 orderID 参数，got %q", srcName)
+	// Q178：入边源必须是签名参数节点（kind=parameter，ID #param.orderID）——
+	// ssa_value 临时节点（#orderID）与参数节点无连接，value-trace 无法
+	// 从 filter 经 argument 边回连调用点实参
+	if srcName != "orderID" || srcKind != "parameter" || !strings.HasSuffix(srcID, "#param.orderID") {
+		t.Errorf("filter 入边源应为参数节点 #param.orderID（kind=parameter），got id=%q name=%q kind=%q", srcID, srcName, srcKind)
 	}
 }

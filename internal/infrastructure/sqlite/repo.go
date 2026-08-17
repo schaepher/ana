@@ -189,9 +189,6 @@ func (r *Repo) GetLatest() (*domain.BuildMeta, error) {
 // （func_id 限定在函数内，到参数/返回边界即止）；Dir=0 为产生链（反向），
 // Dir=1 为使用链（正向）。
 
-// paramValueID 将 parameter/receiver 节点 ID 转换为对应的 ssa_value 参数 ID：
-// #param.recv.<name> / #param.<name> → #<name>；非参数 slot 返回空。
-
 // GetValueTrace 追踪一个数据值在整条链路上的处理过程（跨函数，无 func_id 限制）：
 // 以任意数据节点（field_access / ssa_value / parameter）为锚点，双向遍历
 // data_flows_to / argument / returns / phi_operand；
