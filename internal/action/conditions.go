@@ -3,6 +3,7 @@
 //   - if 分支条件（常量可传播：字段路径/字面量比较）
 //   - 类型 switch 分支（case 标签）
 //   - 环境条件（os.Getenv 等调用，并入分支标注）
+//
 // 实现：节点 file/line → 解析源码 AST → 包含该行的最近 if/类型 switch
 // → 条件表达式文本。无符号执行，条件为源码文本。
 package action

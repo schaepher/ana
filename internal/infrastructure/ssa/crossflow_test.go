@@ -31,7 +31,7 @@ func findFactByKindPrefix(facts []*domain.Fact, kind domain.FactKind, srcPrefix 
 
 func TestArgumentReturnsEdges(t *testing.T) {
 	nodes, facts, summaries := indexFixtureFull(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 type T struct {
@@ -85,7 +85,7 @@ func main() {
 
 func TestPhiOperandEdges(t *testing.T) {
 	_, facts, _ := indexFixtureFull(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 type T struct {
@@ -115,7 +115,7 @@ func phi(c bool, a, b *T) int {
 
 func TestSummaryDirectAndIndirect(t *testing.T) {
 	_, facts, summaries := indexFixtureFull(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 type T struct {
@@ -157,7 +157,7 @@ func outer(t *T) {
 func TestSummaryTypeMismatchNoIndirect(t *testing.T) {
 	// 实参类型与被调函数写字段的声明类型不匹配 → 无间接写
 	_, _, summaries := indexFixtureFull(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 type T struct {
@@ -205,7 +205,7 @@ func findSummary(t *testing.T, summaries []*domain.FunctionFieldSummary,
 // 调用点处理顺序，不稳定）。
 func TestIndirectWriteExcludedDeepChain(t *testing.T) {
 	_, _, summaries := indexFixtureFull(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 type T struct {

@@ -23,7 +23,7 @@ func findDispatch(t *testing.T, facts []*domain.Fact, source, target string) *do
 // origin=register、confidence=0.9、register_site 记录注册位置（Q91/Q93/Q94）。
 func TestDispatchRegisterPoint(t *testing.T) {
 	_, facts, _ := indexFixtureFull(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 type Greeter interface {
@@ -73,7 +73,7 @@ func main() {
 // confidence=0.7（Q93）。
 func TestDispatchEnumFallback(t *testing.T) {
 	_, facts, _ := indexFixtureFull(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 type Greeter interface {
@@ -107,7 +107,7 @@ func main() {
 // 信息类别（Q93：dynamic_call_unresolved），无 dispatch_to 边或带缺失标记。
 func TestDispatchMissingInfo(t *testing.T) {
 	_, facts, _ := indexFixtureFull(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 type Greeter interface {
@@ -142,7 +142,7 @@ func main() {
 // （无重复发射）。
 func TestDispatchToEdgeCount(t *testing.T) {
 	_, facts, _ := indexFixtureFull(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 type Greeter interface {

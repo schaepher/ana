@@ -154,8 +154,8 @@ func main() {
 	mainID := domain.CanonicalID("symbol:go:example.com/m:main")
 
 	rows := []*domain.TraceRow{
-		{ID: mainID, Line: 4},                                   // if 分支内
-		{ID: mainID, Line: 99},                                  // 分支外 → 无标注
+		{ID: mainID, Line: 4},  // if 分支内
+		{ID: mainID, Line: 99}, // 分支外 → 无标注
 		{ID: domain.CanonicalID("symbol:go:example.com/m:none")}, // 查不到节点
 		{Line: 0}, // 无行号跳过
 	}

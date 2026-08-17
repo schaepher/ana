@@ -36,6 +36,7 @@ import (
 //   - Transaction：闭包形态（fn(tx) 非 begin/commit 调用）
 //   - AutoMigrate / Debug / Session / Clauses / Association / UpdateColumn：
 //     非数据流或单列更新（Update 已覆盖字符串列名形态）
+//
 // chainTableNameValue GORM 显式表名溯源（Q177）：receiver 沿定义链回溯
 // Table("name") / Model("name") 调用的字符串实参——显式表名与实体类型名
 // 不一致时（Table("mch_account") + 结构体 Merchant）以显式为准。无显式

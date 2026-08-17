@@ -22,10 +22,10 @@ const pkgCacheFormat = 1
 
 // pkgCacheFile 单包缓存文件。
 type pkgCacheFile struct {
-	Version  int                     `json:"version"`
-	PkgHash  string                  `json:"pkg_hash"`
-	Nodes    []*domain.CodeEntity    `json:"nodes"`
-	Facts    []*domain.Fact          `json:"facts"`
+	Version  int                        `json:"version"`
+	PkgHash  string                     `json:"pkg_hash"`
+	Nodes    []*domain.CodeEntity       `json:"nodes"`
+	Facts    []*domain.Fact             `json:"facts"`
 	FuncData map[string]*cachedFuncData `json:"func_data"`
 }
 

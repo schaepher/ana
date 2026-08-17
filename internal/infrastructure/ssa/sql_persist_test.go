@@ -26,7 +26,7 @@ func findVirtualNode(t *testing.T, nodes []*domain.CodeEntity, funcID, namePrefi
 // → 虚拟节点 users.name + summary_io 边（字段值 → 虚拟节点）（Q97 持久化映射）。
 func TestSQLInsertPersist(t *testing.T) {
 	nodes, facts, _ := indexFixtureFull(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 import "database/sql"
@@ -69,7 +69,7 @@ func save(db *sql.DB, u *User) {
 // query table 读取方闭环的数据基础。
 func TestSQLSelectRead(t *testing.T) {
 	nodes, facts, _ := indexFixtureFull(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 import "database/sql"
@@ -117,7 +117,7 @@ func get(db *sql.DB, id int) *User {
 // A.X.read → ... → B.Y.filter 的基础。
 func TestSQLWhereFilter(t *testing.T) {
 	nodes, facts, _ := indexFixtureFull(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 import "database/sql"
@@ -157,7 +157,7 @@ func find(db *sql.DB, id int) string {
 // table_a.x.read → ... → table_b.y.filter 数据流链完整。
 func TestSQLScanOutFlow(t *testing.T) {
 	nodes, facts, _ := indexFixtureFull(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 import "database/sql"
@@ -217,7 +217,7 @@ func find(db *sql.DB, id int) string {
 // TestSQLSelectStar：SELECT * 无列 → 表级 read 虚拟节点（Name=表）。
 func TestSQLSelectStar(t *testing.T) {
 	nodes, _, _ := indexFixtureFull(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 import "database/sql"
@@ -237,7 +237,7 @@ func list(db *sql.DB) {
 // TestSQLUpdatePersist：UPDATE 的表列提取。
 func TestSQLUpdatePersist(t *testing.T) {
 	nodes, _, _ := indexFixtureFull(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 import "database/sql"
@@ -257,7 +257,7 @@ func update(db *sql.DB, u *User) {
 // TestSQLTxBoundary：事务边界识别（Begin/Commit → 事务虚拟节点）（Q97）。
 func TestSQLTxBoundary(t *testing.T) {
 	nodes, _, _ := indexFixtureFull(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 import "database/sql"

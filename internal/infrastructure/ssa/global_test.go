@@ -11,7 +11,7 @@ import (
 // 从字段访问反向可达初始化表达式。
 func TestGlobalInitTrace(t *testing.T) {
 	nodes, facts, _ := indexFixtureFull(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 type T struct {
@@ -48,7 +48,7 @@ func useG() int {
 // 可穿层（Q98：全局变量作为 value-trace 起点）。
 func TestGlobalFieldReadChain(t *testing.T) {
 	nodes, facts, _ := indexFixtureFull(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 type T struct {

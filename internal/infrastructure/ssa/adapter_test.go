@@ -4,8 +4,8 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"sync"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/schaepher/codeintel/internal/domain"
@@ -115,7 +115,7 @@ func main() {
 
 func TestIndexFunctions(t *testing.T) {
 	nodes, _ := indexFixture(t, map[string]string{
-		"go.mod": baseModule,
+		"go.mod":  baseModule,
 		"main.go": baseMain,
 	})
 
@@ -192,7 +192,7 @@ func main() {}
 
 func TestSignatureNodes(t *testing.T) {
 	nodes, facts := indexFixture(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 type T struct {

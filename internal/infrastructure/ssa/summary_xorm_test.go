@@ -2,6 +2,7 @@ package ssa
 
 import (
 	"testing"
+
 	"github.com/schaepher/codeintel/internal/domain"
 )
 

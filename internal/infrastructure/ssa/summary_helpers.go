@@ -1,0 +1,293 @@
+package ssa
+
+import (
+	"go/types"
+	"regexp"
+	"strings"
+
+	"golang.org/x/tools/go/ssa"
+)
+
+var whereColRe = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_.]*)\s*=\s*(\?|\$\d+)`)
+
+// extractWhereCols 从 SQL 语句剩余部分提取 WHERE 子句的过滤列
+// （`列 = ?` 序列，值实参按 ? 顺序映射——表关联分析的数据基础）。
+// 支持 a.y = ? 表前缀（去前缀）；WHERE 缺失返回 nil。
+func extractWhereCols(rest string) []string {
+	up := strings.ToUpper(rest)
+	wi := strings.Index(up, " WHERE ")
+	if wi < 0 {
+		return nil
+	}
+	wherePart := rest[wi+len(" WHERE "):]
+	upPart := strings.ToUpper(wherePart)
+	for _, stop := range []string{" ORDER BY ", " LIMIT ", " GROUP BY ", " HAVING ", " UNION "} {
+		if j := strings.Index(upPart, stop); j >= 0 {
+			wherePart = wherePart[:j]
+			break
+		}
+	}
+	var out []string
+	for _, m := range whereColRe.FindAllStringSubmatch(wherePart, -1) {
+		c := m[1]
+		if i := strings.LastIndex(c, "."); i >= 0 {
+			c = c[i+1:]
+		}
+		c = strings.Trim(c, "`\"[]")
+		if c != "" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// derefSlice 解切片（*[]Session → Session；GORM 读对象形态）。
+func derefSlice(t types.Type) types.Type {
+	if p, ok := t.(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	if sl, ok := t.(*types.Slice); ok {
+		t = sl.Elem()
+	}
+	return t
+}
+
+// derefType 解指针。
+func derefType(t types.Type) types.Type {
+	if p, ok := t.(*types.Pointer); ok {
+		return p.Elem()
+	}
+	return t
+}
+
+// commonInitialisms 常见缩写表（golang/lint 同款，GORM 默认命名用）——
+// 先 Title 化再转小写，保证 SessionID → session_id、SourceURL → source_url。
+var commonInitialisms = []string{"API", "ASCII", "CPU", "CSS", "DNS", "EOF", "GUID", "HTML", "HTTP", "HTTPS", "ID", "IP", "JSON", "LHS", "QPS", "RAM", "RHS", "RPC", "SLA", "SMTP", "SSH", "TLS", "TTL", "UID", "UI", "UUID", "URI", "URL", "UTF8", "VM", "XML", "XSRF", "XSS"}
+
+// snakeCase 类型/字段名 → 表/列名，与 GORM 默认命名完全一致（移植
+// gorm NamingStrategy.toDBName：常见缩写 Title 化 + 大小写扫描——连续
+// 大写不拆，转小写前插线）。UserProfile → user_profile、SessionID →
+// session_id、SourceURL → source_url、APIKey → apikey、
+// SQLiteKnowledgeGraph → sq_lite_knowledge_graph（SQL 不在缩写表，
+// 与 GORM 默认一致；radar 用 TableName() 定制表名时无法静态推导）。
+func snakeCase(s string) string {
+	value := s
+	for _, in := range commonInitialisms {
+		value = strings.ReplaceAll(value, in, in[:1]+strings.ToLower(in[1:]))
+	}
+	if value == "" {
+		return ""
+	}
+	var sb strings.Builder
+	lastCase := false
+	curCase := value[0] >= 'A' && value[0] <= 'Z'
+	for i := 0; i < len(value)-1; i++ {
+		v := value[i]
+		nextCase := value[i+1] >= 'A' && value[i+1] <= 'Z'
+		nextNumber := value[i+1] >= '0' && value[i+1] <= '9'
+		if curCase {
+			if lastCase && (nextCase || nextNumber) {
+
+				sb.WriteByte(v + ('a' - 'A'))
+			} else {
+				if i > 0 && value[i-1] != '_' && value[i+1] != '_' {
+					sb.WriteByte('_')
+				}
+				sb.WriteByte(v + ('a' - 'A'))
+			}
+		} else {
+			sb.WriteByte(v)
+		}
+		lastCase = curCase
+		curCase = nextCase
+	}
+	if curCase {
+		if !lastCase && len(value) > 1 {
+			sb.WriteByte('_')
+		}
+		sb.WriteByte(value[len(value)-1] + ('a' - 'A'))
+	} else {
+		sb.WriteByte(value[len(value)-1])
+	}
+	return sb.String()
+}
+
+// whereColsOf 从 where 条件串提取列名：AND/OR 拆分 + 占位符剥离
+// （IN (?) 先处理；其余形态截到最后一个 ? 再 TrimRight 运算符——
+// 兼容 " = ?" / "=?" / " <?" / " LIKE ?" 等有无空格写法，以及多行
+// 条件串（AND/OR 前后为换行/制表符——pay_order 实测整串未被拆分）。
+
+func parseSQLStmt(sql string) (table string, cols []string, whereCols []string) {
+	upper := strings.ToUpper(sql)
+	rest := ""
+	switch {
+	case strings.Contains(upper, "INSERT INTO"):
+		rest = sql[strings.Index(upper, "INSERT INTO")+len("INSERT INTO"):]
+	case strings.Contains(upper, "UPDATE"):
+		rest = sql[strings.Index(upper, "UPDATE")+len("UPDATE"):]
+	case strings.Contains(upper, "DELETE FROM"):
+		rest = sql[strings.Index(upper, "DELETE FROM")+len("DELETE FROM"):]
+	case strings.Contains(upper, " FROM "):
+
+		fromIdx := strings.Index(upper, " FROM ")
+		rest = sql[fromIdx+len(" FROM "):]
+		if strings.Contains(upper, "SELECT ") {
+			selPart := strings.TrimSpace(sql[strings.Index(upper, "SELECT ")+len("SELECT ") : fromIdx])
+			if selPart != "" && !strings.Contains(strings.ToUpper(selPart), "*") {
+
+				for _, c := range strings.Split(selPart, ",") {
+					c = strings.TrimSpace(c)
+					if i := strings.Index(c, " "); i >= 0 {
+						c = c[:i]
+					}
+					if i := strings.LastIndex(c, "."); i >= 0 {
+						c = c[i+1:]
+					}
+					c = strings.Trim(c, "`\"[]")
+					if c != "" {
+						if c != "" && !strings.Contains(c, "(") {
+							cols = append(cols, c)
+						}
+					}
+				}
+			}
+		}
+	default:
+		return "", nil, nil
+	}
+	rest = strings.TrimSpace(rest)
+
+	tableEnd := len(rest)
+	for i := 0; i < len(rest); i++ {
+		if rest[i] == '(' || rest[i] == ' ' || rest[i] == '\t' || rest[i] == '\n' || rest[i] == ';' {
+			tableEnd = i
+			break
+		}
+	}
+	table = strings.TrimSpace(rest[:tableEnd])
+	table = strings.Trim(table, "`\"[]")
+	if table == "" {
+		return "", nil, nil
+	}
+
+	after := strings.TrimSpace(rest[tableEnd:])
+	if strings.HasPrefix(after, "(") {
+
+		inner := after[1:]
+		if i := strings.Index(inner, ")"); i >= 0 {
+			inner = inner[:i]
+		}
+		for _, c := range strings.Split(inner, ",") {
+			c = strings.TrimSpace(c)
+			c = strings.Trim(c, "`\"[]")
+			if c != "" {
+				cols = append(cols, c)
+			}
+		}
+	} else if strings.Contains(upper, " SET ") {
+
+		up := strings.ToUpper(rest)
+		if i := strings.Index(up, " SET "); i >= 0 {
+			setPart := rest[i+len(" SET "):]
+			if j := strings.Index(setPart, " WHERE"); j >= 0 {
+				setPart = setPart[:j]
+			}
+			for _, c := range strings.Split(setPart, ",") {
+				c = strings.TrimSpace(c)
+				if k := strings.Index(c, "="); k >= 0 {
+					c = strings.TrimSpace(c[:k])
+					c = strings.Trim(c, "`\"[]")
+					if c != "" {
+						cols = append(cols, c)
+					}
+				}
+			}
+		}
+	}
+
+	whereCols = extractWhereCols(rest)
+	return table, cols, whereCols
+}
+
+func chainScopeObject(recv ssa.Value) *types.Named {
+	c, ok := recv.(*ssa.Call)
+	if !ok {
+		return nil
+	}
+	for i := 1; i < len(c.Call.Args); i++ {
+		arg := c.Call.Args[i]
+		if mi, isMI := arg.(*ssa.MakeInterface); isMI {
+			arg = mi.X
+		}
+		if named := namedStructOf(derefType(arg.Type())); named != nil {
+			return named
+		}
+	}
+	if len(c.Call.Args) > 0 {
+		return chainScopeObject(c.Call.Args[0])
+	}
+	return nil
+}
+
+func fieldValueOf(obj ssa.Value, idx int) ssa.Value {
+	refs := obj.Referrers()
+	if refs == nil {
+		return nil
+	}
+	for _, ref := range *refs {
+		switch r := ref.(type) {
+		case *ssa.FieldAddr:
+			if r.Field == idx {
+
+				if r.Referrers() != nil {
+					for _, ref2 := range *r.Referrers() {
+						if st, ok := ref2.(*ssa.Store); ok && st.Addr == r {
+							return st.Val
+						}
+					}
+				}
+				return nil
+			}
+		case *ssa.Field:
+			if r.Field == idx {
+				return r
+			}
+		}
+	}
+	return nil
+}
+
+func entityTypeOf(cc *ssa.CallCommon, spec summarySpec) types.Type {
+	t := cc.Value.Type()
+	if p, ok := t.(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	if named, ok := t.(*types.Named); ok && named.TypeArgs().Len() > 0 {
+		return named.TypeArgs().At(0)
+	}
+
+	switch spec.Kind {
+	case "write":
+		if spec.ObjArg >= 0 && spec.ObjArg < len(cc.Args) {
+			return derefType(cc.Args[spec.ObjArg].Type())
+		}
+	case "read":
+
+		if spec.ObjArg >= 0 && spec.ObjArg < len(cc.Args) {
+			arg := cc.Args[spec.ObjArg]
+			if mi, ok := arg.(*ssa.MakeInterface); ok {
+				arg = mi.X
+			}
+			t := derefType(arg.Type())
+
+			if sl, ok := t.(*types.Slice); ok {
+				t = sl.Elem()
+			}
+			return t
+		}
+		if sig, ok := cc.Method.Type().(*types.Signature); ok && sig.Results().Len() > 0 {
+			return derefType(sig.Results().At(0).Type())
+		}
+	}
+	return nil
+}

@@ -299,9 +299,9 @@ func TestParseSQLStmt(t *testing.T) {
 		{"UPDATE users SET name=?, email=? WHERE id = ?", "users", []string{"name", "email"}, []string{"id"}},
 		{"UPDATE users SET name = ?", "users", []string{"name"}, nil}, // 无 WHERE
 		{"DELETE FROM users WHERE id = ?", "users", nil, []string{"id"}},
-		{"SELECT name FROM users WHERE id = ?", "users", []string{"name"}, []string{"id"}}, // P0-2：SELECT 列提取
+		{"SELECT name FROM users WHERE id = ?", "users", []string{"name"}, []string{"id"}},           // P0-2：SELECT 列提取
 		{"SELECT u.name FROM users u JOIN orders o ON u.id = o.uid", "users", []string{"name"}, nil}, // 去表前缀
-		{"SELECT * FROM users", "users", nil, nil}, // SELECT * → 表级
+		{"SELECT * FROM users", "users", nil, nil},                                                   // SELECT * → 表级
 		// 表关联（WHERE 值流）：`列 = ?` 按 ? 顺序提取
 		{"SELECT x FROM table_a WHERE id = ?", "table_a", []string{"x"}, []string{"id"}},
 		{"SELECT * FROM table_b WHERE y = ?", "table_b", nil, []string{"y"}},
@@ -512,8 +512,8 @@ func query(engine Engine, list *[]Settlement) {
     type: "xorm"
 `
 	nodes, _, _ := indexFixtureFull(t, map[string]string{
-		"go.mod": moduleGoMod,
-		"main.go": src,
+		"go.mod":             moduleGoMod,
+		"main.go":            src,
 		"field-summary.yaml": yaml,
 	})
 	var filterSeen, readSeen, tableSeen bool

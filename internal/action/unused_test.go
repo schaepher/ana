@@ -167,7 +167,7 @@ func TestActionsPath(t *testing.T) {
 // TestMarkSince：--since 标注纯函数（new/mod/空 + 新增文件）。
 func TestMarkSince(t *testing.T) {
 	since := &domain.SinceInfo{
-		Ref: "HEAD",
+		Ref:      "HEAD",
 		NewFiles: map[string]bool{"new.go": true},
 		AddedLines: map[string]map[int]bool{
 			"main.go": {5: true, 11: true},
@@ -179,11 +179,11 @@ func TestMarkSince(t *testing.T) {
 		end   int
 		want  string
 	}{
-		{"main.go", 5, 7, "new"},    // 声明行命中新增行
-		{"main.go", 10, 12, "mod"},  // 区间命中 11
-		{"main.go", 20, 22, ""},     // 未改动
-		{"new.go", 1, 1, "new"},     // 新增文件
-		{"other.go", 1, 1, ""},      // 未变更文件
+		{"main.go", 5, 7, "new"},   // 声明行命中新增行
+		{"main.go", 10, 12, "mod"}, // 区间命中 11
+		{"main.go", 20, 22, ""},    // 未改动
+		{"new.go", 1, 1, "new"},    // 新增文件
+		{"other.go", 1, 1, ""},     // 未变更文件
 	}
 	for _, c := range cases {
 		if got := MarkSince(c.file, c.start, c.end, since); got != c.want {

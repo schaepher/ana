@@ -209,7 +209,6 @@ func TestSummaryChainWriteAnchorDownstream(t *testing.T) {
 	}
 }
 
-
 // TestValueTraceDispatchMark：Q157 P1——value-trace 候选派发标注。
 // 行所属函数是 dispatch_to 边 target（接口候选实现）时标记来源与
 // 置信度（链路混入多候选实现时可区分）。

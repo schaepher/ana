@@ -1,0 +1,167 @@
+package sqlite
+
+import (
+	"database/sql"
+	"sort"
+	"strings"
+
+	"github.com/schaepher/codeintel/internal/domain"
+	"go.uber.org/zap"
+)
+
+// loadRelationGraph 一次加载全库图。两条全表查询：
+//  1. 全部边（kind 一并取回，分流 dataAdj/allOut）
+//  2. 全部节点元数据（json_extract 6 个属性）
+//
+// 空库返回空图（BFS 自然空结果，不报错）。
+func loadRelationGraph(r *Repo) (*relationGraph, error) {
+	logger := zap.L()
+	logger.Debug("enter loadRelationGraph")
+	defer logger.Debug("exit loadRelationGraph")
+	g := &relationGraph{
+		dataAdj:     map[string][]string{},
+		allOut:      map[string][]string{},
+		nodes:       map[string]*relNode{},
+		readsByFunc: map[string][]*relNode{},
+	}
+	rows, err := r.Query(`SELECT source_id, target_id, kind FROM edges`)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var src, tgt, kind string
+		if err := rows.Scan(&src, &tgt, &kind); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		g.allOut[src] = append(g.allOut[src], tgt)
+		if isDataKind(kind) {
+			g.dataAdj[src] = append(g.dataAdj[src], tgt)
+			g.dataAdj[tgt] = append(g.dataAdj[tgt], src)
+		}
+	}
+	rows.Close()
+
+	nrows, err := r.Query(`SELECT id, kind, name,
+		json_extract(properties, '$.access_kind'),
+		json_extract(properties, '$.type_string'),
+		json_extract(properties, '$.func_id'),
+		json_extract(properties, '$.full_path'),
+		json_extract(properties, '$.is_external') FROM nodes`)
+	if err != nil {
+		return nil, err
+	}
+	for nrows.Next() {
+		var id, kind, name string
+		var access, ts, funcID, fullPath sql.NullString
+		var ext sql.NullString
+		if err := nrows.Scan(&id, &kind, &name, &access, &ts, &funcID, &fullPath, &ext); err != nil {
+			nrows.Close()
+			return nil, err
+		}
+		n := &relNode{
+			id:         id,
+			kind:       kind,
+			name:       name,
+			access:     access.String,
+			typeString: ts.String,
+			funcID:     funcID.String,
+			fullPath:   fullPath.String,
+			isExternal: ext.String == "true",
+		}
+		g.nodes[id] = n
+		if kind == string(domain.KindFieldAccess) && n.access == "read" {
+			g.readsByFunc[n.funcID] = append(g.readsByFunc[n.funcID], n)
+		}
+	}
+	nrows.Close()
+	return g, nrows.Err()
+}
+
+// isDataKind 是否为 BFS 数据流边。
+
+// tables 内存版 GetTables（语义一致：外部 gorm/sql/xorm 虚拟节点
+// 表名去重排序；name 无点或含多点不产生表名）。
+func (g *relationGraph) tables() []string {
+	set := map[string]bool{}
+	for _, n := range g.nodes {
+		if n.kind != string(domain.KindFieldAccess) || !n.isExternal || !relTypeStrings[n.typeString] {
+			continue
+		}
+
+		dot := strings.Index(n.name, ".")
+		if dot <= 0 || strings.Index(n.name[dot+1:], ".") >= 0 {
+			continue
+		}
+		set[n.name[:dot]] = true
+	}
+	out := make([]string, 0, len(set))
+	for t := range set {
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// typeNameOf 内存版：节点 type_string 提取类型名（[]example.com/m.Session →
+// Session；*Session → Session；无类型/基本类型返回 ok=false）。
+func (g *relationGraph) typeNameOf(id string) (string, bool) {
+	n := g.nodes[id]
+	if n == nil || n.typeString == "" {
+		return "", false
+	}
+	t := n.typeString
+	if i := strings.LastIndex(t, "."); i >= 0 {
+		t = t[i+1:]
+	}
+	t = strings.Trim(t, "[]*")
+	switch t {
+	case "", "any", "string", "int", "int64", "bool", "error", "byte":
+		return "", false
+	}
+	return t, true
+}
+
+// filterReachable2 桥条件：该 read 节点下游 2 跳内可达 filter 外部节点
+// （字段 → 值 → filter：真正进 Where 的字段；防同类型全字段扩散）。
+// 定向出边（allOut）——与旧 SQL EXISTS（e1.source_id = n2.id）等价；
+// 双向会让桥过度宽松 → 多关联噪音。
+func (g *relationGraph) filterReachable2(id string) bool {
+	for _, x := range g.allOut[id] {
+		for _, y := range g.allOut[x] {
+			if n := g.nodes[y]; n != nil && n.kind == string(domain.KindFieldAccess) &&
+				n.access == "filter" && n.isExternal {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// relationsFor 单表关联分析（等价旧 GetTableRelations 逐节点 SQL 版）：
+// 本表全部列虚拟节点为起点 BFS，收集其他表虚拟节点（表.列，is_external），
+// 输出稳定排序（from_col, hops, to_table, to_col）。
+
+// filterFKNoise Q159 外键语义过滤（独立函数便于单测）：
+// id→id 一律丢弃（两表都不会拿各自自增主键互查）；同目标列多起点时
+// 外键形态列（xxx_id）优先——主键 id 起点是对象值共享桥接噪音；保留
+// 形态：A.xxx_id → B.id（外键查主键）、A.id → B.xxx_id（主键被外键引用
+// 查询）、A.xxx_id → B.xxx_id（业务关联键）。
+
+// typeNameOf 查节点 type_string 并提取类型名（[]example.com/m.Session →
+// Session；*Session → Session；无类型/非 ssa_value 返回 ok=false）。
+func (r *Repo) typeNameOf(id string) (string, bool) {
+	var ts sql.NullString
+	if err := r.QueryRow(`SELECT json_extract(properties, '$.type_string') FROM nodes WHERE id = ?`, id).Scan(&ts); err != nil || !ts.Valid {
+		return "", false
+	}
+	t := ts.String
+	if i := strings.LastIndex(t, "."); i >= 0 {
+		t = t[i+1:]
+	}
+	t = strings.Trim(t, "[]*")
+	if t == "" || t == "any" || t == "string" || t == "int" || t == "int64" || t == "bool" || t == "error" || t == "byte" {
+		return "", false
+	}
+	return t, true
+}

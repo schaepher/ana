@@ -23,7 +23,7 @@ func findFieldByPath(t *testing.T, nodes []*domain.CodeEntity, funcID, fullPath 
 func TestElementMapConstKey(t *testing.T) {
 	// m["a"] 读写：full_path 带引号（Q1/Q5）；常量 key 敏感
 	nodes, facts := indexFixture(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 func f() {
@@ -51,7 +51,7 @@ func f() {
 func TestElementSliceIndex(t *testing.T) {
 	// s[0] 写读（IndexAddr+Store / Lookup）
 	nodes, _ := indexFixture(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 func f() {
@@ -69,7 +69,7 @@ func f() {
 func TestElementVariableKeyFallback(t *testing.T) {
 	// 变量 key → [key] 回退容器级（Q1）
 	nodes, _ := indexFixture(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 func f(k string) {
@@ -84,7 +84,7 @@ func f(k string) {
 func TestElementRangeAndChan(t *testing.T) {
 	// range 迭代 = 读（[*]）；channel 收发 = 写/读元素（[send]/[recv]）
 	nodes, _ := indexFixture(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 func f(m map[string]int, ch chan int) {
@@ -117,7 +117,7 @@ func f(m map[string]int, ch chan int) {
 func TestElementNamedContainer(t *testing.T) {
 	// named map 容器：full_path 用类型限定路径 + 元素记号（Q5）
 	nodes, _ := indexFixture(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 type M map[string]int
@@ -134,7 +134,7 @@ func f() {
 func TestElementFieldContainer(t *testing.T) {
 	// 容器是结构体字段：full_path = 字段路径 + 元素记号
 	nodes, _ := indexFixture(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 type T struct {
@@ -153,7 +153,7 @@ func TestIndirectWriteCallSite(t *testing.T) {
 	// 调用点级回连（Q90）：run 调 fillParam 写实参 c.Key——INDIRECT_WRITE
 	// 边 metadata 携带调用点行号与实参变量名（run:10 fillParam(c)）
 	_, facts, _ := indexFixtureFull(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 type Cfg struct {
@@ -198,7 +198,7 @@ func run(c *Cfg) {
 func TestElementIndirectWrite(t *testing.T) {
 	// 元素间接写（Q7a-② 别名命中）：fillM 写实参容器元素 → 调用者间接写
 	_, _, summaries := indexFixtureFull(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 type M map[string]int

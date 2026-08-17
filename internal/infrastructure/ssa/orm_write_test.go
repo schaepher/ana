@@ -184,7 +184,7 @@ func f(db *DB) {
 // 用本地模拟 DB 类型（链式 Model/Where/Count，同 gorm 形态）。
 func TestORMWhereFilter(t *testing.T) {
 	nodes, facts, _ := indexFixtureFull(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"field-summary.yaml": `summaries:
   - func: example.com/mtest.(DB).Where
     orm_write: true
@@ -238,7 +238,7 @@ func countBySession(db *DB, s *Session) int {
 // 时，键关联链贯通（session.id.read → ... → chat_message.session_id.filter）。
 func TestORMReadFind(t *testing.T) {
 	nodes, facts, _ := indexFixtureFull(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"field-summary.yaml": `summaries:
   - func: example.com/mtest.(DB).Find
     orm_read: true

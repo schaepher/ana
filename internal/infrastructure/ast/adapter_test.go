@@ -234,8 +234,8 @@ func TestIndexExternalCalleeAsArg(t *testing.T) {
 func TestIndexInitializesAndUses(t *testing.T) {
 	// s := &Service{} → initializes（main → Service）+ uses（Service → 方法）
 	_, facts := indexFixture(t, map[string]string{
-		"go.mod":  fixtureGoMod,
-		"main.go": "package main\n\nimport \"example.com/mtest/svc\"\n\nfunc main() {\n\ts := &svc.Service{}\n\ts.Handle()\n}\n",
+		"go.mod":   fixtureGoMod,
+		"main.go":  "package main\n\nimport \"example.com/mtest/svc\"\n\nfunc main() {\n\ts := &svc.Service{}\n\ts.Handle()\n}\n",
 		"svc/s.go": "package svc\n\ntype Service struct{}\n\nfunc (s *Service) Handle() {}\n",
 	})
 	findFact(t, facts,
@@ -252,8 +252,8 @@ func TestIndexInitializesAndUses(t *testing.T) {
 func TestIndexHasMethod(t *testing.T) {
 	// 接收者类型 → 方法（has_method）
 	_, facts := indexFixture(t, map[string]string{
-		"go.mod":  fixtureGoMod,
-		"main.go": "package main\n\nfunc main() {}\n",
+		"go.mod":   fixtureGoMod,
+		"main.go":  "package main\n\nfunc main() {}\n",
 		"svc/s.go": "package svc\n\ntype Service struct{}\n\nfunc (s *Service) Handle() {}\n\nfunc (s *Service) helper() {}\n",
 	})
 	findFact(t, facts,
@@ -281,8 +281,8 @@ func TestIndexServiceFlags(t *testing.T) {
 func TestIndexStructFields(t *testing.T) {
 	// struct 节点的 properties.fields（字段名 | 类型）
 	nodes, _ := indexFixture(t, map[string]string{
-		"go.mod":  fixtureGoMod,
-		"main.go": "package main\n\nfunc main() {}\n",
+		"go.mod":   fixtureGoMod,
+		"main.go":  "package main\n\nfunc main() {}\n",
 		"svc/s.go": "package svc\n\ntype Service struct {\n\tName string\n\tAddr *netAddr\n}\n\ntype netAddr struct{}\n",
 	})
 	n := findNode(t, nodes, "symbol:go:example.com/mtest/svc:Service")
@@ -300,8 +300,8 @@ func TestIndexInterfaceMethodChaining(t *testing.T) {
 	// 链式调用接口方法：main → p.Handle()（p 是接口类型，Handle 是接口方法）。
 	// 静态分析 return 具体类型后仍应产出 calls 边
 	_, facts := indexFixture(t, map[string]string{
-		"go.mod":  fixtureGoMod,
-		"main.go": "package main\n\nimport \"example.com/mtest/svc\"\n\nfunc main() {\n\ts := svc.New()\n\ts.Handle()\n}\n",
+		"go.mod":   fixtureGoMod,
+		"main.go":  "package main\n\nimport \"example.com/mtest/svc\"\n\nfunc main() {\n\ts := svc.New()\n\ts.Handle()\n}\n",
 		"svc/s.go": "package svc\n\ntype Service struct{}\n\nfunc (s *Service) Handle() {}\n\nfunc New() *Service {\n\treturn &Service{}\n}\n",
 	})
 	// main 调用 (Service).Handle（通过返回的具体类型解析）
@@ -314,8 +314,8 @@ func TestIndexInterfaceMethodChaining(t *testing.T) {
 func TestIndexUnrelatedPackagesNotIncluded(t *testing.T) {
 	// 外部依赖包（不在 module 内）不产出节点
 	_, facts := indexFixture(t, map[string]string{
-		"go.mod":  fixtureGoMod,
-		"main.go": "package main\n\nimport \"example.com/mtest/svc\"\n\nfunc main() {\n\tsvc.Helper()\n}\n",
+		"go.mod":   fixtureGoMod,
+		"main.go":  "package main\n\nimport \"example.com/mtest/svc\"\n\nfunc main() {\n\tsvc.Helper()\n}\n",
 		"svc/s.go": "package svc\n\nfunc Helper() {}\n",
 	})
 	for _, f := range facts {

@@ -63,7 +63,7 @@ func factsFrom(facts []*domain.Fact, id string) []*domain.Fact {
 
 func TestFieldReadWrite(t *testing.T) {
 	nodes, facts := indexFixture(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 type T struct {
@@ -134,7 +134,7 @@ func f(x *T, v int) int {
 func TestFieldCompoundReadWrite(t *testing.T) {
 	// x.A = x.A + 1：同一位置生成 read/write 两个独立节点（ID 以 access 消歧）
 	nodes, _ := indexFixture(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 type T struct {
@@ -160,7 +160,7 @@ func g(x *T) {
 func TestFieldNested(t *testing.T) {
 	// 嵌套字段：o.In.V —— 每层访问独立节点，full_path 用声明类型
 	nodes, _ := indexFixture(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 type Inner struct {
@@ -191,7 +191,7 @@ func TestFieldEmbedded(t *testing.T) {
 	// 嵌入字段：SSA 降级为两层访问（o.Emb 与 o.Emb.V）；
 	// full_path 用声明类型（Emb.V），instance_path 为 SSA 链（Q25 源码形式近似）
 	nodes, _ := indexFixture(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 type Emb struct {
@@ -218,7 +218,7 @@ func e(o *O2) {
 func TestFieldGlobal(t *testing.T) {
 	// 全局变量：基地址 ssa_value origin_kind=global
 	nodes, _ := indexFixture(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 type T struct {
@@ -248,7 +248,7 @@ func TestFieldShadowingDisambiguated(t *testing.T) {
 	// shadowing：两个作用域的同名 x 各自访问字段 → 两个独立写节点
 	// （同一实例路径 x.A，行号消歧），instance_path 均还原为 x.A
 	nodes, _ := indexFixture(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 type T struct {
@@ -298,7 +298,7 @@ func TestFieldNestedReadPropagates(t *testing.T) {
 	// 读链上的中间层是 read，不是"无用途默认 write"（误报写会污染
 	// 间接写摘要：newLLM 只读 cfg 却出现 direct_write Manager.cfg）
 	nodes, facts := indexFixture(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 type Config struct {
@@ -356,7 +356,7 @@ func TestElementLiteralInitFiltered(t *testing.T) {
 	// []T{...} 字面量 lifting（*[N]T 数组，无源码位置）：字面量初始化
 	// 不是元素访问，不产节点（opts[0] 噪音）
 	nodes, _ := indexFixture(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 type Option struct{ V int }
@@ -379,7 +379,7 @@ func f() {
 func TestElementArrayVarKept(t *testing.T) {
 	// 真数组变量 a[0] = 1（有源码位置）：保留元素访问
 	nodes, _ := indexFixture(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 func f() {
@@ -397,7 +397,7 @@ func f() {
 func TestFieldAnonymousStructFallback(t *testing.T) {
 	// 匿名 struct：静态类型无稳定身份 → full_path 回退源码字面量路径（§6.1）
 	nodes, _ := indexFixture(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 func f() {
@@ -547,7 +547,7 @@ func run6() {
 // ID，alias 边全部错挂在函数节点上（值节点看不到别名关系）。
 func TestAliasEdgeSourceIsValueNode(t *testing.T) {
 	_, facts := indexFixture(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 type T struct {
@@ -582,7 +582,7 @@ func f(x *T) int {
 // line_start=0 导致 CLI 无定位、前端无锚点）。
 func TestAnonymousStructFieldAccessHasLine(t *testing.T) {
 	nodes, _ := indexFixture(t, map[string]string{
-		"go.mod":  moduleGoMod,
+		"go.mod": moduleGoMod,
 		"main.go": `package m
 
 type Conf struct {

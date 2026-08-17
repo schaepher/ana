@@ -4,7 +4,7 @@
 //   - 全量实现枚举兜底：模块内实现该接口方法的类型（types.Implements）
 //   - dispatch_to 边：接口类型节点 → 候选实现方法节点，metadata 携带
 //     {interface_method, origin: register|enum, confidence: 0.9|0.7,
-//      register_site}（Q93 三档置信度；guess 0.5 留函数值场景）
+//     register_site}（Q93 三档置信度；guess 0.5 留函数值场景）
 //   - 缺失信息（Q93）：匿名接口/外部包实现 → 跳过（不产边）
 package ssa
 
@@ -13,9 +13,9 @@ import (
 	"strings"
 
 	"github.com/schaepher/codeintel/internal/domain"
+	"go.uber.org/zap"
 	"golang.org/x/tools/go/ssa"
 	"golang.org/x/tools/go/ssa/ssautil"
-	"go.uber.org/zap"
 )
 
 // dispatchReg 注册点：接口类型 → 动态类型 String → 注册行号。
