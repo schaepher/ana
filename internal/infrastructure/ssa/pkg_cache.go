@@ -20,11 +20,12 @@ package ssa
 
 import (
 	"crypto/sha256"
+	"embed"
 	"encoding/hex"
 	"encoding/json"
-	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -37,7 +38,7 @@ const pkgCacheFormat = 1
 // pkgCacheFile 单包缓存文件。
 type pkgCacheFile struct {
 	Version  int                        `json:"version"`
-	Analyzer string                     `json:"analyzer"` // 分析器版本（二进制内容 hash，Q181）
+	Analyzer string                     `json:"analyzer"` // 分析器版本（分析源码 hash，Q181/Q183）
 	PkgHash  string                     `json:"pkg_hash"`
 	Nodes    []*domain.CodeEntity       `json:"nodes"`
 	Facts    []*domain.Fact             `json:"facts"`
@@ -45,31 +46,44 @@ type pkgCacheFile struct {
 }
 
 var (
-	analyzerOnce   sync.Once
-	analyzerHash   string
+	analyzerOnce sync.Once
+	analyzerHash string
 )
 
-// analyzerVersionHash 分析器版本：当前可执行文件的内容 hash。
-// 分析逻辑（emitFunction/摘要/别名等）任何变化都会改变二进制——
-// 缓存键随之失效，无需手动维护版本号（确定机制）。进程内只算一次
-// （~50MB 二进制 sha256，约几十 ms）。
+//go:embed *.go
+var ssaSourceFS embed.FS
+
+// analyzerVersionHash 分析器版本：ssa 包生产源码内容 hash（编译时 embed
+// 快照，Q183）。只对影响索引产物的分析逻辑变化敏感——CLI 输出/前端/
+// 日志等无关改动（即使 rebuild）不触发缓存重建（Q181 用二进制 hash，
+// 任何 rebuild 都全量失效——过度）。embed 与 cwd 无关、覆盖未提交改动
+// （编译时读取）、目录扫描自动含新增文件。_test.go 排除（测试不影响
+// 产物）。
 func analyzerVersionHash() string {
 	analyzerOnce.Do(func() {
-		exe, err := os.Executable()
+		entries, err := ssaSourceFS.ReadDir(".")
 		if err != nil {
 			analyzerHash = "unknown"
 			return
 		}
-		f, err := os.Open(exe)
-		if err != nil {
-			analyzerHash = "unknown"
-			return
+		var files []string
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+				continue
+			}
+			files = append(files, e.Name())
 		}
-		defer f.Close()
+		sort.Strings(files)
 		h := sha256.New()
-		if _, err := io.Copy(h, f); err != nil {
-			analyzerHash = "unknown"
-			return
+		for _, f := range files {
+			data, err := ssaSourceFS.ReadFile(f)
+			if err != nil {
+				analyzerHash = "unknown"
+				return
+			}
+			h.Write([]byte(f))
+			h.Write(data)
+			h.Write([]byte{0})
 		}
 		analyzerHash = hex.EncodeToString(h.Sum(nil))[:16]
 	})

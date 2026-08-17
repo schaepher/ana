@@ -1588,12 +1588,13 @@ it + e2e 27 项全绿。
 
 **失效键**（Q181 确定机制，三层自动失效，无需手动清理）：
 1. 本包源码内容 hash（CompiledGoFiles sha256）
-2. **分析器版本**：缓存文件记录 analyzer 字段 = 当前二进制内容 hash
-   （os.Executable() sha256，进程内 once）——分析逻辑（emitFunction/
-   摘要/别名等）任何变化（含未提交改动）→ 重 build → 二进制变 →
-   load 校验失败自动重算。此前只按源码 hash，radar 曾命中 Q178 前
-   旧逻辑缓存（receiver 数据边全部陈旧）——`clean --purge-cache`
-   才能救，现已消除该人工步骤
+2. **分析器版本**：缓存文件记录 analyzer 字段 = 分析逻辑源码内容 hash
+   （internal/infrastructure/ssa/ 生产文件 go:embed 编译时快照，
+   进程内 once；Q183 取代 Q181 的二进制 hash）——只有影响索引产物
+   的分析逻辑变化（含未提交改动）触发失效；CLI 输出/前端/日志等
+   无关改动（即使 rebuild）不触发重建。此前（Q181）用二进制 hash，
+   任何 rebuild 都全量失效——过度；更早只按源码 hash，radar 曾命中
+   Q178 前旧逻辑缓存（receiver 数据边全部陈旧）
 3. 缓存文件结构变化 → pkgCacheFormat 递增
 
 **重建场景与范围（Q182 区分）**：
