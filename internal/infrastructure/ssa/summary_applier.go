@@ -1019,14 +1019,16 @@ func (ext *fieldExtractor) applyORMRead(cc *ssa.CallCommon, calleeID domain.Cano
 	}
 	t := derefSlice(derefType(realArg.Type()))
 	named, ok := t.(*types.Named)
-	fmt.Fprintf(os.Stderr, "ORMRead: arg=%T type=%s named=%v\n", realArg, t.String(), ok)
 	if !ok {
 		return nil // 非对象读（如 Count(&n) 无字段展开）
 	}
-	// 表名：实体 TableName() 常量优先（Q158：go2o 实体带 TableName——
-	// payment.Order → pay_order 而非 snake 类型名 order），否则
-	// Model(&X{}) 链式溯源 / 对象类型名
-	table := ext.tableNameOf(named)
+	// 表名：Table("x") 显式表名优先（Q177），其次实体 TableName() 常量
+	// （Q158：go2o 实体带 TableName——payment.Order → pay_order 而非 snake
+	// 类型名 order），否则 Model(&X{}) 链式溯源 / 对象类型名
+	table := chainTableNameValue(cc.Args[0])
+	if table == "" {
+		table = ext.tableNameOf(named)
+	}
 	if table == "" {
 		if scope := chainScopeObject(cc.Args[0]); scope != nil {
 			table = snakeCase(scope.Obj().Name())
@@ -1104,19 +1106,24 @@ func (ext *fieldExtractor) applyORMWrite(cc *ssa.CallCommon, calleeID domain.Can
 		// ⑦ 字符串列名形态：Update("col", v) / Where("col = ?", v)
 		if c, isConst := realArg.(*ssa.Const); isConst && c.Value != nil &&
 			constant.StringVal(c.Value) != "" && len(cc.Args) >= 3 {
-			scope := chainScopeObject(cc.Args[0])
-			if scope == nil {
-				return nil
+			// 表名：Table("x") 显式表名优先（Q177），fallback 链式结构体对象
+			table := chainTableNameValue(cc.Args[0])
+			if table == "" {
+				scope := chainScopeObject(cc.Args[0])
+				if scope == nil {
+					return nil
+				}
+				table = snakeCase(scope.Obj().Name())
 			}
-			table := snakeCase(scope.Obj().Name())
 			col := constant.StringVal(c.Value)
 			// Where("session_id = ?", v) 条件串：剥离 " = ?" 后缀取列名
 			if i := strings.Index(col, " = "); i >= 0 {
 				col = col[:i]
 			}
-			// Where 过滤列标 filter（表关联键：值 → 过滤列）
+			// Where/Not/Or 过滤列标 filter（表关联键：值 → 过滤列）
 			access := "write"
-			if strings.HasSuffix(string(calleeID), ".Where") {
+			if id := string(calleeID); strings.HasSuffix(id, ".Where") ||
+				strings.HasSuffix(id, ".Not") || strings.HasSuffix(id, ".Or") {
 				access = "filter"
 			}
 			// Where("col = ?", v) 的 v 是 variadic 实参（打包成 Slice）：
@@ -1394,6 +1401,11 @@ func (ext *fieldExtractor) applyInterfaceSummary(cc *ssa.CallCommon, callVal ssa
 			return false, nil
 		}
 	}
+	// Q177 链式传播：表名确定后记录到调用值——多级链
+	// （Table→Where→In→NotIn）中间方法返回值也携带表名，断链修复
+	if spec.ChainTable && table != "" && callVal != nil {
+		ext.recordChainTable(callVal, table)
+	}
 	line := ext.prog.Fset.PositionFor(cc.Pos(), false).Line
 	switch spec.Kind {
 	case "table":
@@ -1478,7 +1490,6 @@ func (ext *fieldExtractor) applyInterfaceSummary(cc *ssa.CallCommon, callVal ssa
 	case "filter":
 		// 仅 where 过滤（Count/DeleteBy：无对象读出）
 	case "sql":
-		fmt.Fprintf(os.Stderr, "IFACE_SQL: key=%s whereArg=%d sqlwrite=%v\n", key, spec.WhereArg, spec.SQLWrite)
 		// SQL 语句形态（Q158）：gof Connector 接口方法——SQL 字符串在
 		// WhereArg 实参，ExecScalar/Query=读、ExecNonQuery=写
 		return true, ext.applySQLSummary(cc, "", spec, callVal, spec.WhereArg)
