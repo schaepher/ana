@@ -68,6 +68,13 @@ func (ext *fieldExtractor) applySummary(cc *ssa.CallCommon, callee *ssa.Function
 		}
 	}
 
+	// kind 分派（Q177 修复）：XORM 静态 spec（xorm.io/xorm.(Session).X
+	// 普通键——真实 *xorm.Session 具体类型调用）——与接口摘要共用
+	// applySpecKind 的 table/filter/write/read/sql 逻辑
+	if spec.Kind != "" {
+		return ext.applySpecKind(cc, callVal, spec, key)
+	}
+
 	start := spec.ParamIndex
 	if spec.ParamIndex < 0 || spec.ParamIndex >= len(cc.Args) {
 		return true, nil

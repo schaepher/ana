@@ -44,6 +44,28 @@ func xormSummarySpecs() map[string]summarySpec {
 	} {
 		specs["iface:"+spec.Interface+"."+spec.Method] = spec
 	}
+	// 静态键（Q177 修复）：真实仓库用具体类型 *xorm.Session（SSA 解析
+	// 静态 callee → applySummary 普通键）。静态方法调用 cc.Args 含
+	// receiver（Args[0]）→ WhereArg/ObjArg 下标 +1；链式表名机制与
+	// iface 共用（chainTables）。
+	staticSpecs := []summarySpec{
+		{Func: "xorm.io/xorm.(Engine).Table", Kind: "table", Type: "xorm"},
+		{Func: "xorm.io/xorm.(Session).Table", Kind: "table", Type: "xorm"},
+		{Func: "xorm.io/xorm.(Session).Where", Kind: "filter", WhereArg: 1, ChainTable: true, Type: "xorm"},
+		{Func: "xorm.io/xorm.(Session).In", Kind: "filter", WhereArg: 1, ChainTable: true, Type: "xorm"},
+		{Func: "xorm.io/xorm.(Session).NotIn", Kind: "filter", WhereArg: 1, ChainTable: true, Type: "xorm"},
+		{Func: "xorm.io/xorm.(Session).Find", Kind: "read", ObjArg: 1, ChainTable: true, Type: "xorm"},
+		{Func: "xorm.io/xorm.(Session).Get", Kind: "read", ObjArg: 1, ChainTable: true, Type: "xorm"},
+		{Func: "xorm.io/xorm.(Session).Iterate", Kind: "read", ObjArg: 1, ChainTable: true, Type: "xorm"},
+		{Func: "xorm.io/xorm.(Session).Update", Kind: "write", ObjArg: 1, ChainTable: true, Type: "xorm"},
+		{Func: "xorm.io/xorm.(Session).Insert", Kind: "write", ObjArg: 1, ChainTable: true, Type: "xorm"},
+		{Func: "xorm.io/xorm.(Session).Delete", Kind: "write", ObjArg: 1, ChainTable: true, Type: "xorm"},
+		{Func: "xorm.io/xorm.(Session).Exec", Kind: "sql", WhereArg: 1, SQLWrite: true, Type: "xorm"},
+		{Func: "xorm.io/xorm.(Engine).Exec", Kind: "sql", WhereArg: 1, SQLWrite: true, Type: "xorm"},
+	}
+	for _, spec := range staticSpecs {
+		specs[spec.Func] = spec
+	}
 	return specs
 }
 
@@ -51,7 +73,15 @@ func xormSummarySpecs() map[string]summarySpec {
 // 由 Engine.Table(name) 记录过表名时返回该表名（filter/write/read 的
 // ChainTable 分支查链）。XORM 特有逻辑，随实现归入本文件。
 func (ext *fieldExtractor) chainTableName(cc *ssa.CallCommon) string {
-	return ext.chainTables[cc.Value]
+	// Q177 修复：静态调用 cc.Value 是方法函数（receiver 在 cc.Args[0]）；
+	// invoke 的 cc.Value 才是接口接收者。统一按接收者查链。
+	if cc.IsInvoke() {
+		return ext.chainTables[cc.Value]
+	}
+	if len(cc.Args) > 0 {
+		return ext.chainTables[cc.Args[0]]
+	}
+	return ""
 }
 
 // recordChainTable XORM 链式表名记录（Q175）：Table("name") 调用的返回

@@ -37,6 +37,16 @@ func (ext *fieldExtractor) applyInterfaceSummary(cc *ssa.CallCommon, callVal ssa
 		logger.Debug("iface spec 未匹配", zap.String("key", key))
 		return false, nil
 	}
+	return ext.applySpecKind(cc, callVal, spec, key)
+}
+
+// applySpecKind 按 spec.Kind 分派的公共逻辑（Q177 修复：静态摘要
+// applySummary 与接口摘要 applyInterfaceSummary 共用——XORM 真实
+// *xorm.Session 具体类型调用走静态路径，同样需要 kind 分派）：
+// 表名/实体解析 → 链式传播 → kind 发射（table/write/read/filter/sql）
+// + WhereArg filter。
+func (ext *fieldExtractor) applySpecKind(cc *ssa.CallCommon, callVal ssa.Value, spec summarySpec, key string) (bool, error) {
+	logger := zap.L()
 	// 表名/实体解析按形态分流：
 	//  - sql/table（Q175 XORM Table）：无需实体/表名（SQL 自带 / 链式记录）
 	//  - filter（Q175 XORM Where）：无需实体，表名查链式 Table（ChainTable）
@@ -74,38 +84,43 @@ func (ext *fieldExtractor) applyInterfaceSummary(cc *ssa.CallCommon, callVal ssa
 	line := ext.prog.Fset.PositionFor(cc.Pos(), false).Line
 	switch spec.Kind {
 	case "table":
-
-		if len(cc.Args) > 0 {
-			if c, isConst := cc.Args[0].(*ssa.Const); isConst && c.Value != nil {
-				name := constant.StringVal(c.Value)
-				if name != "" {
-					if callVal != nil {
-						ext.recordChainTable(callVal, name)
-					}
-					typ := spec.Type
-					if typ == "" {
-						typ = "gorm"
-					}
-					id := domain.CanonicalID(string(ext.funcID) + "#ext." + typ + "." + name + ".write@" + fmt.Sprintf("%d", line))
-					if err := ext.emit(domain.Item{Node: &domain.CodeEntity{
-						ID:        id,
-						Kind:      domain.KindFieldAccess,
-						Name:      name,
-						FilePath:  ext.currentFile,
-						LineStart: line,
-						Properties: map[string]any{
-							"full_path":     name,
-							"instance_path": name,
-							"access_kind":   "write",
-							"code_snippet":  cc.String(),
-							"type_string":   typ,
-							"is_external":   "true",
-							"func_id":       string(ext.funcID),
-						},
-					}}); err != nil {
-						return false, err
-					}
+		// 表名实参：遍历 Args 找字符串常量（Q177 静态调用 Args[0] 是
+		// receiver——iface 时 Args[0] 即表名，遍历兼容两种形态）
+		var name string
+		for _, a := range cc.Args {
+			if c, isConst := a.(*ssa.Const); isConst && c.Value != nil {
+				if s := constant.StringVal(c.Value); s != "" {
+					name = s
+					break
 				}
+			}
+		}
+		if name != "" {
+			if callVal != nil {
+				ext.recordChainTable(callVal, name)
+			}
+			typ := spec.Type
+			if typ == "" {
+				typ = "gorm"
+			}
+			id := domain.CanonicalID(string(ext.funcID) + "#ext." + typ + "." + name + ".write@" + fmt.Sprintf("%d", line))
+			if err := ext.emit(domain.Item{Node: &domain.CodeEntity{
+				ID:        id,
+				Kind:      domain.KindFieldAccess,
+				Name:      name,
+				FilePath:  ext.currentFile,
+				LineStart: line,
+				Properties: map[string]any{
+					"full_path":     name,
+					"instance_path": name,
+					"access_kind":   "write",
+					"code_snippet":  cc.String(),
+					"type_string":   typ,
+					"is_external":   "true",
+					"func_id":       string(ext.funcID),
+				},
+			}}); err != nil {
+				return false, err
 			}
 		}
 	case "write":
@@ -145,9 +160,10 @@ func (ext *fieldExtractor) applyInterfaceSummary(cc *ssa.CallCommon, callVal ssa
 			return false, err
 		}
 
-		if spec.IDArg >= 0 && spec.IDArg < len(cc.Args) {
-
-			if err := ext.emitWhereFilter(cc, []string{pkColumnOf(entity)}, spec.IDArg-1, table, line); err != nil {
+		// IDArg > 0 才触发（Q177：默认 0 是"未设置"——Find/Iterate 等
+		// 无主键参数的读不误产主键 filter；Get(id, &e) 的 id 下标显式设置）
+		if spec.IDArg > 0 && spec.IDArg < len(cc.Args) {
+			if err := ext.emitWhereFilterTyped(cc, []string{pkColumnOf(entity)}, spec.IDArg-1, table, line, spec.Type); err != nil {
 				return false, err
 			}
 		}
