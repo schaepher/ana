@@ -25,6 +25,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/schaepher/codeintel/internal/domain"
@@ -166,6 +167,41 @@ func fromCachedFD(c *cachedFuncData) *funcData {
 		})
 	}
 	return fd
+}
+
+// AnalyzerVersionHash 导出当前分析器版本（二进制内容 hash，Q182 全局
+// marker 用——orchestrator 判断"新特性须全量重建"）。
+func AnalyzerVersionHash() string { return analyzerVersionHash() }
+
+// analyzerMarkerPath 全局分析器版本 marker（.codeintel/cache/analyzer）：
+// FullBuild 写入；IncrementalBuild 读取——不匹配（分析器版本变化）时
+// 增量写库范围（仅变更文件）无法让新特性在未变更包上生效，须降级全量
+// 重建（Q182：区分两种重建场景——包源码变化走增量局部，新特性走全量
+// 全局）。
+func analyzerMarkerPath(repoDir string) string {
+	return filepath.Join(repoDir, ".codeintel", "cache", "analyzer")
+}
+
+// AnalyzerMarkerPath 导出 marker 路径（orchestrator 测试用）。
+func AnalyzerMarkerPath(repoDir string) string { return analyzerMarkerPath(repoDir) }
+
+// LoadAnalyzerMarker 读全局 marker；无 marker 返回空。
+func LoadAnalyzerMarker(repoDir string) string {
+	data, err := os.ReadFile(analyzerMarkerPath(repoDir))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// SaveAnalyzerMarker 写全局 marker（目录自动创建；失败返回错误——调用方
+// 决定是否阻塞）。
+func SaveAnalyzerMarker(repoDir string) error {
+	path := analyzerMarkerPath(repoDir)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(analyzerVersionHash()), 0o644)
 }
 
 // pkgCachePath 缓存文件路径（.codeintel/cache/<sha256(pkgPath)>.json）。

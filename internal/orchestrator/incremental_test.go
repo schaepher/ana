@@ -2,11 +2,13 @@ package orchestrator
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/schaepher/codeintel/internal/domain"
 	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
+	"github.com/schaepher/codeintel/internal/infrastructure/ssa"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -75,6 +77,10 @@ func TestIncrementalBuildKeepsUnchangedFiles(t *testing.T) {
 		{SourceID: staleID, TargetID: otherID, Kind: domain.FactCalls, ToolSource: domain.ToolSSA, Confidence: 0.9},
 	}, nil); err != nil {
 		t.Fatalf("seed: %v", err)
+	}
+	// Q182：模拟"已用当前分析器全量构建过"（无 marker 时增量会保守降级全量）
+	if err := ssa.SaveAnalyzerMarker(dir); err != nil {
+		t.Fatalf("save analyzer marker: %v", err)
 	}
 
 	res, err := o.IncrementalBuild(context.Background(), []string{"main.go"})
@@ -152,5 +158,50 @@ func TestDeleteFilesBatching(t *testing.T) {
 	}
 	if cnt != 1 {
 		t.Errorf("remaining nodes = %d, want 1 (keep.go)", cnt)
+	}
+}
+
+// TestIncrementalDegradesToFullOnAnalyzerStale：Q182 场景 2 区分——分析器
+// 版本变化（codeintel 新特性/逻辑变更，未变更包也须以新逻辑重建）时，
+// 增量 update 自动降级为全量重建：写库范围全局（不再按变更文件裁剪），
+// build_metadata tool_name=all。场景 1（包源码变化）仍走增量（其余测试）。
+func TestIncrementalDegradesToFullOnAnalyzerStale(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/inc\n\ngo 1.21\n")
+	writeFile(t, filepath.Join(dir, "main.go"), "package main\n\nfunc main() {}\n")
+
+	funcID := domain.CanonicalID("symbol:go:example.com/inc:main")
+	a := &richAdapter{items: []domain.Item{
+		{Node: &domain.CodeEntity{ID: funcID, Kind: domain.KindFunction, Name: "main", FilePath: "main.go", LineStart: 2}},
+	}}
+	o, _ := newTestOrchestrator(t, []domain.IndexerPort{a})
+	o.Repo = &domain.Repository{Path: dir, Module: "example.com/inc", Modules: []string{"example.com/inc"}}
+
+	// 全量构建：写全局 analyzer marker
+	if _, err := o.FullBuild(context.Background()); err != nil {
+		t.Fatalf("FullBuild: %v", err)
+	}
+	if got := ssa.LoadAnalyzerMarker(dir); got != ssa.AnalyzerVersionHash() {
+		t.Fatalf("FullBuild 后 marker = %q, want %q", got, ssa.AnalyzerVersionHash())
+	}
+	// 篡改 marker 模拟分析器版本变化（新特性上线，旧 marker 是旧逻辑的）
+	if err := os.WriteFile(ssa.AnalyzerMarkerPath(dir), []byte("stale-analyzer"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// 增量 update：应自动降级全量（未变更包也必须以新逻辑重建）
+	if _, err := o.IncrementalBuild(context.Background(), []string{"main.go"}); err != nil {
+		t.Fatalf("IncrementalBuild: %v", err)
+	}
+	var tool string
+	// build_id 是随机 UUID，须按写入序（rowid）取最新
+	if err := o.RepoImpl.QueryRow("SELECT tool_name FROM build_metadata ORDER BY rowid DESC LIMIT 1").Scan(&tool); err != nil {
+		t.Fatalf("query build_metadata: %v", err)
+	}
+	if tool != "all" {
+		t.Errorf("analyzer stale 时增量应降级全量（tool_name=all），got %q", tool)
+	}
+	// 降级后 marker 已更新为当前分析器
+	if got := ssa.LoadAnalyzerMarker(dir); got != ssa.AnalyzerVersionHash() {
+		t.Errorf("降级后 marker = %q, want %q", got, ssa.AnalyzerVersionHash())
 	}
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/schaepher/codeintel/internal/domain"
 	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
+	"github.com/schaepher/codeintel/internal/infrastructure/ssa"
 	"github.com/schaepher/codeintel/internal/logging"
 	"go.uber.org/zap"
 	"golang.org/x/tools/go/packages"
@@ -43,7 +44,15 @@ func (o *Orchestrator) FullBuild(ctx context.Context) (*BuildResult, error) {
 		return nil, err
 	}
 	orchStage("runAdapters")
-	return o.finishBuild(start, results, skipped, "all")
+	result, err := o.finishBuild(start, results, skipped, "all")
+	if err == nil {
+		// Q182：全量构建后写全局分析器 marker——后续 update 据此判断
+		// 是否需降级全量（新特性/逻辑变化后增量写库范围无法覆盖未变更包）
+		if merr := ssa.SaveAnalyzerMarker(o.Repo.Path); merr != nil {
+			logger.Warn("save analyzer marker", zap.Error(merr))
+		}
+	}
+	return result, err
 }
 
 // IncrementalBuild 增量构建（TD.md 5.2 增量语义，MVP：全量分析 + 增量写入）：
@@ -59,6 +68,15 @@ func (o *Orchestrator) IncrementalBuild(ctx context.Context, changedFiles []stri
 	logger.Debug("enter (Orchestrator).IncrementalBuild")
 	defer logger.Debug("exit (Orchestrator).IncrementalBuild")
 	start := time.Now()
+
+	// Q182：分析器版本变化（codeintel 新特性/逻辑变更）时，增量写库范围
+	// （仅变更文件）无法让新特性在未变更包上生效——自动降级为全量重建。
+	// 场景区分：包源码变化（pkg_hash）→ 增量局部；新特性（analyzer
+	// marker）→ 全量全局。
+	if ssa.LoadAnalyzerMarker(o.Repo.Path) != ssa.AnalyzerVersionHash() {
+		logger.Info("分析器版本变化，增量更新降级为全量重建（新特性须全量生效）")
+		return o.FullBuild(ctx)
+	}
 
 	changed := map[string]bool{}
 	for _, f := range changedFiles {

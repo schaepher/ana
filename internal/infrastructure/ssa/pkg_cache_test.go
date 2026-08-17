@@ -45,6 +45,21 @@ func TestLoadPkgCacheAnalyzerMismatch(t *testing.T) {
 	}
 }
 
+// TestAnalyzerMarkerRoundTrip：全局分析器 marker（Q182）——FullBuild 写、
+// IncrementalBuild 读；写后读回命中；无 marker 返回空。
+func TestAnalyzerMarkerRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	if err := SaveAnalyzerMarker(dir); err != nil {
+		t.Fatal(err)
+	}
+	if got := LoadAnalyzerMarker(dir); got != AnalyzerVersionHash() {
+		t.Errorf("marker = %q, want %q", got, AnalyzerVersionHash())
+	}
+	if got := LoadAnalyzerMarker(t.TempDir()); got != "" {
+		t.Errorf("无 marker 应返回空，got %q", got)
+	}
+}
+
 // TestSaveLoadPkgCacheRoundTrip：save 后 load 命中（analyzer + pkg_hash
 // 均匹配）——正常路径不受影响。
 func TestSaveLoadPkgCacheRoundTrip(t *testing.T) {
