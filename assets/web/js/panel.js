@@ -142,6 +142,11 @@ export function renderNodePanel(data) {
       html.push('<h3>返回（' + items.length + '）</h3>' + paramTableHtml(items));
       return;
     }
+    if (kind === 'passes_result') {
+      // Q192：实参来源表格化（实参在左、来源在右，签名短化悬浮全路径）
+      html.push('<h3>实参来源（' + items.length + '）</h3>' + argSrcTableHtml(items));
+      return;
+    }
     if (kind === 'dispatch_to') {
       // 动态派发候选（Q95）：接口视角=候选实现（出边）、实现视角=被派发（入边）
       var dout = items.filter(function (g) { return g.dir === '出'; });
@@ -262,6 +267,28 @@ function paramTableHtml(items) {
       '<td class="ftype">' + escapeHtml(t) + '</td></tr>';
   }).join('');
   return '<table class="fields"><thead><tr><th>名称</th><th>类型</th></tr></thead><tbody>' +
+    rows + '</tbody></table>';
+}
+
+// shortSig 短化签名中的包路径：保留包最后一段 + 类型名
+// （github.com/.../internal/llm.ChatMessage → llm.ChatMessage，Q192）。
+function shortSig(sig) {
+  return sig.replace(/([a-zA-Z0-9_]+(?:(?:\/|\.)[a-zA-Z0-9_]+)*\.)([A-Z][a-zA-Z0-9_]*)/g, function (m, p, t) {
+    var segs = p.replace(/\//g, '.').split('.');
+    return segs[segs.length - 2] + '.' + t;
+  });
+}
+
+// argSrcTableHtml 实参来源表格（Q192）：实参在左、来源（函数签名）在右；
+// 签名中的包路径短化为最后一段，完整签名放 title（悬浮展示完整路径）。
+function argSrcTableHtml(items) {
+  if (!items.length) return '';
+  var rows = items.map(function (g) {
+    var full = g.srcSig || g.name;
+    return '<tr><td>' + escapeHtml(g.argName) + '</td>' +
+      '<td class="ftype" title="' + escapeHtml(full) + '">' + escapeHtml(shortSig(full)) + '</td></tr>';
+  }).join('');
+  return '<table class="fields"><thead><tr><th>实参</th><th>来源</th></tr></thead><tbody>' +
     rows + '</tbody></table>';
 }
 
