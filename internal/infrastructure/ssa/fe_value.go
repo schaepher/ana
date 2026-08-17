@@ -202,7 +202,15 @@ func (ext *fieldExtractor) emitValue(v ssa.Value) (domain.CanonicalID, error) {
 
 	name := ext.instancePath(v)
 	if isSSAName(name) {
-		name = slot
+		// Q179：SSA 临时寄存器（tN）恢复为源码变量名——lifting 后变量
+		// 提升为寄存器，变量名在 IR 中丢失；tN 的 Pos 精确指向其定义
+		// 表达式（u := f() 的 f()），assignTargets 区间匹配 RHS → 目标
+		// 变量 u。phi/无 Pos 合成值（MakeInterface 等）匹配失败保持 tN。
+		if orig := ext.lookupAssignTarget(v.Pos()); orig != "" && !isSSAName(orig) {
+			name = orig
+		} else {
+			name = slot
+		}
 	}
 	n := &domain.CodeEntity{
 		ID:   id,
