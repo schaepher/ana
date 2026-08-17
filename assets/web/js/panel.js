@@ -184,16 +184,35 @@ export function loadNodeFlows(nodeId) {
 }
 
 // renderFlowsGroup 渲染单向数据流树（缩进 + 边类型 + 节点名 + 行号）。
+// Q180 可读性：同一字段同一行的读/写合并为 [读/写]（t.A = t.A + 1 的
+// 读改写不再拆两行）；值节点（ssa_value）行号来自节点 line_start
+// （← data_flows_to t (10)——t 在哪定义一目了然）。
 function renderFlowsGroup(flows, dir, title) {
   var rows = flows.filter(function (f) { return f.dir === dir; });
   if (!rows.length) return '';
+  // 字段访问节点按 name+line 合并 access（去重保序）
+  var fieldAcc = {};
+  var fieldSeen = {};
+  rows.forEach(function (f) {
+    if (f.kind !== 'field_access') return;
+    var key = f.name + '|' + f.line;
+    if (!fieldAcc[key]) fieldAcc[key] = [];
+    if (fieldAcc[key].indexOf(f.access) < 0) fieldAcc[key].push(f.access);
+  });
   var html = ['<h4>' + title + '</h4>', '<pre class="flows">'];
   rows.forEach(function (f) {
     var arrow = dir === 0 ? '←' : '→';
     var label = f.edgeKind ? arrow + ' ' + f.edgeKind : '';
-    var access = f.kind === 'field_access' ? (f.access === 'read' ? ' [读]' : ' [写]') : '';
     var line = f.line ? ' (' + f.line + ')' : '';
-    html.push(new Array(f.depth * 2 + 1).join(' ') + label + ' ' + f.name + access + line);
+    if (f.kind === 'field_access') {
+      var key = f.name + '|' + f.line;
+      if (fieldSeen[key]) return; // 已在首行合并输出
+      fieldSeen[key] = true;
+      var acc = fieldAcc[key].map(function (a) { return a === 'read' ? '读' : '写'; }).join('/');
+      html.push('  ' + f.name + ' [' + acc + ']' + line);
+    } else {
+      html.push(new Array(f.depth * 2 + 1).join(' ') + label + ' ' + f.name + line);
+    }
   });
   html.push('</pre>');
   return html.join('');

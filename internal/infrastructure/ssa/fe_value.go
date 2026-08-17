@@ -121,9 +121,10 @@ func (ext *fieldExtractor) emitValue(v ssa.Value) (domain.CanonicalID, error) {
 		id := domain.CanonicalID("symbol:go:" + g.Pkg.Pkg.Path() + ":var." + g.Name())
 		ext.values[v] = id
 		n := &domain.CodeEntity{
-			ID:   id,
-			Kind: domain.KindSSAValue,
-			Name: g.Name(),
+			ID:        id,
+			Kind:      domain.KindSSAValue,
+			Name:      g.Name(),
+			LineStart: lineOf(ext, v),
 			Properties: map[string]any{
 				"origin_kind": "global",
 				"ssa_op":      "global",
@@ -166,9 +167,10 @@ func (ext *fieldExtractor) emitValue(v ssa.Value) (domain.CanonicalID, error) {
 					id := domain.CanonicalID(string(fid) + "#" + name)
 					ext.values[v] = id
 					n := &domain.CodeEntity{
-						ID:   id,
-						Kind: domain.KindSSAValue,
-						Name: name,
+						ID:        id,
+						Kind:      domain.KindSSAValue,
+						Name:      name,
+						LineStart: lineOf(ext, v),
 						Properties: map[string]any{
 							"origin_kind": "local",
 							"ssa_op":      "load",
@@ -207,9 +209,10 @@ func (ext *fieldExtractor) emitValue(v ssa.Value) (domain.CanonicalID, error) {
 		name = slot
 	}
 	n := &domain.CodeEntity{
-		ID:   id,
-		Kind: domain.KindSSAValue,
-		Name: name,
+		ID:        id,
+		Kind:      domain.KindSSAValue,
+		Name:      name,
+		LineStart: lineOf(ext, v),
 		Properties: map[string]any{
 			"origin_kind": originKind(v),
 			"ssa_op":      ssaOp(v),
@@ -218,4 +221,13 @@ func (ext *fieldExtractor) emitValue(v ssa.Value) (domain.CanonicalID, error) {
 		},
 	}
 	return id, ext.emit(domain.Item{Node: n})
+}
+
+// lineOf 值的源码行号（无 Pos / 0 行返回 0——合成值 phi、Const 等）。
+func lineOf(ext *fieldExtractor, v ssa.Value) int {
+	line := ext.prog.Fset.PositionFor(v.Pos(), false).Line
+	if line < 0 {
+		return 0
+	}
+	return line
 }

@@ -42,6 +42,16 @@ func g() {
 	if fa := findFieldAccess(t, nodes, funcID, "u.A", "write"); fa == nil {
 		t.Errorf("字段写实例路径应为 u.A（base 寄存器 t0 恢复为 u）")
 	}
+	// Q180：恢复为变量名的 ssa_value 节点带定义行号（flows 面板
+	// `← data_flows_to u (行号)`；Const/匿名字面量无源码 Pos 允许 0）
+	for _, n := range nodes {
+		if n.Kind != domain.KindSSAValue || n.Property("func_id") != funcID || n.Name != "u" {
+			continue
+		}
+		if n.LineStart <= 0 {
+			t.Errorf("ssa_value 节点 u 应带定义行号，got line=%d", n.LineStart)
+		}
+	}
 }
 
 // TestTempValuePhiKeepsSlot：phi 无源码位置（Pos 为空），无法恢复变量名，

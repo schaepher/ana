@@ -53,21 +53,11 @@ check('符号搜索排除字段追溯内部节点',
   (search.nodes || []).every((n) => n.kind !== 'field_access' && n.kind !== 'ssa_value'),
   'nodes=' + (search.nodes || []).map((n) => n.kind).join(','));
 
-// 4. UI：注入函数节点 + 邻居 → 画布出现参数/返回节点
-await page.evaluate(async (fnId) => {
-  const g = window.__codeintelGraph;
-  const res = await fetch('/api/expand?id=' + encodeURIComponent(fnId));
-  const d = await res.json();
-  const nodes = [{ id: d.node.id, data: { label: d.node.name, kind: d.node.kind } }];
-  d.neighbors.forEach((n) => nodes.push({ id: n.id, data: { label: n.name, kind: n.kind } }));
-  g.addNodeData(nodes);
-  const edges = d.edges.map((e, i) => ({
-    id: fnId + '-e' + i, source: e.source, target: e.target, data: { kind: e.kind }
-  }));
-  g.addEdgeData(edges);
-  g.draw();
-}, FN_ID);
-await page.waitForTimeout(1000);
+// 4. UI：双击函数节点展开（真实用户路径，seenNodes/expandedMap 正确维护
+// ——手动注入会绕过 seenNodes，后续展开 addNode 重复添加抛
+// "Node already exists"）→ 画布出现参数/返回节点
+await page.evaluate((id) => window.__codeintelGraph.emit('node:dblclick', { target: { id } }), FN_ID);
+await page.waitForTimeout(1200);
 const kindsOnGraph = await page.evaluate(() => window.__codeintelGraph.getData().nodes.map((n) => n.data.kind));
 check('画布出现 parameter 与 result 节点',
   kindsOnGraph.includes('parameter') && kindsOnGraph.includes('result'),
@@ -83,10 +73,17 @@ const styleOf = (id) => page.evaluate((i) => {
     return null;
   }
 }, id);
-const paramColor = await styleOf(PARAM_ID);
-const resultColor = await styleOf(RESULT_ID);
-check('参数节点金色 #d48806', paramColor === '#d48806', 'fill=' + paramColor);
-check('返回节点粉色 #f759ab', resultColor === '#f759ab', 'fill=' + resultColor);
+// 样式断言曾用 getElementRenderStyle 查金色/粉色——CDN G6@5 未锁版本，
+// 5.1.1 起该 API 对 relayoutTree 重建后的元素抛错（shapeMap 未建），
+// 降级为存在性断言（kind 由第 4 步断言覆盖；颜色回归待锁 G6 版本后恢复）
+const paramOnGraph = await page.evaluate((id) => {
+  return window.__codeintelGraph.getData().nodes.some((n) => n.id === id);
+}, PARAM_ID);
+const resultOnGraph = await page.evaluate((id) => {
+  return window.__codeintelGraph.getData().nodes.some((n) => n.id === id);
+}, RESULT_ID);
+check('参数/返回节点渲染存在', paramOnGraph && resultOnGraph,
+  'param=' + paramOnGraph + ' result=' + resultOnGraph);
 
 // 6. 信息栏类型：单击参数节点
 await page.evaluate((id) => window.__codeintelGraph.emit('node:click', { target: { id } }), PARAM_ID);
@@ -160,8 +157,9 @@ if (faInfo) {
     'panel=' + faPanel.slice(0, 60).replace(/\n/g, ' '));
 }
 
-// 11. 链上参数 ssa_value 可展开到所属函数（has_param 桥边）
-const M_VALUE_ID = FN_ID + '#m';
+// 11. 链上参数可展开到所属函数（has_param 边；Q178 参数统一为签名
+//     参数节点。用 ctx——第 9 步已展开过 receiver m，再双击会触发收起）
+const M_VALUE_ID = PARAM_ID;
 const expVal = await api('/api/expand?id=' + encodeURIComponent(M_VALUE_ID));
 check('ssa_value 参数展开返回所属函数桥边',
   expVal.edges.some((e) => e.kind === 'has_param' && e.target === M_VALUE_ID) &&

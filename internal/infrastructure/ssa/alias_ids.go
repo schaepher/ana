@@ -13,6 +13,39 @@ import (
 )
 
 func (p *aliasPass) valueNodeID(v ssa.Value) (domain.CanonicalID, bool) {
+	// Q178：参数/接收者统一用签名参数节点（与 emitValue 一致）——此前
+	// alias 对参数生成 ssa_value 副本（funcID#m），与签名参数节点
+	// （#param.recv.m）双节点分裂，数据边挂两处。参数节点已由
+	// emitSignatureNodes 发射，这里只返回 ID 不再发射。
+	if prm, ok := v.(*ssa.Parameter); ok {
+		fn := prm.Parent()
+		if fn == nil || fn.Signature == nil {
+			return "", false
+		}
+		funcID, ok := p.funcIDOf(fn)
+		if !ok {
+			return "", false
+		}
+		if recv := fn.Signature.Recv(); recv != nil && len(fn.Params) > 0 && fn.Params[0] == prm {
+			name := recv.Name()
+			if name == "" {
+				name = "recv"
+			}
+			return domain.CanonicalID(string(funcID) + "#param.recv." + name), true
+		}
+		name := prm.Object().Name()
+		if name == "" {
+			idx := 0
+			for i := 0; i < fn.Signature.Params().Len(); i++ {
+				if fn.Signature.Params().At(i) == prm.Object() {
+					idx = i
+					break
+				}
+			}
+			name = fmt.Sprintf("arg%d", idx)
+		}
+		return domain.CanonicalID(string(funcID) + "#param." + name), true
+	}
 	fn := v.Parent()
 	if fn == nil {
 		return "", false
