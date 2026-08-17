@@ -58,6 +58,13 @@ type Orchestrator struct {
 	Repo     *domain.Repository
 	Adapters []domain.IndexerPort
 	RepoImpl *sqlite.Repo
+
+	// P2 跨批 FK 收集：flush 时端点节点尚未落库的边/摘要/来源，构建尾部
+	// （全部节点落库后）统一重试——原实现静默跳过导致非确定性丢边。
+	// 仅 flush 协程写、finish 阶段读（flushCh 关闭 + flushWg.Wait 同步）。
+	failedEdges     []*domain.Fact
+	failedSummaries []*domain.FunctionFieldSummary
+	failedOrigins   []*domain.SummaryOrigin
 }
 
 // New 创建 Orchestrator，默认挂载 MVP 适配器（SCIP/AST/Git）。
@@ -419,6 +426,8 @@ func (o *Orchestrator) runAdapters(ctx context.Context, pkgs []*packages.Package
 	close(ch)
 	<-flushed // 等待消费协程排空（含最后一批入 flushCh）
 	flushWg.Wait() // 等待 flush 协程写完
+	// P2：FK 失败项（跨批依赖）尾部重试——此时全部节点已落库
+	o.retryFailedFK(&skipped)
 	logger.Info("orchestrator stage", zap.String("stage", "flush done"),
 		zap.Duration("elapsed", time.Since(runStart)))
 	return results, skipped, nil
@@ -510,10 +519,38 @@ func (o *Orchestrator) flush(b *batchT, mu *sync.Mutex, skipped *int) error {
 	mu.Lock()
 	*skipped += res.SkippedEdges
 	mu.Unlock()
+	// P2：FK 失败项（端点节点尚未落库）收集——构建尾部统一重试
+	o.failedEdges = append(o.failedEdges, res.FailedEdges...)
+	o.failedSummaries = append(o.failedSummaries, res.FailedSummaries...)
+	o.failedOrigins = append(o.failedOrigins, res.FailedOrigins...)
 	b.nodes = b.nodes[:0]
 	b.edges = b.edges[:0]
 	b.summaries = b.summaries[:0]
 	return nil
+}
+
+// retryFailedFK 构建尾部重试 FK 失败项（P2）：全部节点落库后，跨批
+// 依赖已满足 → 绝大多数重试成功；仍失败的为真缺节点（如 Git 追踪到
+// 未索引文件），计入跳过数（SkippedEdges 语义：最终跳过）。
+func (o *Orchestrator) retryFailedFK(skipped *int) {
+	logger := zap.L()
+	if len(o.failedEdges) == 0 && len(o.failedSummaries) == 0 && len(o.failedOrigins) == 0 {
+		return
+	}
+	logger.Info("retry FK-failed items",
+		zap.Int("edges", len(o.failedEdges)),
+		zap.Int("summaries", len(o.failedSummaries)),
+		zap.Int("origins", len(o.failedOrigins)))
+	res, err := o.RepoImpl.SaveBatchStats(nil, o.failedEdges, o.failedSummaries, o.failedOrigins)
+	o.failedEdges = nil
+	o.failedSummaries = nil
+	o.failedOrigins = nil
+	if err != nil {
+		logger.Warn("retry FK-failed items", zap.Error(err))
+		return
+	}
+	// retry 阶段无并发（flush 协程已退出，flushWg.Wait 之后调用）
+	*skipped += res.SkippedEdges
 }
 
 // GetRepo 返回仓储（查询命令共用）。

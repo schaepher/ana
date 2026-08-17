@@ -1650,3 +1650,15 @@ build cache 已覆盖）、computeAliases/emitSummaries（全局依赖，
   只升级 query——恢复旧代码时未同步内存版修复，两路径差 3368 write）
 - 修复后 go2o 上两路径完全一致（33995 条、0 差异）；两次重建的库内容
   微小差异（边差 3 → 关联差 759）为 degraded 构建非确定性（既有问题）
+
+**Q177 追加修复 2（P2）：跨批 FK 冲突丢边**——重建非确定性根因
+- 现象：go2o 三次 clean+init 边数 156217/156214/156217（节点恒 152211）
+- 机制：并发构建（--workers>1）边批先于其端点节点批落库 → 外键冲突 →
+  SaveBatchStats 静默跳过（SkippedEdges++）→ 每次重建丢不同边（丢哪条
+  取决于 flush 调度时机）→ 非确定性。节点无 FK 依赖故节点数稳定
+- 修复：FK 失败项（边/摘要/来源）收集进 Failed* 返回；orchestrator
+  flush 收集 → runAdapters 尾部（flushWg.Wait 后，全部节点已落库）
+  统一重试 retryFailedFK；重试后仍失败的（真缺节点，如 Git 追踪到
+  未索引文件）才计入 SkippedEdges
+- 顺带发现：go2o 源码目录非 git 仓库 → git 适配器每次降级（degraded
+  的 error_message = "git log failed"），与丢边无关但会显示降级警告

@@ -75,7 +75,8 @@ func TestSaveBatchEmpty(t *testing.T) {
 
 func TestSaveBatchFKSkip(t *testing.T) {
 	r := newTestRepo(t)
-	// 边指向不存在的节点（外键冲突）→ 跳过并计数
+	// 边指向不存在的节点（外键冲突）→ 进入 FailedEdges（构建尾部可重试），
+	// 不立即计入 SkippedEdges（重试后仍失败才算跳过）
 	res, err := r.SaveBatchStats(nil, []*domain.Fact{{
 		SourceID: "symbol:go:example.com/m:a",
 		TargetID: "symbol:go:example.com/m:b",
@@ -84,8 +85,46 @@ func TestSaveBatchFKSkip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SaveBatchStats: %v", err)
 	}
-	if res.SkippedEdges != 1 {
-		t.Errorf("SkippedEdges = %d, want 1", res.SkippedEdges)
+	if res.SkippedEdges != 0 {
+		t.Errorf("SkippedEdges = %d, want 0（FK 失败待重试，非最终跳过）", res.SkippedEdges)
+	}
+	if len(res.FailedEdges) != 1 {
+		t.Fatalf("FailedEdges = %d, want 1", len(res.FailedEdges))
+	}
+}
+
+// TestSaveBatchFKRetry：FK 失败边在节点落库后重试成功（P2——跨批丢边
+// 修复：并发构建时边批先于节点批落库 → FK 冲突 → 原实现静默跳过）。
+func TestSaveBatchFKRetry(t *testing.T) {
+	r := newTestRepo(t)
+	src := domain.CanonicalID("symbol:go:example.com/m:a")
+	tgt := domain.CanonicalID("symbol:go:example.com/m:b")
+	edge := &domain.Fact{SourceID: src, TargetID: tgt, Kind: domain.FactCalls}
+	// ① 边先落库（节点未插入）→ FK 失败进 FailedEdges
+	res, err := r.SaveBatchStats(nil, []*domain.Fact{edge}, nil)
+	if err != nil || len(res.FailedEdges) != 1 {
+		t.Fatalf("first: %v %+v", err, res)
+	}
+	// ② 节点落库
+	if _, err := r.SaveBatchStats([]*domain.CodeEntity{
+		{ID: src, Kind: domain.KindFunction, Name: "a"},
+		{ID: tgt, Kind: domain.KindFunction, Name: "b"},
+	}, nil, nil); err != nil {
+		t.Fatalf("save nodes: %v", err)
+	}
+	// ③ 重试 → 成功，无残留失败
+	res2, err := r.SaveBatchStats(nil, res.FailedEdges, nil)
+	if err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if len(res2.FailedEdges) != 0 || res2.SkippedEdges != 0 {
+		t.Fatalf("retry 残留: %+v", res2)
+	}
+	// 边已入库
+	var cnt int
+	if err := r.QueryRow(`SELECT COUNT(*) FROM edges WHERE source_id = ? AND target_id = ?`,
+		string(src), string(tgt)).Scan(&cnt); err != nil || cnt != 1 {
+		t.Fatalf("edge count = %d, %v; want 1", cnt, err)
 	}
 }
 

@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"sync"
 	"context"
 	"os"
 	"os/exec"
@@ -287,5 +288,52 @@ func writeFile(t *testing.T, path, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestFlushFKRetry：跨批 FK 冲突（P2）——边批先于节点批落库时外键冲突，
+// flush 收集失败边不静默丢弃；构建尾部全部节点落库后重试 → 边不丢。
+func TestFlushFKRetry(t *testing.T) {
+	dir := t.TempDir()
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+	orch := New(&domain.Repository{Path: dir, Module: "m", Modules: []string{"m"}}, db)
+	src := domain.CanonicalID("symbol:go:m:a")
+	tgt := domain.CanonicalID("symbol:go:m:b")
+	var mu sync.Mutex
+	skipped := 0
+
+	// 批1：边引用尚未落库的节点 → FK 失败 → 收集进 failedEdges（不丢）
+	b1 := newBatch()
+	b1.edges = []*domain.Fact{{SourceID: src, TargetID: tgt, Kind: domain.FactCalls}}
+	if err := orch.flush(b1, &mu, &skipped); err != nil {
+		t.Fatalf("flush edges: %v", err)
+	}
+	if skipped != 0 {
+		t.Fatalf("skipped = %d, want 0（FK 失败待重试）", skipped)
+	}
+
+	// 批2：节点落库
+	b2 := newBatch()
+	b2.nodes = []*domain.CodeEntity{
+		{ID: src, Kind: domain.KindFunction, Name: "a"},
+		{ID: tgt, Kind: domain.KindFunction, Name: "b"},
+	}
+	if err := orch.flush(b2, &mu, &skipped); err != nil {
+		t.Fatalf("flush nodes: %v", err)
+	}
+
+	// 构建尾部重试 → 成功，边入库
+	orch.retryFailedFK(&skipped)
+	if skipped != 0 {
+		t.Errorf("skipped = %d, want 0（重试后无残留）", skipped)
+	}
+	var cnt int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM edges WHERE source_id = ? AND target_id = ?`,
+		string(src), string(tgt)).Scan(&cnt); err != nil || cnt != 1 {
+		t.Fatalf("edge count = %d, %v; want 1（跨批 FK 边不丢）", cnt, err)
 	}
 }

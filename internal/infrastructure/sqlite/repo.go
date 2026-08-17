@@ -52,8 +52,16 @@ VALUES (?, ?, ?, ?, ?, ?)`
 
 // saveBatchResult 记录批次写入的统计信息。
 type saveBatchResult struct {
-	// SkippedEdges 因外键冲突（端点节点不存在）被跳过的边数
+	// SkippedEdges 因外键冲突（端点节点不存在）被跳过的边数。
+	// 注：FK 失败先进入 Failed*（构建尾部重试），重试后仍失败才计入。
 	SkippedEdges int
+	// FailedEdges/FailedSummaries/FailedOrigins FK 冲突项（端点节点尚未
+	// 落库——并发构建跨批依赖）→ 调用方收集后于全部节点落库后重试
+	// （P2：原实现静默跳过导致非确定性丢边，go2o 三次重建 156217/
+	// 156214/156217）。
+	FailedEdges    []*domain.Fact
+	FailedSummaries []*domain.FunctionFieldSummary
+	FailedOrigins   []*domain.SummaryOrigin
 }
 
 // SaveBatch 在单个事务中保存节点与边（节点必须先于边插入以满足外键）。
@@ -120,8 +128,9 @@ func (r *Repo) SaveBatchStats(nodes []*domain.CodeEntity, edges []*domain.Fact,
 			if _, err := stmt.Exec(string(e.SourceID), string(e.TargetID), string(e.Kind),
 				e.ToolSource, e.Confidence, string(meta)); err != nil {
 				if isFKError(err) {
-					// 端点节点不存在（如 Git 追踪到未索引文件），跳过该边
-					result.SkippedEdges++
+					// 端点节点尚未落库（并发构建跨批依赖）——收集待重试，
+					// 不静默丢弃（P2；真缺节点的边重试后仍失败才计入跳过）
+					result.FailedEdges = append(result.FailedEdges, e)
 					continue
 				}
 				stmt.Close()
@@ -140,7 +149,7 @@ func (r *Repo) SaveBatchStats(nodes []*domain.CodeEntity, edges []*domain.Fact,
 			if _, err := stmt.Exec(string(s.FunctionID), s.AccessKind, s.FieldPath,
 				s.InstancePath, s.LineStart, s.CodeSnippet); err != nil {
 				if isFKError(err) {
-					result.SkippedEdges++
+					result.FailedSummaries = append(result.FailedSummaries, s)
 					continue
 				}
 				stmt.Close()
@@ -166,7 +175,7 @@ func (r *Repo) SaveBatchStats(nodes []*domain.CodeEntity, edges []*domain.Fact,
 			if _, err := stmt.Exec(string(o.FunctionID), o.AccessKind, o.FieldPath,
 				o.CallLine, string(o.CalleeID)); err != nil {
 				if isFKError(err) {
-					result.SkippedEdges++
+					result.FailedOrigins = append(result.FailedOrigins, o)
 					continue
 				}
 				stmt.Close()
