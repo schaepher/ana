@@ -113,7 +113,7 @@ codeintel query unused --json --repo <目标仓库>
 ## 验证与注意事项
 
 - 改动验证矩阵：`make test`（单元）、`make it`（集成，需 scip-go）、`make e2e`（playwright 22 项，端口 8096，用 `E2E_REPO=<仓库>` 指定验证仓库）
-- **schema 无自动迁移**（user_version=2）：改 schema 后验证仓库须 `clean --force` + `init` 重建，否则报版本不匹配
+- **schema 无自动迁移**（user_version=4）：改 schema 后验证仓库须 `clean --force` + `init` 重建，否则报版本不匹配
 - 每次改完并验证完后要 `git push`（用户约定）
 - 日志：zap + OTel 写入 `.codeintel/codeintel.log`（main 粗解析 --repo 传入 Setup）；
   --verbose 的 debug 日志也在文件里；stdout 仅查询结果

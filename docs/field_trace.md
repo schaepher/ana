@@ -196,7 +196,7 @@ CREATE INDEX idx_nodes_field_path ON nodes(json_extract(properties, '$.full_path
 CREATE INDEX idx_nodes_func_id ON nodes(json_extract(properties, '$.func_id'));
 ```
 
-**Schema 版本管理**：`PRAGMA user_version` 1 → 2。无自动迁移（TD.md 10.2），版本不匹配时报错提示 `codeintel clean` 重建。
+**Schema 版本管理**：`PRAGMA user_version` 当前 4（1→2 摘要表；2→3 summary_origins；3→4 relation_candidates + 边复合索引 + counts 列）。无自动迁移（TD.md 10.2），版本不匹配时报错提示 `codeintel clean` 重建。
 
 ### 5.3 并发与事务
 
@@ -1662,3 +1662,31 @@ build cache 已覆盖）、computeAliases/emitSummaries（全局依赖，
   未索引文件）才计入 SkippedEdges
 - 顺带发现：go2o 源码目录非 git 仓库 → git 适配器每次降级（degraded
   的 error_message = "git log failed"），与丢边无关但会显示降级警告
+
+## 39. go2o ER 键关联 21 条全量源码验证（2026-08-17）
+
+**背景**：P0/P2 修复后 go2o 索引完整（边 164594，status=success——git init
+后不再 degraded）；21 条 query 键关联逐条读源码验证"终点列是真实查询条件
+且与起点列同业务键"。**21/21 全部通过**。
+
+按终点分组的证据（文件:行 = 终点列为查询条件的位置）：
+
+| 关联（from → to） | 查询条件证据 |
+|---|---|
+| order_list.order_no ↔ sale_sub_order.order_no（双向 2 跳） | order_repo.go:228 `SELECT id FROM sale_sub_order where order_no= $1`；:230 同值查 order_list |
+| 7 表 member_id → mm_account.member_id（flow_account_log/balance_log/block_list/extra_field/integral_log/levelup/relation，7-8 跳） | member_repo.go:379 `m._orm.Get(memberId, e)`（GORM 主键=member_id）；:736 `UPDATE mm_account ... where member_id= $6` |
+| mm_member.id → mm_account.member_id（12 跳） | account.go:98 `a.rep.GetAccount(a.member.GetAggregateRootId())`——member 聚合根 ID 即 mm_member 主键 |
+| image/online_shop/product/sku/trade_snapshot 的 id/item_id → snapshot.item_id（8-12 跳） | item_repo.go:231 `i.o.Get(itemId, e)` 主键查；:103 `GetItemBySkuId`（"SKU-ID为商品ID"） |
+| message.sender_id / to_role → msg_list 同名列（8 跳） | mss.go:102 `WHERE ... sender_id= $4 AND to_role= $5` |
+| category.parent_id → product_category.parent_id（8 跳） | category_repo.go:88 `DELETE FROM product_category WHERE parent_id= $1`（删分类用其 id 删子类） |
+| promotion_info.type_flag → pm_info.type_flag（12 跳） | promotion_repo.go:100 `SELECT id FROM pm_info WHERE goods_id= $1 AND type_flag= $2` |
+| rise_day_info / rise_log.person_id → rise_info_value.person_id（8 跳） | personfinance_repo.go:49 `p.o.Get(id, e)` 主键查 |
+
+**方法**：filter 节点定位（nodes 表 access_kind=filter）→ 读源码确认查询条件
+→ value-trace/调用点确认值与起点列同业务键。两处旧标注（er_verified.py 的
+SWITCH 换轨：category/message/promotion_info/rise 系列）在新索引下核对后
+仍成立（换轨是 from 列标注偏差，终点 filter 均真实）。
+
+**环境变更**：go2o 已 git init + commit（7fbacae）——构建状态 success
+（此前无 .git 导致 git 适配器每次降级 degraded）。索引重建 13.85s
+（Q176 包缓存）；--all 4.8s，relation_candidates 缓存命中 15ms。

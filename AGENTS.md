@@ -225,7 +225,7 @@ defer logger.Debug("exit <name>")
   清理 e2e 进程用 `pkill -x codeintel-e2e`（精确进程名）；杀完 sleep 0.5 再起新进程。
 - **git 命令务必在 codeintel 仓库目录执行**：曾在 `/home/schaepher/Codes/radar`（验证仓库）
   误执行 `git add -A` 把 `.codeintel/` 文件提交进 radar（已撤销）。验证仓库只读不改。
-- **schema 无自动迁移**（`PRAGMA user_version=2`）：改动表结构后验证仓库必须
+- **schema 无自动迁移**（`PRAGMA user_version=4`）：改动表结构后验证仓库必须
   `codeintel clean` + `init` 重建，否则旧库 schema 不匹配报错或数据形态过时
   （曾因旧库缺 GORM 虚拟节点误判功能未生效）。
 - **日志已切文件**：所有带 `--repo` 的命令日志写入 `.codeintel/codeintel.log`，
@@ -242,7 +242,7 @@ defer logger.Debug("exit <name>")
 - **多 go.mod 已支持**（2026-08-15 P2-3）：递归扫描根下所有 go.mod，
   每 module 独立加载/独立 scip-go；go.work 根（无根 go.mod）仍不支持
   （报错提示进入模块目录）
-- sqlite-vec 向量表未创建（Semble 未接入）；schema 版本由 PRAGMA user_version=2 管理，
+- sqlite-vec 向量表未创建（Semble 未接入）；schema 版本由 PRAGMA user_version=4 管理，
   版本不匹配时报错提示 `codeintel clean` 重建
 - 未实现：LLM 摘要、Semble；**MCP serve 已取消**（2026-08-15 Q135：AI 直接
   使用 CLI 查询命令，--json 即结构化契约）

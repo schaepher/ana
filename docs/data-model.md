@@ -92,7 +92,7 @@
 | commit | `date`、`message` |
 | 边 metadata | `line_num`、`call_line`、`call_args`、`method`、`method_path`、`url`、`host`、`path`、`register`/`enum` |
 
-## 5. 表结构（SQLite，user_version=2）
+## 5. 表结构（SQLite，user_version=4——v3 增 summary_origins；v4 增 relation_candidates + 边复合索引 + build_metadata 计数列）
 
 - `nodes(id PRIMARY KEY, kind, name, file_path, line_start, line_end, properties JSON)`
 - `edges(source_id, target_id, kind, tool_source, confidence, metadata JSON, UNIQUE(source_id,target_id,kind))`
