@@ -38,6 +38,10 @@ func g() {
 	if !names["u"] {
 		t.Errorf("临时寄存器应恢复为变量名 u，got ssa_value names=%v", names)
 	}
+	// 字段访问的实例路径也应恢复 base 寄存器名：u.A 而非 t0.A
+	if fa := findFieldAccess(t, nodes, funcID, "u.A", "write"); fa == nil {
+		t.Errorf("字段写实例路径应为 u.A（base 寄存器 t0 恢复为 u）")
+	}
 }
 
 // TestTempValuePhiKeepsSlot：phi 无源码位置（Pos 为空），无法恢复变量名，

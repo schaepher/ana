@@ -133,7 +133,24 @@ func (ext *fieldExtractor) instancePathDepth(v ssa.Value, depth int) string {
 			return name
 		}
 	}
-	return v.Name()
+	// Q179：叶子为临时寄存器（tN）时恢复源码变量名——字段实例路径
+	// t0.A → t.A（u := f() 后 u.A 的 FieldAddr.X 是 lifting 寄存器 t0）
+	return ext.recoverVarName(v)
+}
+
+// recoverVarName 临时寄存器（tN）→ 源码变量名：lifting 后变量提升为
+// 寄存器、变量名在 IR 中丢失；tN 的 Pos 精确指向其定义表达式
+// （u := f() 的 f()），assignTargets 区间匹配 RHS → 目标变量 u。
+// 非临时名 / 无 Pos（phi、合成值）→ 原样返回。
+func (ext *fieldExtractor) recoverVarName(v ssa.Value) string {
+	name := v.Name()
+	if !isSSAName(name) {
+		return name
+	}
+	if orig := ext.lookupAssignTarget(v.Pos()); orig != "" && !isSSAName(orig) {
+		return orig
+	}
+	return name
 }
 
 // fieldNameOf 取类型第 idx 个字段名（derefStruct 失败返回空）。
