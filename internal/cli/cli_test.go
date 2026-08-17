@@ -37,19 +37,48 @@ func TestClean(t *testing.T) {
 	if code := cmdClean([]string{"--repo", dir, "--force"}); code != 0 {
 		t.Errorf("clean without index = %d, want 0", code)
 	}
-	// 建索引目录后 force 删除
+	// 建索引目录（db + 包级分析缓存）后 force 删除：db 删、cache 保留
 	target := filepath.Join(dir, ".codeintel")
-	if err := os.MkdirAll(target, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(target, "cache"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(target, "codeintel.db"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	cacheFile := filepath.Join(target, "cache", "abc.json")
+	if err := os.WriteFile(cacheFile, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if code := cmdClean([]string{"--repo", dir, "--force"}); code != 0 {
 		t.Errorf("clean = %d, want 0", code)
 	}
+	if _, err := os.Stat(filepath.Join(target, "codeintel.db")); !os.IsNotExist(err) {
+		t.Error("codeintel.db should be removed")
+	}
+	if _, err := os.Stat(cacheFile); err != nil {
+		t.Error("包级分析缓存应保留（pkg hash 自校验，删除纯浪费）")
+	}
+}
+
+// TestCleanPurgeCache：clean --purge-cache 连缓存一起删除（磁盘清理场景）。
+func TestCleanPurgeCache(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, ".codeintel")
+	if err := os.MkdirAll(filepath.Join(target, "cache"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "codeintel.db"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cacheFile := filepath.Join(target, "cache", "abc.json")
+	if err := os.WriteFile(cacheFile, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := cmdClean([]string{"--repo", dir, "--force", "--purge-cache"}); code != 0 {
+		t.Errorf("clean --purge-cache = %d, want 0", code)
+	}
 	if _, err := os.Stat(target); !os.IsNotExist(err) {
-		t.Error(".codeintel should be removed")
+		t.Error(".codeintel should be fully removed with --purge-cache")
 	}
 }
 

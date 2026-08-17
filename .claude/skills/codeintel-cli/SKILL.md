@@ -29,7 +29,7 @@ codeintel export relations --repo <path> [--out x.json]  # 导出全库表间关
 codeintel export graph --type value-trace|callees|lifecycle --target <节点> [--format mermaid|dot] [--out file]
                                            # 图导出：value-trace 默认 mermaid（函数分组）、callees 默认 dot、
                                            # lifecycle 生命周期图（[存储]/[观测]/[读]/[写]+条件标注）
-codeintel clean --repo <path> --force      # 删除索引（schema 变更后必须 clean + init 重建）
+codeintel clean --repo <path> --force      # 删除索引（schema 变更后必须 clean + init 重建；默认保留 .codeintel/cache 包级分析缓存——pkg hash 自校验，重建时未变包直接跳过；磁盘清理加 --purge-cache）
 codeintel reindex --repo <path> [--workers N] # 一步重建索引（FullBuild 清空图数据表 DROP+CREATE 重建，不删库文件；--workers 同 init）
 codeintel version
 ```

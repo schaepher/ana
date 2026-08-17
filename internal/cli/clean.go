@@ -16,6 +16,7 @@ func cmdClean(args []string) int {
 	fs := flag.NewFlagSet("clean", flag.ExitOnError)
 	repoPath := fs.String("repo", ".", "仓库根目录")
 	force := fs.Bool("force", false, "不提示直接删除")
+	purgeCache := fs.Bool("purge-cache", false, "连包级分析缓存（.codeintel/cache）一起删除——默认保留")
 	fs.Parse(args)
 
 	abs, err := filepath.Abs(*repoPath)
@@ -36,10 +37,31 @@ func cmdClean(args []string) int {
 			return 0
 		}
 	}
-	if err := os.RemoveAll(target); err != nil {
+	if *purgeCache {
+		if err := os.RemoveAll(target); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 1
+		}
+		fmt.Printf("已删除 %s（含包级分析缓存）\n", target)
+		return 0
+	}
+	// 默认保留 .codeintel/cache（Q176 包级分析缓存）：pkg 源码 hash 自校验
+	// + 格式版本——任何情况下不会用错缓存，删除纯浪费（重建时未变包
+	// 的 emitFunction 可直接跳过）。磁盘清理用 --purge-cache。
+	entries, err := os.ReadDir(target)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
-	fmt.Printf("已删除 %s\n", target)
+	for _, e := range entries {
+		if e.Name() == "cache" {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(target, e.Name())); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 1
+		}
+	}
+	fmt.Printf("已删除索引 %s（保留 .codeintel/cache 包级分析缓存；--purge-cache 可一并删除）\n", target)
 	return 0
 }
