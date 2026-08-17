@@ -113,8 +113,11 @@ if (hasBtn) {
 const orderText = await page.evaluate(() => document.getElementById('panel-body').textContent);
 const i1 = (s) => orderText.indexOf(s);
 const paramSeg = orderText.slice(orderText.indexOf('参数（'), orderText.indexOf('返回（'));
-check('参数按定义顺序（m→ctx→sessionID→userMessage）',
-  i1('→m') >= 0 && i1('→ctx') > i1('→m') && i1('→sessionID') > i1('→ctx') && i1('→userMessage') > i1('→sessionID'),
+// Q187：实参来源条目（lastUserMessage→userMessage）含 →userMessage——
+// 顺序断言用带类型的完整条目消除歧义
+check('参数按定义顺序（m→ctx→sessionID→userMessage，带类型）',
+  i1('→m · *Manager') >= 0 && i1('→ctx · Context') > i1('→m · *Manager') &&
+  i1('→sessionID · string') > i1('→ctx · Context') && i1('→userMessage · string') > i1('→sessionID · string'),
   'params=' + paramSeg.replace(/\n/g, ' '));
 // Q186：返回条目为"名称 · 类型"（result 节点名 = 签名参数名）
 const s1 = i1('→reply');
