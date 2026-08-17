@@ -89,10 +89,16 @@ export function renderNodePanel(data) {
     }
     var other = e.source === node.id ? e.target : e.source;
     var otherNode = byId[other];
+    var name = otherNode ? otherNode.name : other;
+    // Q185：实参来源（passes_result）标注具体是哪个实参——
+    // lastUserMessage() 的返回值传给本函数的 userMessage 参数
+    if (e.kind === 'passes_result' && e.metadata && e.metadata.arg_name) {
+      name += '（' + e.metadata.arg_name + '）';
+    }
     byKind[e.kind].push({
       id: other,
       dir: e.source === node.id ? '出' : '入',
-      name: otherNode ? otherNode.name : other,
+      name: name,
       file: otherNode ? otherNode.file : '',
       line: e.line
     });

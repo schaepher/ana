@@ -87,12 +87,14 @@ type NodeFieldJSON struct {
 }
 
 // EdgeJSON 边输出格式；direction: "out"=该节点依赖对方，"in"=对方依赖该节点。
+// Metadata：passes_result 携带 arg_index/arg_name（Q185 实参来源标注）等。
 type EdgeJSON struct {
-	Source    string `json:"source"`
-	Target    string `json:"target"`
-	Kind      string `json:"kind"`
-	Direction string `json:"direction"`
-	Line      int    `json:"line,omitempty"`
+	Source    string         `json:"source"`
+	Target    string         `json:"target"`
+	Kind      string         `json:"kind"`
+	Direction string         `json:"direction"`
+	Line      int            `json:"line,omitempty"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
 }
 
 // handleModuleCalls 模块间调用（field_trace.md §21.3）：HTTP JSON 透出

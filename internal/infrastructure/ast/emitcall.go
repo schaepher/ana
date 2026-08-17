@@ -70,9 +70,15 @@ func (ctx *fileCtx) emitCall(call *ast.CallExpr) {
 	// 否则 joinIDs 无入边被 unused 误报。
 	if callee.Pkg() != nil {
 		calleeID, _ := fnID(callee)
-		for _, arg := range call.Args {
+		for i, arg := range call.Args {
 			if inner, isCall := arg.(*ast.CallExpr); isCall {
-				ctx.a.handleNestedArg(pkg, inner, calleeID, ctx.emit, ctx.repo)
+				// Q185：argName = 接收者签名第 i 个参数名（信息栏
+				// "实参来源"分组标注具体是哪个实参）
+				argName := ""
+				if sig, ok := callee.Type().(*types.Signature); ok && i < sig.Params().Len() {
+					argName = sig.Params().At(i).Name()
+				}
+				ctx.a.handleNestedArg(pkg, inner, calleeID, i, argName, ctx.emit, ctx.repo)
 			}
 		}
 	}

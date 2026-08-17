@@ -83,3 +83,33 @@ func callMethodValue() {
 	findFact(t, facts, "symbol:go:example.com/mtest:h", "symbol:go:example.com/mtest:g", string(domain.FactCalls))
 	findFact(t, facts, "symbol:go:example.com/mtest:callMethodValue", "symbol:go:example.com/mtest:(T).M", string(domain.FactCalls))
 }
+
+// TestPassesResultArgMetadata：passes_result 边带实参下标与参数名
+// （Q185：信息栏"实参来源"分组标注具体是哪个实参——outer(inner(1))
+// 的 inner 是 outer 第 1 个参数 s）。
+func TestPassesResultArgMetadata(t *testing.T) {
+	_, facts := indexFixture(t, map[string]string{
+		"go.mod": fixtureGoMod,
+		"a.go": `package m
+
+func inner(x int) int { return x }
+
+func outer(s string) string { return s }
+
+func callNested() {
+	_ = outer(inner(1))
+}
+`,
+	})
+
+	f := findFact(t, facts, "symbol:go:example.com/mtest:outer", "symbol:go:example.com/mtest:inner", string(domain.FactPassesResult))
+	if f.Metadata == nil {
+		t.Fatalf("passes_result 边应带 metadata（arg_index/arg_name）")
+	}
+	if idx, ok := f.Metadata["arg_index"]; !ok || idx != 0 {
+		t.Errorf("arg_index = %v, want 0（inner 是 outer 第 1 个实参）", f.Metadata["arg_index"])
+	}
+	if name, ok := f.Metadata["arg_name"]; !ok || name != "s" {
+		t.Errorf("arg_name = %v, want s", f.Metadata["arg_name"])
+	}
+}

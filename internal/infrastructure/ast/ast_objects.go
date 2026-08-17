@@ -158,8 +158,12 @@ func (a *Adapter) createObject(pkg *packages.Package, expr ast.Expr, stack []ast
 
 // handleNestedArg 处理参数位置的嵌套调用：接收者持有返回参数。
 // A(B(C())) → A→B、B→C（passes_result），参数位置的调用不建 calls。
+// Q185：边 metadata 记录接收者实参下标/参数名——argIndex = 该嵌套调用
+// 在接收者调用点的第几个实参，argName = 接收者签名的对应参数名
+// （outer(inner(1)) 的 inner 是 outer 第 1 个参数 s；由调用方计算传入，
+// 递归时传内层 callee 的实参名）。
 func (a *Adapter) handleNestedArg(pkg *packages.Package, call *ast.CallExpr, receiverID domain.CanonicalID,
-	emit domain.EmitFunc, repo *domain.Repository) {
+	argIndex int, argName string, emit domain.EmitFunc, repo *domain.Repository) {
 	logger := zap.L()
 	logger.Debug("enter (Adapter).handleNestedArg")
 	defer logger.Debug("exit (Adapter).handleNestedArg")
@@ -182,11 +186,19 @@ func (a *Adapter) handleNestedArg(pkg *packages.Package, call *ast.CallExpr, rec
 		Kind:       domain.FactPassesResult,
 		ToolSource: domain.ToolCodeGraph,
 		Confidence: 0.8,
+		Metadata: map[string]any{
+			"arg_index": argIndex,
+			"arg_name":  argName,
+		},
 	}})
 
-	for _, inner := range call.Args {
+	for i, inner := range call.Args {
 		if ic, isCall := inner.(*ast.CallExpr); isCall {
-			a.handleNestedArg(pkg, ic, calleeID, emit, repo)
+			innerName := ""
+			if sig, ok := callee.Type().(*types.Signature); ok && i < sig.Params().Len() {
+				innerName = sig.Params().At(i).Name()
+			}
+			a.handleNestedArg(pkg, ic, calleeID, i, innerName, emit, repo)
 			continue
 		}
 		fn := argFuncRef(pkg, inner)

@@ -44,7 +44,7 @@ export const EDGE_KIND_LABEL = {
   initializes: '初始化',
   uses: '使用',
   passes_to: '持有参数',
-  passes_result: '持有返回参数',
+  passes_result: '实参来源',
   of_type: '类型',
   has_method: '拥有方法',
   has_param: '参数',

@@ -155,6 +155,9 @@ func (s *Server) handleExpand(w http.ResponseWriter, r *http.Request) {
 		if ln, ok := f.Metadata["line_num"].(float64); ok {
 			e.Line = int(ln)
 		}
+		if len(f.Metadata) > 0 {
+			e.Metadata = f.Metadata
+		}
 		edges = append(edges, e)
 	}
 
