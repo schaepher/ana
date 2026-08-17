@@ -1690,3 +1690,28 @@ SWITCH 换轨：category/message/promotion_info/rise 系列）在新索引下核
 **环境变更**：go2o 已 git init + commit（7fbacae）——构建状态 success
 （此前无 .git 导致 git 适配器每次降级 degraded）。索引重建 13.85s
 （Q176 包缓存）；--all 4.8s，relation_candidates 缓存命中 15ms。
+
+## 40. SelfContained 集成测试迁移为单元测试（2026-08-17）
+
+**背景**：integration/ 的 22 个 SelfContained 测试（fixture 自建、断言全为
+SSA/sqlite 产物）本质是单元测试——却依赖 scip-go + CLI 全管道，且带
+integration tag（make test 不覆盖）。按"单元测试与实现同目录"标准迁移
+到 internal/infrastructure/ssa/，随 make test 覆盖。
+
+**迁移机制**（工具 tmp/ast_split/migrate.go，go/ast 结构化变换）：
+- 语句级识别替换：writeFile(t, Join(dir, path), content) → indexFixtureRepo
+  files map；dir := t.TempDir() / runCLI init / sqlite.Open / NewRepo 删除；
+  runCLIOut query trace-forward/backward/value-trace/fields → repo 直接调用
+- 断言替换：CLI 输出文本 contains → traceHas（rows 的 Name/FullPath/FuncID）/
+  ffsHas（字段摘要）/ vtCandHas（EdgeOrigin 动态候选标注）
+- module 前缀统一 example.com/mtest（源码、yaml iface/func 路径、裸包名
+  "dyncand.Writer" 形态全部替换——dispatchRegs 按 Repository.Modules 过滤，
+  fixture go.mod 必须匹配）
+- minConf 语义保留：value-trace 默认 1.0（剪枝），原 --min-conf 0 才展开候选
+
+**遗留修复**：indexFixtureRepo 落库补 summaries（原丢弃导致 function_field_summary
+查询为空）；db.Query/QueryRow 残留 → repo（Repo 嵌入 *sql.DB）。
+
+**结果**：20 个迁移测试全绿；文件全部 ≤300 行（trace_object 216/trace_chain
+224/vt_trace 160/vt_dispatch 296/orm_chain 222/migrated 114）；integration
+剩余为真集成测试（CLI 全流程 + scip），TestCLIFullFlow 拆 Part1/Part2。
