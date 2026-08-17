@@ -71,14 +71,23 @@ func (r *Repo) GetTables() ([]string, error) {
 
 // GetAllTableRelations 全库关联聚合（Q160）：一次加载图（loadRelationGraph），
 // 全部表内存 BFS 合并去重——同 from/to 列对取 hops 最小 + Type 最高
-// （query > write > read）。结果按 build_id 全量写入 relation_candidates
-// （--all 重建缓存，后续单表查询命中缓存）。输出按 from/to 稳定排序，
-// AGENT 一次调用拿全库（query relations --all / export relations）。
-// mode 同 GetTableRelations（--memory）；sql 模式逐表走 relationsForSQL。
+// （query > write > read）。结果按 build_id 全量写入 relation_candidates。
+// 缓存优先（Q177）：当前 build_id 已覆盖全部表（marker + 关联行）时
+// 直接读缓存返回——--all 与单表查询同源，避免重复全图 BFS。输出按
+// from/to 稳定排序，AGENT 一次调用拿全库（query relations --all /
+// export relations）。mode 同 GetTableRelations（--memory）；sql 模式
+// 逐表走 relationsForSQL。
 func (r *Repo) GetAllTableRelations(mode string) ([]*domain.TableRelation, error) {
 	logger := zap.L()
 	logger.Debug("enter (Repo).GetAllTableRelations")
 	defer logger.Debug("exit (Repo).GetAllTableRelations")
+	// 缓存优先：该 build_id 已完整计算（覆盖全部表）→ 直接返回
+	if buildID := r.currentBuildID(); buildID != "" {
+		if rels, ok := r.loadAllRelationCandidates(buildID); ok {
+			logger.Debug("relations --all 命中缓存", zap.String("build_id", buildID))
+			return rels, nil
+		}
+	}
 	if !r.useMemoryGraph(mode) {
 		return r.getAllTableRelationsSQL()
 	}

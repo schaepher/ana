@@ -11,7 +11,7 @@ import "golang.org/x/tools/go/ssa"
 // ChainTable 查链）：
 //   - Engine.Table / Session.Table —— 链式表名起点（kind=table：记录
 //     Table("name") 返回值的表名 + 发射整表节点）
-//   - Session.Where / In / NotIn —— 条件字符串（WhereArg=0）→ filter 节点
+//   - Session.Where / And / Or / In / NotIn —— 条件字符串（WhereArg=0）→ filter 节点
 //   - Session.Find / Iterate —— 读：对象/slice 实参读出 → 表.列 read 节点
 //   - Session.Get —— 读：对象实参读出 → read 节点；IDArg=1 主键实参 →
 //     主键列 filter
@@ -31,6 +31,8 @@ func xormSummarySpecs() map[string]summarySpec {
 		{Interface: "xorm.io/xorm.(Engine)", Method: "Table", Kind: "table", Type: "xorm"},
 		{Interface: "xorm.io/xorm.(Session)", Method: "Table", Kind: "table", Type: "xorm"},
 		{Interface: "xorm.io/xorm.(Session)", Method: "Where", Kind: "filter", WhereArg: 0, ChainTable: true, Type: "xorm"},
+		{Interface: "xorm.io/xorm.(Session)", Method: "And", Kind: "filter", WhereArg: 0, ChainTable: true, Type: "xorm"},
+		{Interface: "xorm.io/xorm.(Session)", Method: "Or", Kind: "filter", WhereArg: 0, ChainTable: true, Type: "xorm"},
 		{Interface: "xorm.io/xorm.(Session)", Method: "In", Kind: "filter", WhereArg: 0, ChainTable: true, Type: "xorm"},
 		{Interface: "xorm.io/xorm.(Session)", Method: "NotIn", Kind: "filter", WhereArg: 0, ChainTable: true, Type: "xorm"},
 		{Interface: "xorm.io/xorm.(Session)", Method: "Iterate", Kind: "read", ObjArg: 0, ChainTable: true, Type: "xorm"},
@@ -52,6 +54,8 @@ func xormSummarySpecs() map[string]summarySpec {
 		{Func: "xorm.io/xorm.(Engine).Table", Kind: "table", Type: "xorm"},
 		{Func: "xorm.io/xorm.(Session).Table", Kind: "table", Type: "xorm"},
 		{Func: "xorm.io/xorm.(Session).Where", Kind: "filter", WhereArg: 1, ChainTable: true, Type: "xorm"},
+		{Func: "xorm.io/xorm.(Session).And", Kind: "filter", WhereArg: 1, ChainTable: true, Type: "xorm"},
+		{Func: "xorm.io/xorm.(Session).Or", Kind: "filter", WhereArg: 1, ChainTable: true, Type: "xorm"},
 		{Func: "xorm.io/xorm.(Session).In", Kind: "filter", WhereArg: 1, ChainTable: true, Type: "xorm"},
 		{Func: "xorm.io/xorm.(Session).NotIn", Kind: "filter", WhereArg: 1, ChainTable: true, Type: "xorm"},
 		{Func: "xorm.io/xorm.(Session).Find", Kind: "read", ObjArg: 1, ChainTable: true, Type: "xorm"},

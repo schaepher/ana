@@ -195,7 +195,7 @@ func TestGetAllTableRelationsRebuildCache(t *testing.T) {
 		t.Fatalf("rels = %+v, want 2", rels)
 	}
 	var fromTables int
-	if err := r.QueryRow(`SELECT COUNT(DISTINCT from_table) FROM relation_candidates WHERE build_id = 'b1'`).Scan(&fromTables); err != nil {
+	if err := r.QueryRow(`SELECT COUNT(DISTINCT from_table) FROM relation_candidates WHERE build_id = 'b1' AND from_table <> ''`).Scan(&fromTables); err != nil {
 		t.Fatalf("count: %v", err)
 	}
 	if fromTables != 2 {

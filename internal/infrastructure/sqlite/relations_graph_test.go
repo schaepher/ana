@@ -1,5 +1,11 @@
 package sqlite
 
+import (
+	"testing"
+
+	"github.com/schaepher/codeintel/internal/domain"
+)
+
 // TestGetTableRelationsBridge：循环读出桥（Q152）——BFS 到 ssa_value 节点
 // （类型 []example.com/m.Session → Session）时，桥接同函数、同类型的字段
 // 读取节点（非外部 read field_access，full_path 含类型名，下游 2 跳可达
@@ -29,3 +35,63 @@ package sqlite
 
 // TestGetAllTableRelationsRebuildCache：--all 全量重建缓存——先算完
 // 单表（缓存只有 table_a），--all 后 relation_candidates 覆盖为全部表。
+
+// TestGetAllTableRelationsCacheHit：--all 缓存优先（Q177）——完整计算
+// 一次后改图（删节点），再次 --all 直接读 relation_candidates 返回
+// （不重新加载全图/BFS）；build_id 变化后缓存失效重算。
+func TestGetAllTableRelationsCacheHit(t *testing.T) {
+	r := newTestRepo(t)
+	funcID := "symbol:go:example.com/m:find"
+	nodes := []*domain.CodeEntity{
+		{ID: domain.CanonicalID(funcID), Kind: domain.KindFunction, Name: "find"},
+		{ID: domain.CanonicalID(funcID + "#ext.sql.table_a.id.read@6"), Kind: domain.KindFieldAccess,
+			Name: "table_a.id", FilePath: "a.go", LineStart: 6,
+			Properties: map[string]any{"full_path": "table_a.id", "access_kind": "read",
+				"type_string": "sql", "is_external": "true", "func_id": funcID}},
+		{ID: domain.CanonicalID(funcID + "#t4"), Kind: domain.KindSSAValue, Name: "t4",
+			Properties: map[string]any{"func_id": funcID}},
+		{ID: domain.CanonicalID(funcID + "#x"), Kind: domain.KindSSAValue, Name: "x",
+			Properties: map[string]any{"func_id": funcID}},
+		{ID: domain.CanonicalID(funcID + "#ext.sql.table_b.a_id.filter@9"), Kind: domain.KindFieldAccess,
+			Name: "table_b.a_id", FilePath: "a.go", LineStart: 9,
+			Properties: map[string]any{"full_path": "table_b.a_id", "access_kind": "filter",
+				"type_string": "sql", "is_external": "true", "func_id": funcID}},
+	}
+	edges := []*domain.Fact{
+		{SourceID: domain.CanonicalID(funcID + "#ext.sql.table_a.id.read@6"), TargetID: domain.CanonicalID(funcID + "#t4"),
+			Kind: domain.FactSummaryIO, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: domain.CanonicalID(funcID + "#t4"), TargetID: domain.CanonicalID(funcID + "#x"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: domain.CanonicalID(funcID + "#x"), TargetID: domain.CanonicalID(funcID + "#ext.sql.table_b.a_id.filter@9"),
+			Kind: domain.FactSummaryIO, ToolSource: domain.ToolSSA, Confidence: 1},
+	}
+	save(t, r, nodes, edges)
+	if err := r.Save(&domain.BuildMeta{BuildID: "b1", ToolName: "all", Status: "success"}); err != nil {
+		t.Fatalf("Save build: %v", err)
+	}
+	// 第一次 --all：全量计算并写缓存（正向 query + 反向 read = 2 条）
+	rels1, err := r.GetAllTableRelations("")
+	if err != nil || len(rels1) != 2 {
+		t.Fatalf("first --all = %+v, %v; want 2", rels1, err)
+	}
+	// 改图：删 filter 节点（级联删边）——缓存命中时应忽略图变化
+	if _, err := r.Exec(`DELETE FROM nodes WHERE id = ?`,
+		domain.CanonicalID(funcID+"#ext.sql.table_b.a_id.filter@9")); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	rels2, err := r.GetAllTableRelations("")
+	if err != nil || len(rels2) != len(rels1) {
+		t.Fatalf("缓存命中应返回与首次一致，got %d, %v", len(rels2), err)
+	}
+	// build_id 变化 → 缓存失效 → 重算（filter 已删 → 无关联）
+	if err := r.Save(&domain.BuildMeta{BuildID: "b2", ToolName: "all", Status: "success"}); err != nil {
+		t.Fatalf("Save b2: %v", err)
+	}
+	rels3, err := r.GetAllTableRelations("")
+	if err != nil {
+		t.Fatalf("b2 --all: %v", err)
+	}
+	if len(rels3) != 0 {
+		t.Fatalf("b2 失效应重算为空，got %+v", rels3)
+	}
+}
