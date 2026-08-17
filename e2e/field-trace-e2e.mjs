@@ -113,18 +113,19 @@ if (hasBtn) {
 const orderText = await page.evaluate(() => document.getElementById('panel-body').textContent);
 const i1 = (s) => orderText.indexOf(s);
 const paramSeg = orderText.slice(orderText.indexOf('参数（'), orderText.indexOf('返回（'));
-// Q187：实参来源条目（lastUserMessage→userMessage）含 →userMessage——
-// 顺序断言用带类型的完整条目消除歧义
-check('参数按定义顺序（m→ctx→sessionID→userMessage，带类型）',
-  i1('→m · *Manager') >= 0 && i1('→ctx · Context') > i1('→m · *Manager') &&
-  i1('→sessionID · string') > i1('→ctx · Context') && i1('→userMessage · string') > i1('→sessionID · string'),
+const retSeg = orderText.slice(orderText.indexOf('返回（'), orderText.indexOf('被调用（'));
+// Q188：参数/返回表格化（名称 | 类型 两列，textContent 单元格拼接无
+// 分隔）——顺序断言用分段局部 indexOf
+check('参数表格顺序（接收者 m → ctx → sessionID → userMessage）',
+  i1('→m · *Manager') >= 0 &&
+  paramSeg.indexOf('ctx') < paramSeg.indexOf('sessionID') && paramSeg.indexOf('sessionID') < paramSeg.indexOf('userMessage'),
   'params=' + paramSeg.replace(/\n/g, ' '));
-// Q186：返回条目为"名称 · 类型"（result 节点名 = 签名参数名）
-const s1 = i1('→reply');
-const s2 = i1('→newSessionID');
-check('返回按定义顺序（reply→newSessionID→err，带类型）',
-  s1 >= 0 && s2 > s1 && i1('→err') > s2 && i1('reply · string') >= 0,
-  'results=' + orderText.slice(orderText.indexOf('返回（'), orderText.indexOf('返回（') + 90).replace(/\n/g, ' '));
+// Q186/Q188：返回表格（名称 = 签名参数名，类型列含 string/error）
+check('返回表格顺序（reply→newSessionID→err，带类型）',
+  retSeg.indexOf('reply') >= 0 && retSeg.indexOf('reply') < retSeg.indexOf('newSessionID') &&
+  retSeg.indexOf('newSessionID') < retSeg.indexOf('err') &&
+  retSeg.indexOf('string') >= 0 && retSeg.indexOf('error') >= 0,
+  'results=' + retSeg.replace(/\n/g, ' '));
 
 // 9. 双击参数节点：展开数据流上下游（桥边 → ssa_value → field_access）
 const RECV_ID = FN_ID + '#param.recv.m';

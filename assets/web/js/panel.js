@@ -122,14 +122,19 @@ export function renderNodePanel(data) {
     }
     if (kind === 'has_param') {
       // 参数分组：receiver（kind=receiver）与普通参数区分成两组，
-      // 接收者在前（index=-1，与图布局一致）
+      // 接收者在前（index=-1，与图布局一致）；Q188 参数表格化
       var recvs = items.filter(function (g) { return byId[g.id] && byId[g.id].kind === 'receiver'; });
       var params = items.filter(function (g) { return !(byId[g.id] && byId[g.id].kind === 'receiver'); });
       if (recvs.length) {
         state.panelGroupNodes[gi] = recvs.map(function (g) { return g.id; });
         html.push(relGroupHtml('接收者（' + recvs.length + '）', recvs, gi++));
       }
-      if (params.length) { state.panelGroupNodes[gi] = params.map(function (g) { return g.id; }); html.push(relGroupHtml('参数（' + params.length + '）', params, gi++)); }
+      if (params.length) html.push('<h3>参数（' + params.length + '）</h3>' + paramTableHtml(params));
+      return;
+    }
+    if (kind === 'has_result') {
+      // Q188：返回分组表格化（名称 | 类型）
+      html.push('<h3>返回（' + items.length + '）</h3>' + paramTableHtml(items));
       return;
     }
     if (kind === 'dispatch_to') {
@@ -240,6 +245,19 @@ function shortType(t) {
   while (s[0] === '*') { star += '*'; s = s.slice(1); }
   var parts = s.split('.');
   return star + parts[parts.length - 1];
+}
+
+// paramTableHtml 参数/返回分组表格（Q188）：名称 | 类型 两列表格，
+// 复用 .fields 样式；无类型时类型列留空。
+function paramTableHtml(items) {
+  if (!items.length) return '';
+  var rows = items.map(function (g) {
+    var t = g.type ? shortType(g.type) : '';
+    return '<tr><td>' + escapeHtml(g.name) + '</td>' +
+      '<td class="ftype">' + escapeHtml(t) + '</td></tr>';
+  }).join('');
+  return '<table class="fields"><thead><tr><th>名称</th><th>类型</th></tr></thead><tbody>' +
+    rows + '</tbody></table>';
 }
 
 // relGroupHtml 关系分组：标题（含 [隐藏]/[展开] 按钮）+ 按对方节点文件
