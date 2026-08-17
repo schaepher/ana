@@ -287,12 +287,12 @@ function relGroupHtml(title, items, gi) {
       var typeHtml = g.type ? '<span class="ftype"> · ' + escapeHtml(shortType(g.type)) + '</span>' : '';
       var entry;
       if (g.argName) {
-        // Q190：签名本身含函数名（lastUserMessage(msgs ...) string）——
-        // 箭头两侧留白、实参名加粗突出"指向"（→ userMessage）
+        // Q191：来源签名独占一行（可折行，长类型不撑爆信息栏），
+        // 箭头 + 实参在下一行缩进——"指向"始终在可视区内
         var src = g.srcSig || g.name;
-        entry = '<span class="name">' + escapeHtml(src) + '</span>' +
-          '<span class="dir"> → </span><span class="name arg" style="font-weight:600">' +
-          escapeHtml(g.argName) + '</span>';
+        entry = '<div class="arg-src">' + escapeHtml(src) + '</div>' +
+          '<div class="arg-dst"><span class="dir">→</span>' +
+          '<span class="name arg" style="font-weight:600">' + escapeHtml(g.argName) + '</span></div>';
       } else {
         entry = '<span class="dir">' + (g.dir === '出' ? '→' : '←') + '</span>' +
           '<span class="name">' + escapeHtml(g.name) + '</span>' + typeHtml;
