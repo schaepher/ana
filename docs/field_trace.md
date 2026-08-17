@@ -1586,8 +1586,18 @@ it + e2e 27 项全绿。
   未变更包不分析时必须缓存才能保持全局闭包完整）
 - 元数据：格式版本 + 包源码 hash（CompiledGoFiles 内容 sha256）
 
-**失效键**：本包源码内容 hash（保守；依赖包签名变化的影响记录为
-已知边界——后续可加 imports hash 组合）。
+**失效键**（Q181 确定机制，三层自动失效，无需手动清理）：
+1. 本包源码内容 hash（CompiledGoFiles sha256）
+2. **分析器版本**：缓存文件记录 analyzer 字段 = 当前二进制内容 hash
+   （os.Executable() sha256，进程内 once）——分析逻辑（emitFunction/
+   摘要/别名等）任何变化（含未提交改动）→ 重 build → 二进制变 →
+   load 校验失败自动重算。此前只按源码 hash，radar 曾命中 Q178 前
+   旧逻辑缓存（receiver 数据边全部陈旧）——`clean --purge-cache`
+   才能救，现已消除该人工步骤
+3. 缓存文件结构变化 → pkgCacheFormat 递增
+
+已知边界（未覆盖）：依赖包签名变化（本包源码未变但依赖 API 变了）
+——后续可加直接依赖包 hash 组合。
 
 **流程**：Adapter.Index 按包处理——hash 命中 → 加载缓存 emit + fd
 合并进 a.fd；未命中 → 现有分析 + 写缓存。init 也受益（同代码重复
