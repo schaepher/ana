@@ -77,6 +77,7 @@ export function renderNodePanel(data) {
   // 同时缓存完整邻居/边数据供 [展开] 按钮"只显示一层"使用
   var byKind = {};
   var restOrder = [];
+  var pendingRecvTypes = []; // Q184：接收者类型（has_method 入边）暂存，与 has_param 变量合并
   state.panelGroupNodes = {};
   state.panelNeighbors = byId;
   state.panelEdges = edges;
@@ -103,19 +104,31 @@ export function renderNodePanel(data) {
 
     if (kind === 'has_method') {
       // 方法线（接收者 → 方法）按视角分组：struct 节点视角=出边
-      // （它的方法们），方法节点视角=入边（指向它的接收者）
+      // （它的方法们），方法节点视角=入边（指向它的接收者类型）
       var out = items.filter(function (g) { return g.dir === '出'; });
       var inn = items.filter(function (g) { return g.dir === '入'; });
       if (out.length) { state.panelGroupNodes[gi] = out.map(function (g) { return g.id; }); html.push(relGroupHtml('方法（' + out.length + '）', out, gi++)); }
-      if (inn.length) { state.panelGroupNodes[gi] = inn.map(function (g) { return g.id; }); html.push(relGroupHtml('接收者（' + inn.length + '）', inn, gi++)); }
+      // Q184：接收者类型（has_method 入边）暂存，与 has_param 的接收者
+      // 变量合并为一个分组（变量 · 类型 一行显示）——此前两个分组同名
+      // "接收者"（←Manager 类型 / →m 变量）造成困惑
+      pendingRecvTypes = inn;
       return;
     }
     if (kind === 'has_param') {
       // 参数分组：receiver（kind=receiver）与普通参数区分成两组，
-      // 接收者在前（index=-1，与图布局一致）
+      // 接收者在前（index=-1，与图布局一致）；接收者变量名合并类型
+      // 名（→m · Manager）
       var recvs = items.filter(function (g) { return byId[g.id] && byId[g.id].kind === 'receiver'; });
       var params = items.filter(function (g) { return !(byId[g.id] && byId[g.id].kind === 'receiver'); });
-      if (recvs.length) { state.panelGroupNodes[gi] = recvs.map(function (g) { return g.id; }); html.push(relGroupHtml('接收者（' + recvs.length + '）', recvs, gi++)); }
+      if (recvs.length) {
+        var typeName = '';
+        if (pendingRecvTypes.length) typeName = ' · ' + pendingRecvTypes[0].name;
+        var recvItems = recvs.map(function (g) {
+          return { id: g.id, dir: g.dir, name: g.name + typeName, file: g.file, line: g.line };
+        });
+        state.panelGroupNodes[gi] = recvs.map(function (g) { return g.id; });
+        html.push(relGroupHtml('接收者（' + recvs.length + '）', recvItems, gi++));
+      }
       if (params.length) { state.panelGroupNodes[gi] = params.map(function (g) { return g.id; }); html.push(relGroupHtml('参数（' + params.length + '）', params, gi++)); }
       return;
     }
