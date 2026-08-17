@@ -88,17 +88,22 @@ export function renderNodePanel(data) {
     }
     var other = e.source === node.id ? e.target : e.source;
     var otherNode = byId[other];
-    // Q187：实参来源（passes_result）条目携带来源函数名 + 实参名，
-    // 渲染为"来源 → 实参"（来源在左、箭头指向实参）
+    // Q187/Q189：实参来源（passes_result）条目携带来源函数名 + 签名 +
+    // 实参名，渲染为"来源签名 → 实参"（来源在左、箭头指向实参）
     var argName = '';
+    var srcSig = '';
     if (e.kind === 'passes_result' && e.metadata && e.metadata.arg_name) {
       argName = e.metadata.arg_name;
+      if (otherNode && otherNode.signature) {
+        srcSig = otherNode.signature.replace(/^func\s+/, '');
+      }
     }
     byKind[e.kind].push({
       id: other,
       dir: e.source === node.id ? '出' : '入',
       name: otherNode ? otherNode.name : other,
       argName: argName,
+      srcSig: srcSig,
       type: otherNode ? otherNode.type : '',
       file: otherNode ? otherNode.file : '',
       line: e.line
@@ -277,11 +282,14 @@ function relGroupHtml(title, items, gi) {
     byFile[f].forEach(function (g) {
       var loc = g.line ? ' · :' + g.line : '';
       // Q187：实参来源条目"来源 → 实参"（来源在左、箭头指向实参）；
+      // Q189：来源函数带完整签名（lastUserMessage(msgs ...) string → userMessage）；
       // Q186：参数/返回条目显示"名称 · 短类型"（无类型的分组不受影响）
       var typeHtml = g.type ? '<span class="ftype"> · ' + escapeHtml(shortType(g.type)) + '</span>' : '';
       var entry;
       if (g.argName) {
-        entry = '<span class="name">' + escapeHtml(g.name) + '</span>' +
+        // 签名本身含函数名（lastUserMessage(msgs ...) string）——直接显示
+        var src = g.srcSig || g.name;
+        entry = '<span class="name">' + escapeHtml(src) + '</span>' +
           '<span class="dir">→</span><span class="name arg">' + escapeHtml(g.argName) + '</span>';
       } else {
         entry = '<span class="dir">' + (g.dir === '出' ? '→' : '←') + '</span>' +
