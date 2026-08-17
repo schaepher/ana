@@ -77,7 +77,6 @@ export function renderNodePanel(data) {
   // 同时缓存完整邻居/边数据供 [展开] 按钮"只显示一层"使用
   var byKind = {};
   var restOrder = [];
-  var pendingRecvTypes = []; // Q184：接收者类型（has_method 入边）暂存，与 has_param 变量合并
   state.panelGroupNodes = {};
   state.panelNeighbors = byId;
   state.panelEdges = edges;
@@ -99,6 +98,7 @@ export function renderNodePanel(data) {
       id: other,
       dir: e.source === node.id ? '出' : '入',
       name: name,
+      type: otherNode ? otherNode.type : '',
       file: otherNode ? otherNode.file : '',
       line: e.line
     });
@@ -114,26 +114,19 @@ export function renderNodePanel(data) {
       var out = items.filter(function (g) { return g.dir === '出'; });
       var inn = items.filter(function (g) { return g.dir === '入'; });
       if (out.length) { state.panelGroupNodes[gi] = out.map(function (g) { return g.id; }); html.push(relGroupHtml('方法（' + out.length + '）', out, gi++)); }
-      // Q184：接收者类型（has_method 入边）暂存，与 has_param 的接收者
-      // 变量合并为一个分组（变量 · 类型 一行显示）——此前两个分组同名
-      // "接收者"（←Manager 类型 / →m 变量）造成困惑
-      pendingRecvTypes = inn;
+      // Q184：接收者类型（has_method 入边）不单独成组——与 has_param 的
+      // 接收者变量合并为一个分组；类型由 receiver 节点 type 显示
+      // （Q186：→m · *Manager，与参数/返回一致的 ftype 展示）
       return;
     }
     if (kind === 'has_param') {
       // 参数分组：receiver（kind=receiver）与普通参数区分成两组，
-      // 接收者在前（index=-1，与图布局一致）；接收者变量名合并类型
-      // 名（→m · Manager）
+      // 接收者在前（index=-1，与图布局一致）
       var recvs = items.filter(function (g) { return byId[g.id] && byId[g.id].kind === 'receiver'; });
       var params = items.filter(function (g) { return !(byId[g.id] && byId[g.id].kind === 'receiver'); });
       if (recvs.length) {
-        var typeName = '';
-        if (pendingRecvTypes.length) typeName = ' · ' + pendingRecvTypes[0].name;
-        var recvItems = recvs.map(function (g) {
-          return { id: g.id, dir: g.dir, name: g.name + typeName, file: g.file, line: g.line };
-        });
         state.panelGroupNodes[gi] = recvs.map(function (g) { return g.id; });
-        html.push(relGroupHtml('接收者（' + recvs.length + '）', recvItems, gi++));
+        html.push(relGroupHtml('接收者（' + recvs.length + '）', recvs, gi++));
       }
       if (params.length) { state.panelGroupNodes[gi] = params.map(function (g) { return g.id; }); html.push(relGroupHtml('参数（' + params.length + '）', params, gi++)); }
       return;
@@ -237,6 +230,17 @@ function renderFlowsGroup(flows, dir, title) {
   return html.join('');
 }
 
+// shortType 短类型名：*github.com/...Manager → *Manager、context.Context →
+// Context（保留 * 前缀；Q186 参数/返回条目显示）。
+function shortType(t) {
+  if (!t) return '';
+  var star = '';
+  var s = t;
+  while (s[0] === '*') { star += '*'; s = s.slice(1); }
+  var parts = s.split('.');
+  return star + parts[parts.length - 1];
+}
+
 // relGroupHtml 关系分组：标题（含 [隐藏]/[展开] 按钮）+ 按对方节点文件
 // 路径分组的条目列表（组头为文件路径，条目显示方向 →/←、对方节点、行号）
 function relGroupHtml(title, items, gi) {
@@ -253,8 +257,10 @@ function relGroupHtml(title, items, gi) {
     out.push('<div class="file-group">' + escapeHtml(f) + '</div>');
     byFile[f].forEach(function (g) {
       var loc = g.line ? ' · :' + g.line : '';
+      // Q186：参数/返回条目显示"名称 · 短类型"（无类型的分组不受影响）
+      var typeHtml = g.type ? '<span class="ftype"> · ' + escapeHtml(shortType(g.type)) + '</span>' : '';
       out.push('<div class="rel"><span class="dir">' + (g.dir === '出' ? '→' : '←') + '</span>' +
-        '<span class="name">' + escapeHtml(g.name) + '</span>' +
+        '<span class="name">' + escapeHtml(g.name) + '</span>' + typeHtml +
         '<span class="loc">' + loc + '</span></div>');
     });
   });

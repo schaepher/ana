@@ -94,10 +94,16 @@ func emitSignatureNodes(fn *ssa.Function, funcID domain.CanonicalID, pos token.P
 			slot = fmt.Sprintf("result.%d", i)
 		}
 		id := domain.CanonicalID(string(funcID) + "#" + slot)
+		// Q186：返回节点名 = 签名参数名（reply 等）；匿名返回 fallback 类型
+		// ——信息栏"返回"分组显示"名称 · 类型"
+		name := r.Name()
+		if name == "" {
+			name = r.Type().String()
+		}
 		if err := emit(domain.Item{Node: &domain.CodeEntity{
 			ID:        id,
 			Kind:      domain.KindResult,
-			Name:      r.Type().String(),
+			Name:      name,
 			FilePath:  filePath,
 			LineStart: pos.Line,
 			LineEnd:   pos.Line,

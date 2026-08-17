@@ -116,11 +116,12 @@ const paramSeg = orderText.slice(orderText.indexOf('参数（'), orderText.index
 check('参数按定义顺序（m→ctx→sessionID→userMessage）',
   i1('→m') >= 0 && i1('→ctx') > i1('→m') && i1('→sessionID') > i1('→ctx') && i1('→userMessage') > i1('→sessionID'),
   'params=' + paramSeg.replace(/\n/g, ' '));
-const s1 = i1('→string');
-const s2 = orderText.indexOf('→string', s1 + 1);
-check('返回按定义顺序（string→string→error）',
-  s1 >= 0 && s2 > s1 && i1('→error') > s2,
-  'results=' + orderText.slice(orderText.indexOf('返回（'), orderText.indexOf('返回（') + 80).replace(/\n/g, ' '));
+// Q186：返回条目为"名称 · 类型"（result 节点名 = 签名参数名）
+const s1 = i1('→reply');
+const s2 = i1('→newSessionID');
+check('返回按定义顺序（reply→newSessionID→err，带类型）',
+  s1 >= 0 && s2 > s1 && i1('→err') > s2 && i1('reply · string') >= 0,
+  'results=' + orderText.slice(orderText.indexOf('返回（'), orderText.indexOf('返回（') + 90).replace(/\n/g, ' '));
 
 // 9. 双击参数节点：展开数据流上下游（桥边 → ssa_value → field_access）
 const RECV_ID = FN_ID + '#param.recv.m';
