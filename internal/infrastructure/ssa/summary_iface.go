@@ -269,8 +269,22 @@ func (ext *fieldExtractor) emitWhereFilterTyped(cc *ssa.CallCommon, cols []strin
 	if vtype == "" {
 		vtype = "gorm"
 	}
+	// Q177：先展平 whereArg 之后的全部实参（args ...interface{} 被变参
+	// 打包成 ssa.Slice——展平所有元素），按 where 列顺序连 summary_io 边
+	var flatVals []ssa.Value
+	for i := whereArg + 1; i < len(cc.Args); i++ {
+		a := cc.Args[i]
+		if mi, ok := a.(*ssa.MakeInterface); ok {
+			a = mi.X
+		}
+		if vals := variadicElems(a); len(vals) > 0 {
+			flatVals = append(flatVals, vals...)
+		} else {
+			flatVals = append(flatVals, a)
+		}
+	}
 	for i, col := range cols {
-		id := domain.CanonicalID(string(ext.funcID) + "#ext.gorm." + table + "." + col + ".filter@" + fmt.Sprintf("%d", line))
+		id := domain.CanonicalID(string(ext.funcID) + "#ext." + vtype + "." + table + "." + col + ".filter@" + fmt.Sprintf("%d", line))
 		if err := ext.emit(domain.Item{Node: &domain.CodeEntity{
 			ID:        id,
 			Kind:      domain.KindFieldAccess,
@@ -290,21 +304,11 @@ func (ext *fieldExtractor) emitWhereFilterTyped(cc *ssa.CallCommon, cols []strin
 			return err
 		}
 
-		idx := whereArg + 1 + i
-		if idx < len(cc.Args) {
-			val := cc.Args[idx]
+		if i < len(flatVals) {
+			val := flatVals[i]
+			// 变参元素再被 MakeInterface 包装（[]interface{} 的元素）
 			if mi, ok := val.(*ssa.MakeInterface); ok {
 				val = mi.X
-			}
-			// Q177 真实形态：Where(query, args ...interface{}) 的实参被
-			// 变参打包（ssa.Slice）——解包取元素值（与 applyORMWrite ⑦
-			// 一致），链才连通（对象字段读 → filter）
-			if vals := variadicElems(val); len(vals) > 0 {
-				val = vals[0]
-				// 变参元素再被 MakeInterface 包装（[]interface{} 的元素）
-				if mi, ok := val.(*ssa.MakeInterface); ok {
-					val = mi.X
-				}
 			}
 			if _, isConst := val.(*ssa.Const); isConst {
 				continue

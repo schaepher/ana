@@ -178,3 +178,98 @@ func main() {}
 		t.Errorf("Update/Insert/Delete 应产 write 节点（settlement 字段展开），write=%v", byAccess["write"])
 	}
 }
+
+// TestXORMStaticTableNameConst：Q177 回归——Table(model.TableName)（跨包
+// 常量表名）→ 局部 session → Where("order_id = ?", orderID)：
+// 断言 orderID（参数值）→ t_orders.order_id filter 的 summary_io 边
+// （变参值链贯通：值实参解包 → filter）。
+func TestXORMStaticTableNameConst(t *testing.T) {
+	repo := indexFixtureRepo(t, map[string]string{
+		"go.mod": `module example.com/mtest
+
+go 1.21
+
+require xorm.io/xorm v0.0.0
+
+replace xorm.io/xorm => ./xorm
+`,
+		"xorm/go.mod": "module xorm.io/xorm\n\ngo 1.21\n",
+		"xorm/session.go": `package xorm
+
+type Session struct{}
+
+func (s *Session) Table(tableNameOrBean interface{}) *Session { return s }
+
+func (s *Session) Where(query interface{}, args ...interface{}) *Session { return s }
+
+func (s *Session) Get(bean any) (bool, error) { return false, nil }
+`,
+		"model/model.go": `package model
+
+const TableName = "t_orders"
+`,
+		"main.go": `package mtest
+
+import (
+	"example.com/mtest/model"
+	"xorm.io/xorm"
+)
+
+type Order struct {
+	OrderID int64
+	Amount  int64
+}
+
+func FindByOrderID(s *xorm.Session, orderID int64) error {
+	s = s.Table(model.TableName)
+	var o Order
+	_, err := s.Where("order_id = ?", orderID).Get(&o)
+	return err
+}
+
+func main() {}
+`,
+	})
+	// filter 节点（表名来自跨包常量 model.TableName → t_orders）
+	rows, err := repo.Query(`SELECT id FROM nodes
+		WHERE name = 't_orders.order_id' AND json_extract(properties, '$.access_kind') = 'filter'
+		AND json_extract(properties, '$.type_string') = 'xorm' LIMIT 1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var filterID string
+	if rows.Next() {
+		if err := rows.Scan(&filterID); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+	}
+	rows.Close()
+	if filterID == "" {
+		t.Fatal("t_orders.order_id filter 节点缺失（跨包常量表名未解析）")
+	}
+	// orderID 参数值 → filter 的 summary_io 边（变参值链）
+	eRows, err := repo.Query(`SELECT e.source_id FROM edges e WHERE e.target_id = ? AND e.kind = 'summary_io'`,
+		filterID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var srcID string
+	if eRows.Next() {
+		if err := eRows.Scan(&srcID); err != nil {
+			eRows.Close()
+			t.Fatal(err)
+		}
+	}
+	eRows.Close()
+	if srcID == "" {
+		t.Fatal("orderID 参数值 → t_orders.order_id filter 的 summary_io 边缺失（变参值链断）")
+	}
+	var srcName string
+	if err := repo.QueryRow(`SELECT name FROM nodes WHERE id = ?`, srcID).Scan(&srcName); err != nil {
+		t.Fatalf("值节点 %s: %v", srcID, err)
+	}
+	if srcName != "orderID" {
+		t.Errorf("filter 入边值应为 orderID 参数，got %q", srcName)
+	}
+}

@@ -1,7 +1,9 @@
 package ssa
 
 import (
+	"go/constant"
 	"go/types"
+	"sort"
 
 	"github.com/schaepher/codeintel/internal/domain"
 	"go.uber.org/zap"
@@ -109,46 +111,73 @@ func namedStructOf(t types.Type) *types.Named {
 	return named
 }
 
-// variadicElems 解开 ...any 变参的 Slice 包装取元素：
-// alloc（数组）→ IndexAddr（元素地址）→ Store → 元素值（MakeInterface 等）。
-// 非 Slice 原样返回；无法解出时返回原值（保守）。
+// variadicElems 解开 ...any 变参的 Slice 包装取元素（Q177 重写）：
+// alloc（数组）→ IndexAddr（元素地址）→ Store → 元素值。
+// 不依赖 Referrers()（SSA 优化后可能为 nil）——直接扫描 alloc 所属
+// 函数（含外层，闭包捕获场景）全部 Block 的 Store，匹配
+// IndexAddr.X == alloc，按常量 index 排序。非 Slice 原样返回；
+// 无法解出时返回原值（保守）。
 func variadicElems(v ssa.Value) []ssa.Value {
 	sl, ok := v.(*ssa.Slice)
 	if !ok {
 		return []ssa.Value{v}
 	}
 	alloc, ok := sl.X.(*ssa.Alloc)
-	if !ok || alloc.Referrers() == nil {
+	if !ok {
 		return []ssa.Value{v}
 	}
-	var out []ssa.Value
-	for _, ref := range *alloc.Referrers() {
-		switch r := ref.(type) {
-		case *ssa.IndexAddr:
-
-			if r.Referrers() == nil {
-				continue
-			}
-			for _, ref2 := range *r.Referrers() {
-				st, ok := ref2.(*ssa.Store)
-				if !ok || st.Addr != r {
+	// 收集 alloc 的元素写入：alloc → IndexAddr → Store（按 index 排序）
+	type storeT struct {
+		idx int
+		val ssa.Value
+	}
+	var stores []storeT
+	scanFn := func(fn *ssa.Function) {
+		if fn == nil {
+			return
+		}
+		for _, b := range fn.Blocks {
+			for _, instr := range b.Instrs {
+				st, ok := instr.(*ssa.Store)
+				if !ok {
 					continue
 				}
-				if inner, ok := st.Val.(*ssa.Slice); ok {
-					out = append(out, variadicElems(inner)...)
-				} else {
-					out = append(out, st.Val)
+				if st.Addr == alloc {
+					stores = append(stores, storeT{idx: -1, val: st.Val})
+					continue
 				}
-			}
-		case *ssa.Store:
-
-			if st, ok := ref.(*ssa.Store); ok && st.Addr == alloc {
-				if inner, ok := st.Val.(*ssa.Slice); ok {
-					out = append(out, variadicElems(inner)...)
-				} else {
-					out = append(out, st.Val)
+				ia, ok := st.Addr.(*ssa.IndexAddr)
+				if !ok || ia.X != alloc {
+					continue
 				}
+				idx := -1
+				if c, ok := ia.Index.(*ssa.Const); ok && c.Value != nil {
+					if i, ok2 := constant.Int64Val(c.Value); ok2 {
+						idx = int(i)
+					}
+				}
+				stores = append(stores, storeT{idx: idx, val: st.Val})
 			}
+		}
+	}
+	scanFn(alloc.Parent())
+	scanFn(alloc.Parent().Parent()) // 闭包捕获：alloc 在包装器，外层函数有 Store
+	if len(stores) == 0 {
+		return []ssa.Value{v}
+	}
+	sort.SliceStable(stores, func(i, j int) bool {
+		// -1（整体 Store）排最前；其余按 index
+		if stores[i].idx == -1 || stores[j].idx == -1 {
+			return stores[i].idx < stores[j].idx
+		}
+		return stores[i].idx < stores[j].idx
+	})
+	var out []ssa.Value
+	for _, st := range stores {
+		if inner, ok := st.val.(*ssa.Slice); ok {
+			out = append(out, variadicElems(inner)...)
+		} else {
+			out = append(out, st.val)
 		}
 	}
 	if len(out) > 0 {

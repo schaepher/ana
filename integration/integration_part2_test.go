@@ -135,11 +135,14 @@ func TestCLIFullFlowPart2(t *testing.T) {
 		t.Errorf("summary 写锚点应含下游使用链（consume 读节点），output=%q", out[:min(len(out), 400)])
 	}
 
-	// 16. clean 删除索引
+	// 16. clean 删除索引（Q177：默认保留 .codeintel/cache 包级分析缓存）
 	if code := runCLI(t, "clean", "--repo", dir, "--force"); code != 0 {
 		t.Fatalf("clean exit = %d", code)
 	}
-	if _, err := os.Stat(filepath.Join(dir, ".codeintel")); !os.IsNotExist(err) {
-		t.Error(".codeintel should be removed after clean")
+	if _, err := os.Stat(filepath.Join(dir, ".codeintel", "codeintel.db")); !os.IsNotExist(err) {
+		t.Error("codeintel.db should be removed after clean")
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".codeintel", "cache")); err != nil {
+		t.Error(".codeintel/cache 应保留（pkg hash 自校验）")
 	}
 }
