@@ -167,6 +167,12 @@ func dedupRelationNoise(rels []*domain.TableRelation, h domain.RelationHops) []*
 	seen := map[string]*domain.TableRelation{}
 	var order []string
 	for _, r := range rels {
+		// 兜底防御（Q198）：自关联（同表字段间值流）不属于表间关联语义。
+		// 主机制在 BFS 终点判定已排除（rg_relationsfor.go / rg_sql.go 的
+		// otherTable == table continue），此处防未来路径/桥接回归
+		if r.FromTable == r.ToTable {
+			continue
+		}
 		limit := h.Read
 		switch r.Type {
 		case domain.RelationQuery:

@@ -112,3 +112,17 @@ func TestDedupCustomHops(t *testing.T) {
 		t.Errorf("read 上限 3：r2(4跳) 应被滤")
 	}
 }
+
+// TestDedupSelfRelation：Q198 兜底——自关联（from==to）一律丢弃
+// （主机制 BFS 已排除，此处防未来路径回归）。
+func TestDedupSelfRelation(t *testing.T) {
+	rels := []*domain.TableRelation{
+		{FromTable: "users", FromCol: "id", ToTable: "users", ToCol: "name", Hops: 2, Type: domain.RelationWrite},
+		{FromTable: "users", FromCol: "name", ToTable: "users", ToCol: "id", Hops: 2, Type: domain.RelationQuery},
+		{FromTable: "a", FromCol: "id", ToTable: "b", ToCol: "a_id", Hops: 2, Type: domain.RelationQuery},
+	}
+	out := dedupRelationNoise(rels, DefaultRelationHops)
+	if len(out) != 1 || out[0].ToTable != "b" {
+		t.Errorf("自关联应全部丢弃，仅保留跨表 query，got %+v", out)
+	}
+}
