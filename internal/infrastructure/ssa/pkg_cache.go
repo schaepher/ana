@@ -14,8 +14,10 @@
 //     验证仓库 曾命中 Q178 前旧逻辑的缓存，receiver 数据边全部陈旧）
 //   - 缓存文件结构变化 → pkgCacheFormat 递增
 //
-// 已知边界（未覆盖）：被索引包的依赖包签名变化（本包源码未变但依赖
-// API 变了）——需要把直接依赖的包 hash 纳入复合键，待跟进。
+// Q213（2026-08-18）：失效键纳入直接依赖包源码 hash——依赖包 API 变化
+// （本包源码未变）→ 本包缓存自动失效。传递性自动覆盖：C 变 → B 键
+// 失效 → B 重建后 hash 变 → A 键含 B hash → A 也失效。已知权衡：依赖
+// 包非 API 改动（注释/内部实现）也保守失效，可接受。
 package ssa
 
 import (
@@ -30,6 +32,7 @@ import (
 	"sync"
 
 	"github.com/schaepher/codeintel/internal/domain"
+	"golang.org/x/tools/go/packages"
 )
 
 // pkgCacheFormat 缓存文件格式版本（结构变更时递增，旧缓存全部失效）。
@@ -233,6 +236,54 @@ func pkgContentHash(files []string) (string, error) {
 			return "", err
 		}
 		h.Write(data)
+		h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// pkgCacheKeyHash Q213：本包缓存键 = 本包源码 hash + 直接依赖包源码
+// hash 列表（按包路径排序拼接保证确定性）。depMemo 复用依赖包 hash
+// （每包重读依赖文件是 O(包数×依赖文件总量)，memo 后降为每包一次）。
+func pkgCacheKeyHash(pkg *packages.Package, depMemo map[string]string) (string, error) {
+	h := sha256.New()
+	files := pkg.CompiledGoFiles
+	if len(files) == 0 {
+		files = pkg.GoFiles
+	}
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			return "", err
+		}
+		h.Write(data)
+		h.Write([]byte{0})
+	}
+	deps := make([]string, 0, len(pkg.Imports))
+	for path := range pkg.Imports {
+		deps = append(deps, path)
+	}
+	sort.Strings(deps)
+	for _, path := range deps {
+		dp := pkg.Imports[path]
+		if dp == nil {
+			continue
+		}
+		dh, ok := depMemo[path]
+		if !ok {
+			dfiles := dp.CompiledGoFiles
+			if len(dfiles) == 0 {
+				dfiles = dp.GoFiles
+			}
+			var err error
+			dh, err = pkgContentHash(dfiles)
+			if err != nil {
+				return "", err
+			}
+			depMemo[path] = dh
+		}
+		h.Write([]byte(path))
+		h.Write([]byte{0})
+		h.Write([]byte(dh))
 		h.Write([]byte{0})
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil

@@ -124,6 +124,7 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 	doneFuncs := 0
 	var doneMu sync.Mutex
 	cacheHits := 0
+	depHashes := map[string]string{} // Q213：直接依赖包 hash memo（每包一次）
 	for _, pkgPath := range pkgOrder {
 		fns := byPkg[pkgPath]
 		// Q176：包级缓存——hash 命中直接加载产物
@@ -136,12 +137,12 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 		}
 		hash := ""
 		if pkg != nil {
-			files := pkg.CompiledGoFiles
-			if len(files) == 0 {
-				files = pkg.GoFiles
-			}
-			if h, err := pkgContentHash(files); err == nil {
+			// Q213：缓存键 = 本包 hash + 直接依赖包 hash（依赖 API 变化
+			// → 本包缓存失效）；depHashes memo 复用依赖包 hash
+			if h, err := pkgCacheKeyHash(pkg, depHashes); err == nil {
 				hash = h
+			} else {
+				logger.Warn("pkg cache key hash failed", zap.String("pkg", pkgPath), zap.Error(err))
 			}
 		}
 		if hash != "" {
