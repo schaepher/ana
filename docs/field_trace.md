@@ -60,6 +60,7 @@
 47. [缓存语义修正与 write 跳数（Q208，2026-08-18）](#47-缓存语义修正与-write-跳数)
 48. [参数节点统一与展示名恢复（Q178–Q180，2026-08-17）](#48-参数节点统一与展示名恢复)
 49. [信息栏展示优化与收尾（Q184–Q193，2026-08-17）](#49-信息栏展示优化与收尾)
+50. [待办事项与设计决策（Q211–Q216，2026-08-18）](#50-待办事项与设计决策)
 ---
 
 ## 1. 项目背景与目标
@@ -2040,4 +2041,81 @@ db.DB())`），assignTargets 区间匹配误配到外层变量 err。修复 **to
 
 ---
 
-**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q210，逐 Q 编号 + 日期）。
+## 50. 待办事项与设计决策（Q211–Q216，2026-08-18）
+
+2026-08-18 对历年交接文档"已知边界与待办"逐项代码核查后的状态总表与
+设计树决策（两轮访谈，用户逐项确认）。
+
+### 50.1 待办状态总表
+
+| 待办 | 状态 | 说明 |
+|---|---|---|
+| alias 双发射 | ✅ 已解决 | Q193 topCallPos 修正误配 + Q205 Alloc/load 统一变量名 ID；DB 主键合并语义确认（insertNodeSQL `ON CONFLICT(id)` 只补 properties、name 先写者胜，emitValue 主 pass 先发射）；nested-repro 实测无 `#t1\|err`/`#t1\|t1` 残留 |
+| 参数直通 filter 链（字段级外键映射剩余缺口） | ✅ 已解决 | Q178 参数节点统一后全链贯通（Q202 前交接记录的旧状态）：users.buyer_id 读出 → Scan → 字段 → argument → `#param.buyerID` → orders.buyer_id.filter，4 跳（param-filter-repro 实测：users 方向标 query、orders 方向标 read——CLI 默认过滤 read 属 Q177 设计） |
+| 接口摘要泛化（xorm/sqlx 之外框架） | ✅ 已实现 | field-summary.yaml 用户自定义即当初方案，无需代码改动 |
+| 配置表入库 | ✅ 预留完成 | ResetGraphTables 只 DROP 三张图表（edges/function_field_summary/nodes），build_metadata 与未来配置表保留；配置功能无需求未开始 |
+| 动态调用盲区 / 入口可达 / Count-Pluck / ER 懒加载语义 / e2e 断言形态 | 🔒 设计边界 | 用户确认保持或设计权衡（§10/§14.10/§22/§45 已记录） |
+| orm.Mapping 表名映射 | ⏳ Q211 | go2o `orm.Mapping(ValueCoupon{}, "pm_coupon")` 未识别 → pm_coupon/dlvl_area 等表缺失 |
+| SQL 路径 taint 同步 | ⏳ Q212 | `--memory sql` 逃生口 write 精度低于内存路径 |
+| 依赖签名缓存失效 | ⏳ Q213 | 依赖包 API 变化 → 本包缓存命中旧产物 |
+| G6 CDN 锁版本 | ⏳ Q214 | e2e 颜色断言降级待恢复 |
+| 包级缓存陈旧行清理 | ⏳ Q215 | 删除函数/文件的摘要行残留 |
+| 列名呼应升级 | 🔭 Q216 长期候选 | 保持呼应（用户接受权衡） |
+
+### 50.2 设计决策（两轮设计树，全部采纳推荐）
+
+**Q211 orm.Mapping 表名映射**
+- 动机：gof `orm.Mapping(ValueCoupon{}, "pm_coupon")` 静态注册实体→表名，
+  未识别 → go2o pm_coupon/dlvl_area 等表缺失（映射表名只存在于注册点）
+- 决策：**内置 gof spec** 识别 Mapping 为"类型→表名"注册（静态调用 +
+  第二参字符串常量，unwrapConst 已有）；生效于 applyORMWrite/
+  emitWhereFilterTyped 等表名溯源处
+- 匹配键：**实体类型标识（types.Type）精确匹配**（编译期确定性，无
+  字符串歧义）
+- 跨包时序：**收集阶段独立于发射**（先全量收集 typeMapping 再发射——
+  Mapping 可能在包 A 注册、包 B 使用，emitFunction 按包处理顺序不定）
+- 优先级：**链式 Table() 优先**（调用点局部具体），Mapping 兜底（全局
+  注册）；与 orm.Orm spec 的 TableName() 方法并存
+
+**Q212 SQL 路径同步 Q202 值级 taint**
+- 动机：`--memory sql` 逃生口路径跨函数 write 仍是 Q199"一律丢弃"，
+  精度低于内存路径（Q177 曾验证两路径一致，Q202 后分叉）
+- 决策：**完整同步**——值级 taint 传播（字段读求交 + 对象→字段写不
+  延续）移植到 rg_sql.go 的 BFS；判定函数（taintMatches/fkColMatches/
+  pkColMatches）抽公共供两路径复用；write 终点判定对齐 Q202/Q202b/Q202c
+  全链（外键形态 + taint 呼应 + 外键列须呼应表名）
+- 目标：两路径语义一致（逃生口同样精确）
+
+**Q213 依赖签名变化纳入缓存失效键**
+- 动机：包级缓存键 = 本包源码 hash + analyzer 版本，依赖包 API 变化时
+  本包缓存命中旧产物（正确性隐患）
+- 决策：失效键 = **本包 hash + 直接依赖包源码 hash 列表**（按包路径
+  排序拼接保证确定性）；**传递性自动覆盖**——C 变 → B 键失效 → B 重建
+  后 hash 变 → A 键含 B hash → A 失效
+- 性能：loadPackages 补 NeedDeps 遍历直接依赖 CompiledGoFiles 取 hash；
+  自建 fixture 先行（timeout）+ go2o 实测 update 耗时对比
+- 已知边界：依赖包 hash 变化含非 API 改动（注释/内部实现）——保守失效，
+  可接受
+
+**Q214 G6 CDN 锁版本**
+- 动机：index.html `@antv/g6@5`（major 范围）解析到 5.1.1 后
+  getElementRenderStyle 行为漂移，e2e 颜色断言降级为存在性断言
+- 决策：锁 **`@antv/g6@5.1.1`**（当前实测版本，行为已验证）+ 恢复 e2e
+  颜色断言（金色/粉色参数返回样式）
+
+**Q215 包级缓存陈旧行清理**
+- 动机：增量更新后删除函数/文件的 summary/origins 行残留（INSERT OR
+  IGNORE 不删旧行），fields/indirect_write 展示陈旧数据
+- 决策：**update 构建前**按变更包 DELETE function_field_summary +
+  summary_origins 两表（function_id 前缀 `symbol:go:<pkg>:%` 匹配，
+  canonical ID 前缀精确无歧义）；全量重建自然清理
+
+**Q216 列名呼应升级（长期候选，不实施）**
+- 现状：Q153 呼应规则已知权衡（列名不呼应的真键关联降级 read），
+  Q153+Q202 组合已收敛噪音，用户接受
+- 候选方案：query 判定从列名呼应升级为 filter 实参来源字段精确匹配
+  ——待真实仓库出现"列名不呼应但确有关联"的反例再评估
+
+---
+
+**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q216，逐 Q 编号 + 日期）。
