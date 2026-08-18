@@ -279,3 +279,7 @@ defer logger.Debug("exit <name>")
 - `internal/canonicalizer`：纯单测（SCIP symbol 解析的各种形式）
 - `internal/orchestrator`：端到端测试，临时 Go module → FullBuild → 校验图数据
   （需要 scip-go，缺失时自动 skip）
+
+### 验证环境教训
+
+- **WAL 模式 SQLite 构建中强杀会损坏 DB**：reindex/init 跑大仓库（go2o 3 分钟）时用 timeout 强杀 → WAL 未 checkpoint → `database disk image is malformed`（下次操作报错）。验证用**后台运行 + 轮询**（run_in_background），或 timeout 给足余量；损坏后删 db/-wal/-shm 重建。serve 与 reindex 并发操作同一 DB 也要避免。
