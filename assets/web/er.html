@@ -89,7 +89,8 @@ let SELECTED = new Set(); // 双击展开的表集合（空=不画线；展开�
 const PALETTE = ['#1677ff', '#fa8c16', '#52c41a', '#f5222d', '#722ed1', '#13c2c2',
   '#eb2f96', '#a0d911', '#2f54eb', '#faad14', '#08979c', '#d4380d'];
 
-let RELS_LOADED = false; // Q209：relations 是否已加载（首次只加载表清单）
+let FULL_LOADED = false; // Q210：全量 relations 是否已加载（仅全图画线开关触发）
+const tableRelsLoaded = new Set(); // 已按需加载关系的表（双击展开触发）
 
 async function load() {
   // 跳数上限（localStorage 持久化，默认 4；0 = 不限制）
@@ -99,27 +100,47 @@ async function load() {
   document.getElementById('h-query').value = hops.q;
   document.getElementById('h-write').value = hops.w;
   document.getElementById('h-read').value = hops.r;
-  // Q209：首次加载不查关联（skip_relations=1）——只展示全部表，秒开；
-  // 双击展开/全图画线/改跳数时才请求完整数据（触发一次全库 BFS）
-  DATA = await fetchER(hops, true);
+  // Q209：首次加载不查关联（skip_relations=1）——只展示全部表，秒开
+  DATA = await fetchER(hops, true, '');
   render();
 }
 
-// 按需加载 relations：首次交互（双击/全图画线）时请求完整数据
-async function ensureRels() {
-  if (RELS_LOADED) return;
-  const hops = {
+function currentHops() {
+  return {
     q: parseInt(document.getElementById('h-query').value) || 0,
     w: parseInt(document.getElementById('h-write').value) || 0,
     r: parseInt(document.getElementById('h-read').value) || 0,
   };
-  DATA = await fetchER(hops, false);
-  RELS_LOADED = true;
 }
 
-async function fetchER(hops, skipRelations) {
+// 合并 relations（多表按需加载累积，去重 by from|col|to|col）
+function mergeRels(newRels) {
+  const seen = new Map();
+  (DATA.relations || []).forEach(r => seen.set(r.from_table + '|' + r.from_col + '|' + r.to_table + '|' + r.to_col, r));
+  (newRels || []).forEach(r => seen.set(r.from_table + '|' + r.from_col + '|' + r.to_table + '|' + r.to_col, r));
+  DATA.relations = [...seen.values()];
+}
+
+// Q210：双击展开只加载该表相关关系（?table=X 单表 BFS + 单表缓存），
+// 不全量——多表展开累积合并
+async function loadTableRels(table) {
+  if (FULL_LOADED || tableRelsLoaded.has(table)) return;
+  const d = await fetchER(currentHops(), false, table);
+  mergeRels(d.relations);
+  tableRelsLoaded.add(table);
+}
+
+// Q210：全图画线开关才触发全量加载
+async function ensureFullRels() {
+  if (FULL_LOADED) return;
+  const d = await fetchER(currentHops(), false, '');
+  mergeRels(d.relations);
+  FULL_LOADED = true;
+}
+
+async function fetchER(hops, skipRelations, table) {
   const res = await fetch('/api/er?q_hops=' + hops.q + '&w_hops=' + hops.w + '&r_hops=' + hops.r +
-    (skipRelations ? '&skip_relations=1' : ''));
+    (skipRelations ? '&skip_relations=1' : '') + (table ? '&table=' + encodeURIComponent(table) : ''));
   return res.json();
 }
 
@@ -134,7 +155,7 @@ function bindHopsConfig() {
         r: parseInt(document.getElementById('h-read').value) || 0,
       };
       localStorage.setItem('codeintel.erHops', JSON.stringify(hops));
-      fetchER(hops, false).then(d => { DATA = d; RELS_LOADED = true; render(); });
+      fetchER(hops, false, '').then(d => { DATA = d; FULL_LOADED = true; render(); });
     };
     el.addEventListener('change', apply);
     el.addEventListener('keydown', evt => { if (evt.key === 'Enter') apply(); });
@@ -185,8 +206,8 @@ function bindRelFilter() {
   allCb.addEventListener('change', () => {
     SHOW_ALL_LINES = allCb.checked;
     localStorage.setItem('codeintel.erAllLines', SHOW_ALL_LINES ? '1' : '0');
-    // Q209：全图画线需要 relations——首次切换时按需加载
-    ensureRels().then(render);
+    // Q210：全图画线开关才触发全量加载
+    ensureFullRels().then(render);
   });
 }
 
@@ -405,8 +426,8 @@ function bindDblClick() {
     const el = evt.target.closest('[data-tbl]');
     if (!el) return;
     const name = el.getAttribute('data-tbl');
-    // Q209：双击展开需要 relations——首次交互时按需加载（异步）
-    ensureRels().then(() => {
+    // Q210：双击展开只加载该表相关关系（异步）
+    loadTableRels(name).then(() => {
       if (SELECTED.has(name)) SELECTED.delete(name); else SELECTED.add(name);
       render();
     });

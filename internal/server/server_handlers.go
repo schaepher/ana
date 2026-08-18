@@ -62,13 +62,18 @@ func (s *Server) handleER(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.acts.SetRelationHops(h)
-	// Q209：skip_relations=1 首次加载只返回表清单（不触发全库 BFS）——
-	// 展开/全图画线时才请求完整数据
+	// Q209/Q210：加载粒度三态——
+	//   ?table=X      只返回该表相关 relations（双击展开按需加载，单表 BFS）
+	//   skip_relations=1  只返回表清单（首次加载，不触发任何 BFS）
+	//   缺省           全量 relations（全图画线开关）
 	var data *domain.ERData
 	var err error
-	if r.URL.Query().Get("skip_relations") == "1" {
+	switch {
+	case r.URL.Query().Get("table") != "":
+		data, err = s.acts.ERTable(r.URL.Query().Get("table"))
+	case r.URL.Query().Get("skip_relations") == "1":
 		data, err = s.acts.ERTables()
-	} else {
+	default:
 		data, err = s.acts.ER()
 	}
 	if err != nil {

@@ -130,6 +130,23 @@ func (a *Actions) ERTables() (*domain.ERData, error) {
 	return &domain.ERData{Tables: tables, Relations: []*domain.TableRelation{}}, nil
 }
 
+// ERTable 单表关系（Q210：双击展开按需加载——只 BFS 该表起点 + 单表
+// 缓存，不全量）；表清单仍返回全部（前端首次已加载）。
+func (a *Actions) ERTable(table string) (*domain.ERData, error) {
+	logger := zap.L()
+	logger.Info("enter (Actions).ERTable", zap.String("table", table))
+	defer logger.Info("exit (Actions).ERTable")
+	rels, err := a.repo.GetTableRelations(table, "")
+	if err != nil {
+		return nil, err
+	}
+	tables, err := a.ertables()
+	if err != nil {
+		return nil, err
+	}
+	return &domain.ERData{Tables: tables, Relations: rels}, nil
+}
+
 // ertables 表清单组装（ER/ERTables 共用）。
 func (a *Actions) ertables() ([]domain.ERTable, error) {
 	cols, err := a.repo.GetAllTableColumns()
