@@ -280,26 +280,30 @@ function renderNested(data) {
     const pairKey = [r.from_table, r.to_table].sort().join('|');
     const n = lineCounts.get(pairKey) || 0;
     lineCounts.set(pairKey, n + 1);
-    let dx = 0;
-    if (n > 0) dx = (n % 2 === 1 ? -1 : 1) * Math.ceil(n / 2) * 12;
     const color = styleColor(r.type);
-    // 折线（大规模表适配，避免斜穿）：同行同字段行 → 水平直线；
-    // 其余 → S 型正交（字段矩形边缘水平出线 → 垂直段 → 水平入）。
-    // 线在表矩形上层，穿过表内段落亦可见
-    const OUT = 18;
+    // 端点固定字段矩形边缘中点（不偏移）；同对表平行线通过中间段落
+    // 分叉（S 型出线段长度递增 / 水平线 y 微弯），线端始终贴边
     let d, mx, my;
     if (ay === by && ex1 !== ex2) {
-      d = `M ${ex1 + dx} ${ay} L ${ex2 + dx} ${ay}`;
-      mx = (ex1 + ex2) / 2 + dx; my = ay - 6;
+      if (n === 0) {
+        d = `M ${ex1} ${ay} L ${ex2} ${ay}`;
+        mx = (ex1 + ex2) / 2; my = ay - 6;
+      } else {
+        // 水平直线多线：两端垂直微弯分叉（端点仍在字段矩形边缘）
+        const off = (n % 2 === 1 ? -1 : 1) * Math.ceil(n / 2) * 5;
+        d = `M ${ex1} ${ay} L ${ex1} ${ay + off} L ${ex2} ${ay + off} L ${ex2} ${ay}`;
+        mx = (ex1 + ex2) / 2; my = ay + off - 6;
+      }
     } else {
-      const vx = ex1 + dir * OUT;
-      d = `M ${ex1 + dx} ${ay} L ${vx + dx} ${ay} L ${vx + dx} ${by} L ${ex2 + dx} ${by}`;
-      mx = vx + dx; my = (ay + by) / 2 - 6;
+      // S 型正交：出线段长度随 n 递增（18/30/42…），垂直段在表外间隙
+      const vx = ex1 + dir * (18 + n * 12);
+      d = `M ${ex1} ${ay} L ${vx} ${ay} L ${vx} ${by} L ${ex2} ${by}`;
+      mx = vx; my = (ay + by) / 2 - 6;
     }
     svg += `<path d="${d}" fill="none" style="${edgeStyle(r.type)}"/>`;
-    // 锚点圆点（盖在线端——线从字段矩形边缘明确伸出）
-    svg += `<circle class="nest-anchor" cx="${ex1 + dx}" cy="${ay}" r="3" fill="${color}"/>`;
-    svg += `<circle class="nest-anchor" cx="${ex2 + dx}" cy="${by}" r="3" fill="${color}"/>`;
+    // 锚点圆点（线端，精确落在字段矩形边缘）
+    svg += `<circle class="nest-anchor" cx="${ex1}" cy="${ay}" r="3" fill="${color}"/>`;
+    svg += `<circle class="nest-anchor" cx="${ex2}" cy="${by}" r="3" fill="${color}"/>`;
     svg += edgeLabel(mx, my, r, color);
   }
   svg += '</svg>';
