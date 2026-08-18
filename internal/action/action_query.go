@@ -110,6 +110,28 @@ func (a *Actions) ER() (*domain.ERData, error) {
 	if err != nil {
 		return nil, err
 	}
+	tables, err := a.ertables()
+	if err != nil {
+		return nil, err
+	}
+	return &domain.ERData{Tables: tables, Relations: rels}, nil
+}
+
+// ERTables 仅表清单（Q209：首次加载不查关联——避免无缓存时全库 BFS
+// 秒级阻塞；展开/全图画线时才请求完整 ER()）。relations 返回空数组。
+func (a *Actions) ERTables() (*domain.ERData, error) {
+	logger := zap.L()
+	logger.Info("enter (Actions).ERTables")
+	defer logger.Info("exit (Actions).ERTables")
+	tables, err := a.ertables()
+	if err != nil {
+		return nil, err
+	}
+	return &domain.ERData{Tables: tables, Relations: []*domain.TableRelation{}}, nil
+}
+
+// ertables 表清单组装（ER/ERTables 共用）。
+func (a *Actions) ertables() ([]domain.ERTable, error) {
 	cols, err := a.repo.GetAllTableColumns()
 	if err != nil {
 		return nil, err
@@ -130,7 +152,7 @@ func (a *Actions) ER() (*domain.ERData, error) {
 	for _, t := range tableOrder {
 		tables = append(tables, domain.ERTable{Name: t, Columns: byTable[t]})
 	}
-	return &domain.ERData{Tables: tables, Relations: rels}, nil
+	return tables, nil
 }
 
 // Counts 返回节点数与边数（构建健康检查，serve 启动校验用）。

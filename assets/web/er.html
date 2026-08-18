@@ -89,6 +89,8 @@ let SELECTED = new Set(); // 双击展开的表集合（空=不画线；展开�
 const PALETTE = ['#1677ff', '#fa8c16', '#52c41a', '#f5222d', '#722ed1', '#13c2c2',
   '#eb2f96', '#a0d911', '#2f54eb', '#faad14', '#08979c', '#d4380d'];
 
+let RELS_LOADED = false; // Q209：relations 是否已加载（首次只加载表清单）
+
 async function load() {
   // 跳数上限（localStorage 持久化，默认 4；0 = 不限制）
   let saved = null;
@@ -97,12 +99,27 @@ async function load() {
   document.getElementById('h-query').value = hops.q;
   document.getElementById('h-write').value = hops.w;
   document.getElementById('h-read').value = hops.r;
-  DATA = await fetchER(hops);
+  // Q209：首次加载不查关联（skip_relations=1）——只展示全部表，秒开；
+  // 双击展开/全图画线/改跳数时才请求完整数据（触发一次全库 BFS）
+  DATA = await fetchER(hops, true);
   render();
 }
 
-async function fetchER(hops) {
-  const res = await fetch('/api/er?q_hops=' + hops.q + '&w_hops=' + hops.w + '&r_hops=' + hops.r);
+// 按需加载 relations：首次交互（双击/全图画线）时请求完整数据
+async function ensureRels() {
+  if (RELS_LOADED) return;
+  const hops = {
+    q: parseInt(document.getElementById('h-query').value) || 0,
+    w: parseInt(document.getElementById('h-write').value) || 0,
+    r: parseInt(document.getElementById('h-read').value) || 0,
+  };
+  DATA = await fetchER(hops, false);
+  RELS_LOADED = true;
+}
+
+async function fetchER(hops, skipRelations) {
+  const res = await fetch('/api/er?q_hops=' + hops.q + '&w_hops=' + hops.w + '&r_hops=' + hops.r +
+    (skipRelations ? '&skip_relations=1' : ''));
   return res.json();
 }
 
@@ -117,7 +134,7 @@ function bindHopsConfig() {
         r: parseInt(document.getElementById('h-read').value) || 0,
       };
       localStorage.setItem('codeintel.erHops', JSON.stringify(hops));
-      fetchER(hops).then(d => { DATA = d; render(); });
+      fetchER(hops, false).then(d => { DATA = d; RELS_LOADED = true; render(); });
     };
     el.addEventListener('change', apply);
     el.addEventListener('keydown', evt => { if (evt.key === 'Enter') apply(); });
@@ -168,7 +185,8 @@ function bindRelFilter() {
   allCb.addEventListener('change', () => {
     SHOW_ALL_LINES = allCb.checked;
     localStorage.setItem('codeintel.erAllLines', SHOW_ALL_LINES ? '1' : '0');
-    render();
+    // Q209：全图画线需要 relations——首次切换时按需加载
+    ensureRels().then(render);
   });
 }
 
@@ -387,8 +405,11 @@ function bindDblClick() {
     const el = evt.target.closest('[data-tbl]');
     if (!el) return;
     const name = el.getAttribute('data-tbl');
-    if (SELECTED.has(name)) SELECTED.delete(name); else SELECTED.add(name);
-    render();
+    // Q209：双击展开需要 relations——首次交互时按需加载（异步）
+    ensureRels().then(() => {
+      if (SELECTED.has(name)) SELECTED.delete(name); else SELECTED.add(name);
+      render();
+    });
   });
 }
 

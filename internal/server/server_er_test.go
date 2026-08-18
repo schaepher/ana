@@ -191,3 +191,62 @@ func TestHandleERHopsParam(t *testing.T) {
 		t.Errorf("非法参数应回退默认，got %d 条", n)
 	}
 }
+
+// TestHandleERSkipRelations：Q209 首次加载不查关联——?skip_relations=1
+// 只返回表清单（relations 空），避免首次加载触发全库 BFS（无缓存时
+// 秒级）；展开/全图画线时才请求完整数据。
+func TestHandleERSkipRelations(t *testing.T) {
+	dir := t.TempDir()
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	r := sqlite.NewRepo(db)
+
+	funcID := "symbol:go:example.com/m:find"
+	nodes := []*domain.CodeEntity{
+		{ID: domain.CanonicalID(funcID), Kind: domain.KindFunction, Name: "find", FilePath: "a.go"},
+		{ID: domain.CanonicalID(funcID + "#ext.sql.table_a.id.read@6"), Kind: domain.KindFieldAccess,
+			Name: "table_a.id", FilePath: "a.go", LineStart: 6,
+			Properties: map[string]any{"full_path": "table_a.id", "instance_path": "table_a.id",
+				"access_kind": "read", "type_string": "sql", "is_external": "true", "func_id": funcID}},
+		{ID: domain.CanonicalID(funcID + "#ext.sql.table_b.a_id.filter@9"), Kind: domain.KindFieldAccess,
+			Name: "table_b.a_id", FilePath: "a.go", LineStart: 9,
+			Properties: map[string]any{"full_path": "table_b.a_id", "instance_path": "table_b.a_id",
+				"access_kind": "filter", "type_string": "sql", "is_external": "true", "func_id": funcID}},
+		{ID: domain.CanonicalID(funcID + "#t1"), Kind: domain.KindSSAValue, Name: "t1",
+			Properties: map[string]any{"func_id": funcID}},
+	}
+	edges := []*domain.Fact{
+		{SourceID: domain.CanonicalID(funcID + "#ext.sql.table_a.id.read@6"), TargetID: domain.CanonicalID(funcID + "#t1"),
+			Kind: domain.FactSummaryIO, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: domain.CanonicalID(funcID + "#t1"), TargetID: domain.CanonicalID(funcID + "#ext.sql.table_b.a_id.filter@9"),
+			Kind: domain.FactSummaryIO, ToolSource: domain.ToolSSA, Confidence: 1},
+	}
+	if _, err := r.SaveBatchStats(nodes, edges, nil); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	web := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<html></html>")}}
+	srv := New(context.Background(), action.New(r), web, dir)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	// skip_relations=1：表齐全、relations 空
+	_, m := get(t, ts, "/api/er?skip_relations=1")
+	tables, _ := m["tables"].([]any)
+	if len(tables) != 2 {
+		t.Fatalf("skip_relations 表数 = %d, want 2", len(tables))
+	}
+	rels, _ := m["relations"].([]any)
+	if len(rels) != 0 {
+		t.Errorf("skip_relations=1 应返回空 relations，got %d", len(rels))
+	}
+	// 不带参数：正常返回关系
+	_, m2 := get(t, ts, "/api/er")
+	rels2, _ := m2["relations"].([]any)
+	if len(rels2) == 0 {
+		t.Errorf("正常请求应返回 relations")
+	}
+}

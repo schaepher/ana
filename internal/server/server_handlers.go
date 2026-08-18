@@ -62,7 +62,15 @@ func (s *Server) handleER(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.acts.SetRelationHops(h)
-	data, err := s.acts.ER()
+	// Q209：skip_relations=1 首次加载只返回表清单（不触发全库 BFS）——
+	// 展开/全图画线时才请求完整数据
+	var data *domain.ERData
+	var err error
+	if r.URL.Query().Get("skip_relations") == "1" {
+		data, err = s.acts.ERTables()
+	} else {
+		data, err = s.acts.ER()
+	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
