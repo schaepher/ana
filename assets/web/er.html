@@ -298,6 +298,11 @@ function render() {
   const data = { tables, relations: rels };
   if (MODE === 'nested') renderNested(data, rels, draw);
   else renderTiled(data, rels, draw);
+  // 重新渲染后滚动重置到顶部——布局/尺寸变化后旧滚动位置会
+  // 让第二屏内容不在可视区（双击展开表数量多时尤其明显）
+  const wrap = document.getElementById('svg-wrap');
+  wrap.scrollTop = 0;
+  wrap.scrollLeft = 0;
 }
 
 // 双击表 → 展开/收起（多选：可同时展开多个表）
