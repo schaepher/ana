@@ -20,6 +20,7 @@ func loadRelationGraph(r *Repo) (*relationGraph, error) {
 	defer logger.Debug("exit loadRelationGraph")
 	g := &relationGraph{
 		dataAdj:     map[string][]string{},
+		crossEdges:  map[string]map[string]bool{}, // Q199：跨函数边（argument/returns 正向）
 		allOut:      map[string][]string{},
 		nodes:       map[string]*relNode{},
 		readsByFunc: map[string][]*relNode{},
@@ -38,6 +39,20 @@ func loadRelationGraph(r *Repo) (*relationGraph, error) {
 		if isDataKind(kind) {
 			g.dataAdj[src] = append(g.dataAdj[src], tgt)
 			g.dataAdj[tgt] = append(g.dataAdj[tgt], src)
+			// Q199：跨函数边（argument/returns，无向记录）——write 终点
+			// 的链经过跨函数边时丢弃（对象级传递 ≠ 字段值流入）；query
+			// 键关联跨函数是常态，不受限。遍历本身保持无向（单向化会
+			// 切断真实的跨函数键关联链）
+			if isDirectedKind(kind) {
+				if g.crossEdges[src] == nil {
+					g.crossEdges[src] = map[string]bool{}
+				}
+				g.crossEdges[src][tgt] = true
+				if g.crossEdges[tgt] == nil {
+					g.crossEdges[tgt] = map[string]bool{}
+				}
+				g.crossEdges[tgt][src] = true
+			}
 		}
 	}
 	rows.Close()

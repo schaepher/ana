@@ -2,6 +2,21 @@ package sqlite
 
 import "github.com/schaepher/codeintel/internal/domain"
 
+// relationsAlgoVersion relations 推断逻辑版本（Q199：argument/returns 单向
+// 化 + 跨函数 write 丢弃后递增）——并入缓存键，分析逻辑变更后旧缓存
+// 自动失效，无需手动 clean/reindex。
+const relationsAlgoVersion = "q199"
+
+// cacheKey 缓存键 = build_id + 分析逻辑版本（build_id 变化或逻辑版本
+// 变化都失效）。
+func (r *Repo) cacheKey() string {
+	bid := r.currentBuildID()
+	if bid == "" {
+		return ""
+	}
+	return bid + ":" + relationsAlgoVersion
+}
+
 // currentBuildID 最新构建 id；无构建元数据（fixture/手动建库）返回空串——
 // 缓存层整体跳过（现场计算，不写缓存行）。
 func (r *Repo) currentBuildID() string {
@@ -15,7 +30,7 @@ func (r *Repo) currentBuildID() string {
 // loadRelationCandidates 读单表缓存。返回 ok=true 表示缓存已计算该表
 // （含"无关联"空结果——写入时带 marker 行）；ok=false 表示未缓存需现场算。
 func (r *Repo) loadRelationCandidates(table string) ([]*domain.TableRelation, bool) {
-	buildID := r.currentBuildID()
+	buildID := r.cacheKey()
 	if buildID == "" {
 		return nil, false
 	}
@@ -86,7 +101,7 @@ func (r *Repo) loadAllRelationCandidates(buildID string) ([]*domain.TableRelatio
 // saveRelationCandidates 写单表缓存（覆盖旧行；rels 为空时写 marker 行，
 // 标记"该表已计算过、无关联"，避免每次查询重算）。
 func (r *Repo) saveRelationCandidates(table string, rels []*domain.TableRelation) {
-	buildID := r.currentBuildID()
+	buildID := r.cacheKey()
 	if buildID == "" {
 		return
 	}
@@ -117,7 +132,7 @@ func (r *Repo) saveRelationCandidates(table string, rels []*domain.TableRelation
 // 写全量 marker（from_table=''，loadAllRelationCandidates 完整性判定用）、
 // 每张表写 marker（含无关联表），再写全部真实关联行。
 func (r *Repo) rebuildRelationCandidates(rels []*domain.TableRelation, tables []string) {
-	buildID := r.currentBuildID()
+	buildID := r.cacheKey()
 	if buildID == "" {
 		return
 	}

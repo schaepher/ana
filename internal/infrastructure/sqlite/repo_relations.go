@@ -82,8 +82,8 @@ func (r *Repo) GetAllTableRelations(mode string) ([]*domain.TableRelation, error
 	logger := zap.L()
 	logger.Debug("enter (Repo).GetAllTableRelations")
 	defer logger.Debug("exit (Repo).GetAllTableRelations")
-	// 缓存优先：该 build_id 已完整计算（覆盖全部表）→ 直接返回
-	if buildID := r.currentBuildID(); buildID != "" {
+	// 缓存优先：该 build_id（含分析逻辑版本）已完整计算（覆盖全部表）→ 直接返回
+	if buildID := r.cacheKey(); buildID != "" {
 		if rels, ok := r.loadAllRelationCandidates(buildID); ok {
 			logger.Debug("relations --all 命中缓存", zap.String("build_id", buildID))
 			return dedupRelationNoise(rels, r.relationHops), nil

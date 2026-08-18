@@ -7,6 +7,12 @@ import (
 	"github.com/schaepher/codeintel/internal/domain"
 )
 
+// bfsNode BFS 队列元素：id + 链是否已跨函数（Q199）
+type bfsNode struct {
+	id      string
+	crossed bool
+}
+
 func (g *relationGraph) relationsFor(table string) []*domain.TableRelation {
 	// 起点：本表全部列虚拟节点
 	var starts []*relNode
@@ -20,32 +26,35 @@ func (g *relationGraph) relationsFor(table string) []*domain.TableRelation {
 	var all []*domain.TableRelation
 	for _, st := range starts {
 		visited := map[string]int{st.id: 0}
-		queue := []string{st.id}
+		crossed := map[string]bool{} // 到达该节点的链是否经过跨函数边（argument/returns）
+		queue := []bfsNode{{id: st.id}}
 		for len(queue) > 0 {
 			cur := queue[0]
 			queue = queue[1:]
-			depth := visited[cur]
+			depth := visited[cur.id]
 			if depth >= relationsMaxDepth {
 				continue
 			}
 
-			for _, other := range g.dataAdj[cur] {
+			for _, other := range g.dataAdj[cur.id] {
 				if _, ok := visited[other]; ok {
 					continue
 				}
 				visited[other] = depth + 1
-				queue = append(queue, other)
+				crossed[other] = cur.crossed || g.crossEdges[cur.id][other]
+				queue = append(queue, bfsNode{id: other, crossed: crossed[other]})
 			}
 
-			if n := g.nodes[cur]; n != nil && n.funcID != "" {
-				if tn, ok := g.typeNameOf(cur); ok && tn != "" {
+			if n := g.nodes[cur.id]; n != nil && n.funcID != "" {
+				if tn, ok := g.typeNameOf(cur.id); ok && tn != "" {
 					for _, n2 := range g.readsByFunc[n.funcID] {
 						if !strings.Contains(n2.fullPath, tn) || !g.filterReachable2(n2.id) {
 							continue
 						}
 						if _, ok := visited[n2.id]; !ok {
 							visited[n2.id] = depth + 1
-							queue = append(queue, n2.id)
+							crossed[n2.id] = cur.crossed
+							queue = append(queue, bfsNode{id: n2.id, crossed: crossed[n2.id]})
 						}
 					}
 				}
@@ -80,6 +89,13 @@ func (g *relationGraph) relationsFor(table string) []*domain.TableRelation {
 			case "filter":
 				rtype = domain.RelationQuery
 			case "write":
+				// Q199：同源写要求"同一值"写入两表列——链经过跨函数边
+				// （argument/returns 整对象传递）时只是对象级连通，字段值
+				// 并未流入（go2o 实测：role 对象整体传参后 rbac_role 全部
+				// 字段列误连 rbac_role_res.id）——丢弃跨函数 write
+				if crossed[id] {
+					continue
+				}
 				rtype = domain.RelationWrite
 			}
 

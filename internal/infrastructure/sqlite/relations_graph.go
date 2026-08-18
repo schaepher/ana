@@ -56,6 +56,7 @@ var relTypeStrings = map[string]bool{"sql": true, "gorm": true, "xorm": true}
 
 type relationGraph struct {
 	dataAdj map[string][]string // 数据流边双向邻接（BFS 主边，与旧 SQL OR 双向等价）
+	crossEdges map[string]map[string]bool // 跨函数边（argument/returns 正向，Q199）
 	allOut  map[string][]string // 全部边定向邻接（出边——桥 2 跳检查须定向，
 	//                              与旧 SQL EXISTS 的 e1.source_id = n2.id 等价；
 	//                              双向会让桥过度宽松 → 多关联噪音）

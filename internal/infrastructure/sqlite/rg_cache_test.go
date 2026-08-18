@@ -195,7 +195,8 @@ func TestGetAllTableRelationsRebuildCache(t *testing.T) {
 		t.Fatalf("rels = %+v, want 2", rels)
 	}
 	var fromTables int
-	if err := r.QueryRow(`SELECT COUNT(DISTINCT from_table) FROM relation_candidates WHERE build_id = 'b1' AND from_table <> ''`).Scan(&fromTables); err != nil {
+	// 缓存键 = build_id + 分析逻辑版本（Q199 relationsAlgoVersion）
+	if err := r.QueryRow(`SELECT COUNT(DISTINCT from_table) FROM relation_candidates WHERE build_id LIKE 'b1%' AND from_table <> ''`).Scan(&fromTables); err != nil {
 		t.Fatalf("count: %v", err)
 	}
 	if fromTables != 2 {

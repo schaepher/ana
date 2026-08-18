@@ -34,24 +34,28 @@ func (r *Repo) relationsForSQL(table string) ([]*domain.TableRelation, error) {
 	for _, st := range starts {
 
 		visited := map[string]int{st.id: 0}
-		queue := []string{st.id}
+		crossed := map[string]bool{} // 到达该节点的链是否经过跨函数边（Q199）
+		queue := []bfsNode{{id: st.id}}
 		for len(queue) > 0 {
-			cur := queue[0]
+			curNode := queue[0]
+			cur := curNode.id
 			queue = queue[1:]
 			depth := visited[cur]
 			if depth >= maxDepth {
 				continue
 			}
 
-			ns, err := r.Query(`SELECT e.source_id, e.target_id FROM edges e
+			// Q199：argument/returns 只沿正向穿越（实参→形参）——
+			// 无向遍历时形参反向回实参会把调用方的其他调用串入
+			ns, err := r.Query(`SELECT e.source_id, e.target_id, e.kind FROM edges e
 				WHERE e.kind IN (`+dataKinds+`) AND (e.source_id = ? OR e.target_id = ?)`, cur, cur)
 			if err != nil {
 				return nil, err
 			}
 			var next []string
 			for ns.Next() {
-				var src, tgt string
-				if err := ns.Scan(&src, &tgt); err != nil {
+				var src, tgt, kind string
+				if err := ns.Scan(&src, &tgt, &kind); err != nil {
 					ns.Close()
 					return nil, err
 				}
@@ -63,6 +67,7 @@ func (r *Repo) relationsForSQL(table string) ([]*domain.TableRelation, error) {
 					continue
 				}
 				visited[other] = depth + 1
+				crossed[other] = curNode.crossed || isDirectedKind(kind)
 				next = append(next, other)
 			}
 			ns.Close()
@@ -96,10 +101,14 @@ func (r *Repo) relationsForSQL(table string) ([]*domain.TableRelation, error) {
 						}
 					}
 					fs.Close()
-					queue = append(queue, bridge...)
+					for _, bid := range bridge {
+						queue = append(queue, bfsNode{id: bid, crossed: crossed[bid]})
+					}
 				}
 			}
-			queue = append(queue, next...)
+			for _, id := range next {
+				queue = append(queue, bfsNode{id: id, crossed: crossed[id]})
+			}
 		}
 
 		byNode := map[string]string{}
@@ -156,6 +165,10 @@ func (r *Repo) relationsForSQL(table string) ([]*domain.TableRelation, error) {
 			case "filter":
 				rtype = domain.RelationQuery
 			case "write":
+				// Q199：跨函数 write 丢弃（对象级传递 ≠ 字段值流入）
+				if crossed[id] {
+					continue
+				}
 				rtype = domain.RelationWrite
 			}
 

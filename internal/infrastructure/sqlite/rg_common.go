@@ -10,6 +10,13 @@ func isDataKind(kind string) bool {
 	return false
 }
 
+// isDirectedKind 单向边（Q199）：argument/returns 只允许沿值流方向穿越
+// （实参→形参、被调返回值→调用方）；反向穿越会把调用方的其他调用
+// 串入，产生跨函数假同源（go2o create_time → id 误报根因）。
+func isDirectedKind(kind string) bool {
+	return kind == "argument" || kind == "returns"
+}
+
 func filterFKNoise(all []*domain.TableRelation) []*domain.TableRelation {
 	byTarget := map[string][]*domain.TableRelation{}
 	for _, rel := range all {
