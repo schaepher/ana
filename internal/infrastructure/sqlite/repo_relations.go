@@ -186,6 +186,11 @@ func dedupRelationNoise(rels []*domain.TableRelation, h domain.RelationHops) []*
 		var key string
 		if r.Type == domain.RelationQuery {
 			key = r.FromTable + "|" + r.FromCol + "|" + r.ToTable + "|" + r.ToCol
+		} else if r.Type == domain.RelationWrite && strings.HasSuffix(r.ToCol, "id") {
+			// Q202b：id 结尾列（外键列 res_id/role_id）不聚合——每个外键
+			// 列是独立真实关联（rbac_role.id → res_id 与 role_id 都要）；
+			// 非外键列（全列 INSERT 的列爆炸）才按 字段→表 聚合
+			key = r.FromTable + "|" + r.FromCol + "|" + r.ToTable + "|" + r.ToCol
 		} else {
 			key = r.FromTable + "|" + r.FromCol + "|" + r.ToTable // 字段→表聚合
 		}

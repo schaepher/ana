@@ -159,3 +159,62 @@ func TestRelationWriteFieldAssign(t *testing.T) {
 		t.Errorf("跨函数 write 带字段级赋值（order.id → A.order_id）应保留，got %+v", rels)
 	}
 }
+
+// TestRelationFKColFallback：Q202b——外键列名回退。跨函数 write 链无
+// 值流 taint 时（外键值来自请求参数），列名与表名呼应仍建立关联：
+// rbac_role_res.role_id（base=role）↔ rbac_role 表——业务上 role_id
+// 引用 role.id。create_time → res.id（id 无 base 不呼应）不适用。
+func TestRelationFKColFallback(t *testing.T) {
+	r := newTestRepo(t)
+	svcFn := "symbol:go:example.com/m:svc"
+	saveFn := "symbol:go:example.com/m:savePermRoleRes"
+	nodes := []*domain.CodeEntity{
+		{ID: domain.CanonicalID(svcFn), Kind: domain.KindFunction, Name: "svc"},
+		{ID: domain.CanonicalID(saveFn), Kind: domain.KindFunction, Name: "savePermRoleRes"},
+		{ID: domain.CanonicalID(svcFn + "#t9"), Kind: domain.KindSSAValue, Name: "t9",
+			Properties: map[string]any{"func_id": svcFn, "type_string": "*rbac.RbacRoleRes"}},
+		{ID: domain.CanonicalID(saveFn + "#param.v"), Kind: domain.KindSSAValue, Name: "param.v",
+			Properties: map[string]any{"func_id": saveFn}},
+		{ID: domain.CanonicalID(svcFn + "#t9.RoleId.write@20"), Kind: domain.KindFieldAccess,
+			Name: "t9.RoleId", FilePath: "a.go", LineStart: 20,
+			Properties: map[string]any{"full_path": "example.com/m.RbacRoleRes.RoleId", "instance_path": "t9.RoleId",
+				"access_kind": "write"}},
+		{ID: domain.CanonicalID(saveFn + "#ext.gorm.rbac_role_res.role_id.write@30"), Kind: domain.KindFieldAccess,
+			Name: "rbac_role_res.role_id", FilePath: "a.go", LineStart: 30,
+			Properties: map[string]any{"full_path": "rbac_role_res.role_id", "instance_path": "rbac_role_res.role_id",
+				"access_kind": "write", "type_string": "gorm", "is_external": "true", "func_id": saveFn}},
+		// rbac_role 表起点节点（本表 BFS 起点）
+		{ID: domain.CanonicalID(svcFn + "#ext.gorm.rbac_role.id.read@5"), Kind: domain.KindFieldAccess,
+			Name: "rbac_role.id", FilePath: "a.go", LineStart: 5,
+			Properties: map[string]any{"full_path": "rbac_role.id", "instance_path": "rbac_role.id",
+				"access_kind": "read", "type_string": "gorm", "is_external": "true", "func_id": svcFn}},
+	}
+	edges := []*domain.Fact{
+		// 起点 rbac_role.id.read 读出 → t9（真实链：GetRole → UpdateRoleResource）
+		{SourceID: domain.CanonicalID(svcFn + "#ext.gorm.rbac_role.id.read@5"), TargetID: domain.CanonicalID(svcFn + "#t9"),
+			Kind: domain.FactSummaryIO, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: domain.CanonicalID(svcFn + "#t9"), TargetID: domain.CanonicalID(svcFn + "#t9.RoleId.write@20"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: domain.CanonicalID(svcFn + "#t9"), TargetID: domain.CanonicalID(saveFn + "#param.v"),
+			Kind: domain.FactArgument, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: domain.CanonicalID(saveFn + "#param.v"), TargetID: domain.CanonicalID(saveFn + "#ext.gorm.rbac_role_res.role_id.write@30"),
+			Kind: domain.FactSummaryIO, ToolSource: domain.ToolSSA, Confidence: 1},
+	}
+	save(t, r, nodes, edges)
+	// rbac_role 表 BFS：命中 role_id write——链 crossed（argument）且无
+	// 值流 taint（t9 对象基地址不延续）→ 外键列名回退（role_id ↔ rbac_role）
+	rels, err := r.GetTableRelations("rbac_role", "full")
+	if err != nil {
+		t.Fatalf("GetTableRelations: %v", err)
+	}
+	found := false
+	for _, rel := range rels {
+		if rel.FromTable == "rbac_role" && rel.ToTable == "rbac_role_res" &&
+			rel.ToCol == "role_id" && rel.Type == domain.RelationWrite {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("外键列名回退（rbac_role_res.role_id ↔ rbac_role）应建立 write，got %+v", rels)
+	}
+}

@@ -62,6 +62,40 @@ func taintMatches(taint []string, col string) bool {
 	return false
 }
 
+// fkColMatches 外键列名与表名呼应（Q202b）：col=xxx_id/xxx，表名以
+// xxx 结尾（rbac_role_res.role_id base=role ↔ rbac_role）或相等
+// （含 _ 前缀形式）。id/xxx 无 base 不匹配（create_time → id 不受益）。
+func fkColMatches(col, table string) bool {
+	base := strings.ToLower(col)
+	for _, suf := range []string{"_id", "id"} {
+		if strings.HasSuffix(base, suf) && len(base) > len(suf) {
+			base = base[:len(base)-len(suf)]
+			break
+		}
+	}
+	if base == "" {
+		return false
+	}
+	tl := strings.ToLower(table)
+	return tl == base || strings.HasSuffix(tl, "_"+base) || strings.HasSuffix(tl, base)
+}
+
+// pkColMatches 起点列是否主键形态（Q202b）：id 或表名单数
+// （rbac_role 表的主键列 id）——外键回退仅主键列出发（防任意列误连）。
+func pkColMatches(col, table string) bool {
+	lc := strings.ToLower(col)
+	if lc == "id" {
+		return true
+	}
+	tl := strings.ToLower(table)
+	base := tl
+	for _, pre := range []string{"t_", "tb_"} {
+		base = strings.TrimPrefix(base, pre)
+	}
+	base = strings.TrimSuffix(base, "s")
+	return lc == base || lc == base+"_id"
+}
+
 func (g *relationGraph) relationsFor(table string) []*domain.TableRelation {
 	// 起点：本表全部列虚拟节点
 	var starts []*relNode
@@ -106,6 +140,17 @@ func (g *relationGraph) relationsFor(table string) []*domain.TableRelation {
 					n.access == "read" && contains(g.allOut[cur.id], other) {
 					if cn := colNameOf(n.name); cn != "" {
 						t = intersectTaint(cur.taint, []string{cn})
+					}
+				}
+				// Q202 精确化：对象（指针/结构体）→ 字段写节点不延续 taint
+				// ——字段写节点的值由写入值（另一条边）决定，基地址对象只是
+				// 取址，不携带字段值流（go2o 实测：role 对象整体传入后
+				// t9.ResId.write 被误标 {id}，实际 res_id 来自请求参数）
+				if n := g.nodes[cur.id]; n != nil && n.kind == string(domain.KindSSAValue) &&
+					(strings.HasPrefix(n.typeString, "*") || strings.Contains(n.typeString, "struct")) {
+					if on := g.nodes[other]; on != nil && on.kind == string(domain.KindFieldAccess) &&
+						on.access == "write" {
+						t = nil
 					}
 				}
 				tainted[other] = t
@@ -159,9 +204,17 @@ func (g *relationGraph) relationsFor(table string) []*domain.TableRelation {
 				// Q199/Q202：跨函数 write——链上值级 taint（起点列字段名）
 				// 与终点列呼应（id ⊆ order_id）则字段值真实传递（order.id
 				// 读出 → 赋 A.order_id），保留；仅对象整体传递无 taint 或
-				// 不呼应则丢弃（create_time → res.id 假同源）
+				// 不呼应则丢弃（create_time → res.id 假同源）。
+				// Q202b：无值流 taint 时外键列名回退——写入列是外键模式
+				// （xxx_id/xxx 与表名呼应，如 rbac_role_res.role_id ↔
+				// rbac_role）时保留：外键值即使来自请求参数，业务上
+				// 也引用本表主键（用户确认）
 				if crossed[id] && !taintMatches(tainted[id], col) {
-					continue
+					// Q202b：外键回退——起点列须是主键形态（id/表名单数，
+					// 防任意列误连），目标列须是外键形态（xxx_id 呼应本表）
+					if !(fkColMatches(col, table) && pkColMatches(fromCol, table)) {
+						continue
+					}
 				}
 				rtype = domain.RelationWrite
 			}
