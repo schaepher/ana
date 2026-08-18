@@ -246,8 +246,23 @@ function renderNested(data) {
     w: TW - FIELD_M * 2, h: ROW_H2 - 4,
   });
   let svg = svgHead(Wpx, Hpx);
+  // 先画表外框 + 字段矩形（底层），连线最后画（顶层）——
+  // 线在所有表矩形之上，全程可见（含表内穿过的段落）
+  for (const t of tables) {
+    const p = pos.get(t.name);
+    svg += `<rect class="nest-tbl" x="${p.x}" y="${p.y}" width="${TW}" height="${p.h}" rx="4"/>`;
+    svg += `<rect class="nest-head" x="${p.x}" y="${p.y}" width="${TW}" height="${TH_HEAD}" rx="4"/>`;
+    svg += `<rect x="${p.x}" y="${p.y + TH_HEAD - 6}" width="${TW}" height="6" fill="#5b6b7c"/>`;
+    svg += `<text class="nest-title" x="${p.x + 12}" y="${p.y + 22}">${t.name}</text>`;
+    t.columns.forEach((c, i) => {
+      const fr = fieldRect(p, i);
+      svg += `<rect class="nest-field" x="${fr.x}" y="${fr.y}" width="${fr.w}" height="${fr.h}"/>`;
+      const cy = fr.y + fr.h / 2 + 4;
+      svg += fieldText(fr.x + 8, cy, c);
+    });
+  }
+  // 连线：字段矩形边缘 → 字段矩形边缘（折线 + 锚点圆点 + 箭头，最上层）
   const lineCounts = new Map();
-  // 连线：字段矩形边缘 → 字段矩形边缘（直线 + 锚点圆点 + 箭头）
   for (const r of rels) {
     const pa = pos.get(r.from_table), pb = pos.get(r.to_table);
     if (!pa || !pb) continue;
@@ -270,9 +285,8 @@ function renderNested(data) {
     const color = styleColor(r.type);
     // 折线（大规模表适配，避免斜穿）：同行同字段行 → 水平直线；
     // 其余 → S 型正交（字段矩形边缘水平出线 → 垂直段 → 水平入）。
-    // OUT 需 > 反向线偏移(12) + 字段矩形到表边框距离(10)，保证出线穿过
-    // 表边框后仍有可见段——否则线看起来从表边框伸出而非字段矩形
-    const OUT = 30;
+    // 线在表矩形上层，穿过表内段落亦可见
+    const OUT = 18;
     let d, mx, my;
     if (ay === by && ex1 !== ex2) {
       d = `M ${ex1 + dx} ${ay} L ${ex2 + dx} ${ay}`;
@@ -283,24 +297,10 @@ function renderNested(data) {
       mx = vx + dx; my = (ay + by) / 2 - 6;
     }
     svg += `<path d="${d}" fill="none" style="${edgeStyle(r.type)}"/>`;
-    // 锚点圆点（后画，盖在表边框上——线从字段矩形明确伸出）
+    // 锚点圆点（盖在线端——线从字段矩形边缘明确伸出）
     svg += `<circle class="nest-anchor" cx="${ex1 + dx}" cy="${ay}" r="3" fill="${color}"/>`;
     svg += `<circle class="nest-anchor" cx="${ex2 + dx}" cy="${by}" r="3" fill="${color}"/>`;
     svg += edgeLabel(mx, my, r, color);
-  }
-  // 表外框 + 字段矩形
-  for (const t of tables) {
-    const p = pos.get(t.name);
-    svg += `<rect class="nest-tbl" x="${p.x}" y="${p.y}" width="${TW}" height="${p.h}" rx="4"/>`;
-    svg += `<rect class="nest-head" x="${p.x}" y="${p.y}" width="${TW}" height="${TH_HEAD}" rx="4"/>`;
-    svg += `<rect x="${p.x}" y="${p.y + TH_HEAD - 6}" width="${TW}" height="6" fill="#5b6b7c"/>`;
-    svg += `<text class="nest-title" x="${p.x + 12}" y="${p.y + 22}">${t.name}</text>`;
-    t.columns.forEach((c, i) => {
-      const fr = fieldRect(p, i);
-      svg += `<rect class="nest-field" x="${fr.x}" y="${fr.y}" width="${fr.w}" height="${fr.h}"/>`;
-      const cy = fr.y + fr.h / 2 + 4;
-      svg += fieldText(fr.x + 8, cy, c);
-    });
   }
   svg += '</svg>';
   document.getElementById('svg-wrap').innerHTML = svg;
