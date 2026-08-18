@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"database/sql"
 	"sort"
 	"strings"
 
@@ -35,6 +36,7 @@ func (r *Repo) relationsForSQL(table string) ([]*domain.TableRelation, error) {
 
 		visited := map[string]int{st.id: 0}
 		crossed := map[string]bool{} // 到达该节点的链是否经过跨函数边（Q199）
+		tainted := map[string][]string{st.id: {}} // Q212：节点值级 taint（起点列字段名集合）
 		queue := []bfsNode{{id: st.id}}
 		for len(queue) > 0 {
 			curNode := queue[0]
@@ -46,16 +48,32 @@ func (r *Repo) relationsForSQL(table string) ([]*domain.TableRelation, error) {
 			}
 
 			// Q199：argument/returns 只沿正向穿越（实参→形参）——
-			// 无向遍历时形参反向回实参会把调用方的其他调用串入
-			ns, err := r.Query(`SELECT e.source_id, e.target_id, e.kind FROM edges e
-				WHERE e.kind IN (`+dataKinds+`) AND (e.source_id = ? OR e.target_id = ?)`, cur, cur)
+			// 无向遍历时形参反向回实参会把调用方的其他调用串入。
+			// Q212：join 两端节点元数据（kind/access/type_string/name）——
+			// 值级 taint 传播与内存路径（rg_relationsfor.go）一致：
+			//   a. read 字段节点 → 出边值：taint 与该字段名求交
+			//   b. 对象（*/struct ssa_value）→ 字段写节点：taint 不延续
+			//      （写节点的值由写入值决定，基地址对象只是取址）
+			ns, err := r.Query(`SELECT e.source_id, e.target_id, e.kind,
+				ns.kind, json_extract(ns.properties, '$.access_kind'),
+				json_extract(ns.properties, '$.type_string'), ns.name,
+				nt.kind, json_extract(nt.properties, '$.access_kind'),
+				json_extract(nt.properties, '$.type_string'), nt.name
+			  FROM edges e
+			  JOIN nodes ns ON ns.id = e.source_id
+			  JOIN nodes nt ON nt.id = e.target_id
+			  WHERE e.kind IN (`+dataKinds+`) AND (e.source_id = ? OR e.target_id = ?)`, cur, cur)
 			if err != nil {
 				return nil, err
 			}
 			var next []string
 			for ns.Next() {
 				var src, tgt, kind string
-				if err := ns.Scan(&src, &tgt, &kind); err != nil {
+				var sk, tk string
+				var sa, ta sql.NullString // access_kind/type_string 可为 NULL（ssa_value 无 access）
+				var st, tt sql.NullString
+				var sn, tn string
+				if err := ns.Scan(&src, &tgt, &kind, &sk, &sa, &st, &sn, &tk, &ta, &tt, &tn); err != nil {
 					ns.Close()
 					return nil, err
 				}
@@ -66,8 +84,27 @@ func (r *Repo) relationsForSQL(table string) ([]*domain.TableRelation, error) {
 				if _, ok := visited[other]; ok {
 					continue
 				}
+				// cur/other 元数据（src==cur 时 cur=ns 行、other=nt 行）
+				curKind, curAccess, curType, curName := sk, sa.String, st.String, sn
+				oKind, oAccess := tk, ta.String
+				if tgt == cur {
+					curKind, curAccess, curType, curName = tk, ta.String, tt.String, tn
+					oKind, oAccess = sk, sa.String
+				}
+				t := curNode.taint
+				if curKind == string(domain.KindFieldAccess) && curAccess == "read" && src == cur {
+					if cn := colNameOf(curName); cn != "" {
+						t = intersectTaint(curNode.taint, []string{cn})
+					}
+				}
+				if curKind == string(domain.KindSSAValue) &&
+					(strings.HasPrefix(curType, "*") || strings.Contains(curType, "struct")) &&
+					oKind == string(domain.KindFieldAccess) && oAccess == "write" {
+					t = nil
+				}
 				visited[other] = depth + 1
 				crossed[other] = curNode.crossed || isDirectedKind(kind)
+				tainted[other] = t
 				next = append(next, other)
 			}
 			ns.Close()
@@ -165,9 +202,22 @@ func (r *Repo) relationsForSQL(table string) ([]*domain.TableRelation, error) {
 			case "filter":
 				rtype = domain.RelationQuery
 			case "write":
-				// Q199：跨函数 write 丢弃（对象级传递 ≠ 字段值流入）
+				// Q212（原 Q199 一律丢弃）：跨函数 write——链上值级 taint
+				// （起点列字段名）与终点列呼应（id ⊆ order_id）则字段值
+				// 真实传递保留；仅对象整体传递无 taint 或不呼应则丢弃。
+				// 判定与内存路径完全一致（fkColMatches/pkColMatches/
+				// taintMatches 共用）：
+				//   Q202b：无值流 taint 时外键列名回退（外键值即使来自
+				//     请求参数，业务上也引用本表主键）
+				//   Q202c：跨函数 write 目标列须外键形态（呼应本表名）
 				if crossed[id] {
-					continue
+					if !(fkColMatches(col, table) && pkColMatches(fromCol, table)) &&
+						!taintMatches(tainted[id], col) {
+						continue
+					}
+					if !fkColMatches(col, table) {
+						continue
+					}
 				}
 				rtype = domain.RelationWrite
 			}
@@ -201,30 +251,10 @@ func (r *Repo) relationsForSQL(table string) ([]*domain.TableRelation, error) {
 		}
 	}
 
-	byTarget := map[string][]*domain.TableRelation{}
-	for _, rel := range all {
-		byTarget[rel.ToTable+"."+rel.ToCol] = append(byTarget[rel.ToTable+"."+rel.ToCol], rel)
-	}
-	var out []*domain.TableRelation
-	for _, rels := range byTarget {
-		hasFK := false
-		for _, r := range rels {
-			if r.FromCol != "id" {
-				hasFK = true
-				break
-			}
-		}
-		for _, r := range rels {
-			if r.FromCol == "id" && r.ToCol == "id" {
-				continue
-			}
-			if hasFK && r.FromCol == "id" {
-				continue
-			}
-			out = append(out, r)
-		}
-	}
-	return out, nil
+	// Q212：filterFKNoise 统一用共享函数（原内联版缺 query 豁免——
+	// hasFK 时 id 起点过滤不作用于 query，attr.id → attr_item.attr_id
+	// 键关联被误滤；与内存路径分叉）
+	return filterFKNoise(all), nil
 }
 
 // getAllTableRelationsSQL --memory sql 模式的全库聚合：GetTables 枚举 +

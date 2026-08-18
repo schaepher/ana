@@ -2056,7 +2056,7 @@ db.DB())`），assignTargets 区间匹配误配到外层变量 err。修复 **to
 | 配置表入库 | ✅ 预留完成 | ResetGraphTables 只 DROP 三张图表（edges/function_field_summary/nodes），build_metadata 与未来配置表保留；配置功能无需求未开始 |
 | 动态调用盲区 / 入口可达 / Count-Pluck / ER 懒加载语义 / e2e 断言形态 | 🔒 设计边界 | 用户确认保持或设计权衡（§10/§14.10/§22/§45 已记录） |
 | orm.Mapping 表名映射 | ✅ 已实现（Q211） | go2o pm_coupon/dlvl_area 等表已补齐（2026-08-18） |
-| SQL 路径 taint 同步 | ⏳ Q212 | `--memory sql` 逃生口 write 精度低于内存路径 |
+| SQL 路径 taint 同步 | ✅ 已实现（Q212） | `--memory sql` 与内存路径语义一致（2026-08-18） |
 | 依赖签名缓存失效 | ✅ 已实现（Q213） | 失效键纳入直接依赖包 hash（2026-08-18） |
 | G6 CDN 锁版本 | ⏳ Q214 | e2e 颜色断言降级待恢复 |
 | 包级缓存陈旧行清理 | ⏳ Q215 | 删除函数/文件的摘要行残留 |
@@ -2082,14 +2082,21 @@ db.DB())`），assignTargets 区间匹配误配到外层变量 err。修复 **to
   路径）+ 12 包 + it；go2o 实测 pm_coupon/dlvl_area 等表补齐（162 表，
   含 read/write/filter 全形态）
 
-**Q212 SQL 路径同步 Q202 值级 taint**
+**Q212 SQL 路径同步 Q202 值级 taint（已实现，2026-08-18）**
 - 动机：`--memory sql` 逃生口路径跨函数 write 仍是 Q199"一律丢弃"，
   精度低于内存路径（Q177 曾验证两路径一致，Q202 后分叉）
-- 决策：**完整同步**——值级 taint 传播（字段读求交 + 对象→字段写不
-  延续）移植到 rg_sql.go 的 BFS；判定函数（taintMatches/fkColMatches/
-  pkColMatches）抽公共供两路径复用；write 终点判定对齐 Q202/Q202b/Q202c
-  全链（外键形态 + taint 呼应 + 外键列须呼应表名）
-- 目标：两路径语义一致（逃生口同样精确）
+- 实现：rg_sql.go 的 BFS 边查询 **join 两端节点元数据**（kind/access/
+  type_string/name，json_extract 可为 NULL 用 sql.NullString）——值级
+  taint 传播与内存路径一致（read 字段→出边值求交 / 对象→字段写不
+  延续）；write 终点判定复用共享判定函数（fkColMatches/pkColMatches/
+  taintMatches）对齐 Q202/Q202b/Q202c 全链
+- **filterFKNoise 统一**：SQL 路径内联版缺 query 豁免（hasFK 时 id 起点
+  过滤不作用于 query——attr.id → attr_item.attr_id 被误滤），改用共享
+  函数
+- 验证：单测 2 个（跨函数 write taint 保留/丢弃 + query 豁免，两路径
+  一致断言）+ 12 包 + it；go2o 实测 rbac_role 两路径一致（id →
+  rbac_role_res.role_id write）；全库 --all full=sql=53 条（write 39 /
+  query 14）
 
 **Q213 依赖签名变化纳入缓存失效键（已实现，2026-08-18）**
 - 动机：包级缓存键 = 本包源码 hash + analyzer 版本，依赖包 API 变化时
