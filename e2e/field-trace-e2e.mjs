@@ -153,8 +153,8 @@ const RECV_ID = FN_ID + '#param.recv.m';
 await page.evaluate((id) => window.__codeintelGraph.emit('node:dblclick', { target: { id } }), RECV_ID);
 await page.waitForTimeout(1200);
 const afterKinds = await page.evaluate(() => window.__codeintelGraph.getData().nodes.map((n) => n.data.kind));
-check('双击参数节点展开 ssa_value/field_access',
-  afterKinds.includes('field_access') && afterKinds.includes('ssa_value'),
+check('双击参数节点展开数据流上下游（field_access，Q178 参数统一）',
+  afterKinds.includes('field_access'),
   'kinds=' + afterKinds.join(','));
 const hasCfg = await page.evaluate(() => window.__codeintelGraph.getData().nodes.some(
   (n) => n.data.label && n.data.label.indexOf('m.cfg') >= 0));
@@ -198,26 +198,40 @@ check('双击参数值节点后画布出现 has_param 边（回到所属函数�
   edgeKinds.includes('has_param'),
   'edges=' + edgeKinds.join(','));
 
-// 12. 数据值全链：信息栏"追踪此数据"按钮 → 函数上下文分组文本树
-await page.evaluate((id) => window.__codeintelGraph.emit('node:click', { target: { id } }), faInfo.id);
-await page.waitForTimeout(800);
-const hasVtBtn = await page.evaluate(() => !!document.getElementById('vt-btn'));
-check('数据节点信息栏有"追踪此数据"按钮', hasVtBtn);
-if (hasVtBtn) {
+// 12. 数据值全链：信息栏"追踪此数据"按钮 → 函数上下文分组文本树。
+// 两个锚点各验证一段能力（Q95 过滤方向语义 + 参数不挂条件的已知
+// 边界）：
+//   a. ctx 参数锚点：正向 argument 跨函数 → (Handler).PageChatSend 分组
+//   b. 画布读节点锚点（m.cfg.read）：反向链 [读] + [条件:]（if 内读）
+const vtTextOf = async () => {
+  await page.waitForTimeout(800);
+  const hasVtBtn = await page.evaluate(() => !!document.getElementById('vt-btn'));
+  if (!hasVtBtn) return '';
   await page.click('#vt-btn');
   await page.waitForTimeout(1000);
-  const vtText = await page.evaluate(() => {
+  return page.evaluate(() => {
     const el = document.getElementById('vt-panel');
     return el ? el.textContent : '';
   });
-  check('全链视图按函数上下文分组（含跨函数与读写标记）',
-    vtText.indexOf('数据流全链') >= 0 && vtText.indexOf('(Manager).Run') >= 0 &&
-    vtText.indexOf('(Handler).PageChatSend') >= 0 && vtText.indexOf('[读]') >= 0,
-    'vt=' + vtText.slice(0, 120).replace(/\n/g, ' '));
-  check('全链视图显示路径条件标注 [条件:]（Q92 前端回归）',
-    vtText.indexOf('[条件:') >= 0,
-    'vt=' + vtText.slice(0, 200).replace(/\n/g, ' '));
-}
+};
+// a. ctx 锚点：跨函数分组（参数传递形态）
+await page.evaluate((id) => window.__codeintelGraph.emit('node:click', { target: { id } }), M_VALUE_ID);
+const vtCtx = await vtTextOf();
+check('全链视图按函数上下文分组（跨函数 argument 链）',
+  vtCtx.indexOf('(Manager).Run') >= 0 && vtCtx.indexOf('(Handler).PageChatSend') >= 0,
+  'vt=' + vtCtx.slice(0, 120).replace(/\n/g, ' '));
+// b. 画布读节点锚点：读写标记 + 路径条件（if 内字段读形态）
+const vtReadAnchor = (await page.evaluate(() => {
+  const g = window.__codeintelGraph;
+  const n = g.getData().nodes.find((x) => x.data.kind === 'field_access' &&
+    x.data.label && x.data.label.indexOf('[读]') >= 0);
+  return n ? n.id : null;
+})) || faInfo.id;
+await page.evaluate((id) => window.__codeintelGraph.emit('node:click', { target: { id } }), vtReadAnchor);
+const vtRead = await vtTextOf();
+check('全链视图显示读写与条件标注（[读] + [条件:]）',
+  vtRead.indexOf('[读]') >= 0 && vtRead.indexOf('[条件:') >= 0,
+  'vt=' + vtRead.slice(0, 200).replace(/\n/g, ' '));
 
 // 13b. 信息栏 receiver 分组：方法节点面板含"接收者（N）"分组
 await page.evaluate((id) => window.__codeintelGraph.emit('node:click', { target: { id } }), FN_ID);

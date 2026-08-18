@@ -47,6 +47,19 @@ e2e:
 	  kill $$(cat /tmp/codeintel-e2e.pid) 2>/dev/null; \
 	  rm -f /tmp/codeintel-e2e /tmp/codeintel-e2e.pid; exit $$status
 
+## e2e-fixture: 自包含 e2e（integration/fixtureapp）——init 索引 + serve +
+##              全量断言（FN_ID 固定为 manager 包形态，不依赖外部仓库）
+e2e-fixture:
+	go build -o /tmp/codeintel-e2e ./cmd/codeintel
+	@/tmp/codeintel-e2e init --repo integration/fixtureapp >/dev/null 2>&1
+	@/tmp/codeintel-e2e serve --repo integration/fixtureapp --addr :8096 >/dev/null 2>&1 & \
+	  echo $$! > /tmp/codeintel-e2e.pid
+	@sleep 2
+	@cd e2e && FN_ID='symbol:go:example.com/fixtureapp/manager:(Manager).Run' \
+	  node field-trace-e2e.mjs; status=$$?; \
+	  kill $$(cat /tmp/codeintel-e2e.pid) 2>/dev/null; \
+	  rm -f /tmp/codeintel-e2e /tmp/codeintel-e2e.pid; exit $$status
+
 ## vet: 静态检查
 vet:
 	go vet ./...
