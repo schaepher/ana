@@ -162,8 +162,8 @@ func TestRelationsAll(t *testing.T) {
 		t.Fatalf("rels = %+v, want 2", rels)
 	}
 	fwd, bwd := rels[0], rels[1]
-	if fwd.FromTable != "table_a" || fwd.ToTable != "table_b" || fwd.Type != domain.RelationQuery {
-		t.Errorf("fwd = %+v, want table_a→table_b query", fwd)
+	if fwd.FromTable != "table_a" || fwd.ToTable != "table_b" || fwd.Type != domain.RelationFK {
+		t.Errorf("fwd = %+v, want table_a→table_b fk", fwd)
 	}
 	if bwd.FromTable != "table_b" || bwd.ToTable != "table_a" || bwd.Type != domain.RelationRead {
 		t.Errorf("bwd = %+v, want table_b→table_a read", bwd)

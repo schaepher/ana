@@ -61,6 +61,7 @@
 48. [参数节点统一与展示名恢复（Q178–Q180，2026-08-17）](#48-参数节点统一与展示名恢复)
 49. [信息栏展示优化与收尾（Q184–Q193，2026-08-17）](#49-信息栏展示优化与收尾)
 50. [待办事项与设计决策（Q211–Q216，2026-08-18）](#50-待办事项与设计决策)
+51. [fk 类型：值流验证的真实键关联（Q218，2026-08-18）](#51-fk-类型值流验证的真实键关联)
 ---
 
 ## 1. 项目背景与目标
@@ -2141,4 +2142,40 @@ db.DB())`），assignTargets 区间匹配误配到外层变量 err。修复 **to
 
 ---
 
-**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q216，逐 Q 编号 + 日期）。
+---
+
+## 51. fk 类型：值流验证的真实键关联（Q218，2026-08-18）
+
+**动机**：ER 图默认 query 线含"对象字段换名"型噪声（pay_order.id →
+t15.BuyerId → mm_block_list.member_id [9跳]——起点主键读出后对象整体
+传递，对象上取**另一个字段** BuyerId——id 值并未流入），而真实键关联
+（item_info.id → item_image.item_id [11跳]——字段 Id 与起点列 id 是
+同一逻辑值）也被同跳数上限误滤。
+
+**决策**（用户设计树确认）：新增 **fk 类型**（外键键关联）——query 的
+值流验证子集；**ER 图默认只画 fk**（真实链）；**fk 默认不限跳**（值流
+已验证）；**CLI 独立类型**（--type fk，文本标签 [外键关联]）。
+
+**实现**：
+- domain 加 RelationFK；**intersectTaint 改 lowercase 比较**（Go 字段名
+  Id 与列名 id 是同一逻辑值，精确匹配导致真实链 taint 断裂）
+- BFS 终点判定（内存/SQL 两路径）：query + `taintMatches(终点 taint,
+  终点列)` → 升级 fk——噪声链（BuyerId 求交空）终点 taint 空 → 保持
+  query
+- dedup：fk 不限跳 + 列级 key；relTypeRank fk 最高；filterFKNoise 豁免
+- CLI：默认输出 fk+query+write、--type fk 过滤、文本/JSON/mermaid 支持
+- ER 图：默认 SHOW={fk:true, query:false, write:false, read:false}；
+  fk 粗实线（2.8）/ query 长虚线（区分）；图例与开关加 fk
+- relationsAlgoVersion q208 → q209（rg_*.go 改动）
+
+**顺带修复（Q212 同步遗漏）**：SQL 路径起点 taint 初始化缺失 + 桥接/
+入队丢失 taint——导致 SQL 路径整链 taint 空、fk 判定与内存路径不一致。
+
+**验证**：单测 3 个（真实链 fk/噪声链 query 分类、12 跳 fk 保留、fk
+rank 最高）+ 12 包 + it + e2e-fixture 22 项全绿；go2o 实测 item_info.id
+→ item_image.item_id [11跳] fk 默认显示，噪声链保持 query（9 跳）；
+ER 图 78 条 fk 线渲染。
+
+---
+
+**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q218，逐 Q 编号 + 日期）。

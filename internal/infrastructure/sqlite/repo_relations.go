@@ -141,9 +141,11 @@ func (r *Repo) GetAllTableRelations(mode string) ([]*domain.TableRelation, error
 	return dedupRelationNoise(out, r.relationHops), nil
 }
 
-// relTypeRank 关联类型优先级（聚合去重用）：query > write > read。
+// relTypeRank 关联类型优先级（聚合去重用）：fk > query > write > read。
 func relTypeRank(t string) int {
 	switch t {
+	case domain.RelationFK:
+		return 3
 	case domain.RelationQuery:
 		return 2
 	case domain.RelationWrite:
@@ -182,6 +184,8 @@ func dedupRelationNoise(rels []*domain.TableRelation, h domain.RelationHops) []*
 		}
 		limit := h.Read
 		switch r.Type {
+		case domain.RelationFK:
+			limit = 0 // Q218：fk 值流已验证，默认不限跳（真实链 11 跳可显示）
 		case domain.RelationQuery:
 			limit = h.Query
 		case domain.RelationWrite:
@@ -191,7 +195,8 @@ func dedupRelationNoise(rels []*domain.TableRelation, h domain.RelationHops) []*
 			continue
 		}
 		var key string
-		if r.Type == domain.RelationQuery {
+		if r.Type == domain.RelationFK || r.Type == domain.RelationQuery {
+			// Q218：fk/query 列级独立（键关联每列独立有意义）
 			key = r.FromTable + "|" + r.FromCol + "|" + r.ToTable + "|" + r.ToCol
 		} else if r.Type == domain.RelationWrite && strings.HasSuffix(r.ToCol, "id") {
 			// Q202b：id 结尾列（外键列 res_id/role_id）不聚合——每个外键

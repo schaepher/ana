@@ -62,8 +62,8 @@ func TestGetTableRelationsBridge(t *testing.T) {
 	if rels[0].ToTable != "table_b" || rels[0].ToCol != "a_id" {
 		t.Errorf("relation = %+v, want table_b.a_id", rels[0])
 	}
-	if rels[0].Type != domain.RelationQuery {
-		t.Errorf("type = %q, want query（终点 filter）", rels[0].Type)
+	if rels[0].Type != domain.RelationFK {
+		t.Errorf("type = %q, want fk（值流验证）", rels[0].Type)
 	}
 }
 
@@ -104,8 +104,8 @@ func TestGetTableRelationsXORM(t *testing.T) {
 	if len(rels) != 1 {
 		t.Fatalf("rels = %+v, want 1（xorm 表关联）", rels)
 	}
-	if rels[0].ToTable != "table_b" || rels[0].Type != domain.RelationQuery {
-		t.Errorf("relation = %+v, want table_b.a_id query", rels[0])
+	if rels[0].ToTable != "table_b" || rels[0].Type != domain.RelationFK {
+		t.Errorf("relation = %+v, want table_b.a_id fk", rels[0])
 	}
 }
 

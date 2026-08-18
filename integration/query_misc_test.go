@@ -167,13 +167,13 @@ func main() {
 	}
 	found := false
 	for _, r := range rels {
-		if r.Type == "query" && r.FromTable == "member" && r.FromCol == "id" &&
+		if (r.Type == "fk" || r.Type == "query") && r.FromTable == "member" && r.FromCol == "id" &&
 			r.ToTable == "account" && r.ToCol == "member_id" {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("--all 未包含 member.id → account.member_id query 键关联:\n%s", out)
+		t.Errorf("--all 未包含 member.id → account.member_id 键关联（fk/query）:\n%s", out)
 	}
 
 	outPath := filepath.Join(t.TempDir(), "rels.json")

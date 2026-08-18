@@ -58,8 +58,8 @@ func TestGetTableRelations(t *testing.T) {
 		t.Error("hops 应为数据流链长度（>0）")
 	}
 	// 终点是 filter 虚拟节点 → query 类型（键关联，高置信）
-	if rels[0].Type != domain.RelationQuery {
-		t.Errorf("relation type = %q, want query（终点 filter 列）", rels[0].Type)
+	if rels[0].Type != domain.RelationFK {
+		t.Errorf("relation type = %q, want fk（值流验证）", rels[0].Type)
 	}
 	// table_c 无链 → 不出现；无关联表 → 空
 	empty, err := r.GetTableRelations("table_c", "")
@@ -158,8 +158,8 @@ func TestGetAllTableRelations(t *testing.T) {
 	if fwd.FromTable != "table_a" || fwd.FromCol != "id" || fwd.ToTable != "table_b" || fwd.ToCol != "a_id" {
 		t.Errorf("fwd = %+v, want table_a.id → table_b.a_id", fwd)
 	}
-	if fwd.Type != domain.RelationQuery {
-		t.Errorf("fwd type = %q, want query", fwd.Type)
+	if fwd.Type != domain.RelationFK {
+		t.Errorf("fwd type = %q, want fk（值流验证）", fwd.Type)
 	}
 	if bwd.FromTable != "table_b" || bwd.FromCol != "a_id" || bwd.ToTable != "table_a" || bwd.ToCol != "id" {
 		t.Errorf("bwd = %+v, want table_b.a_id → table_a.id", bwd)

@@ -26,15 +26,15 @@ func TestQueryRelationsAll(t *testing.T) {
 	}
 
 	if len(rels) != 1 {
-		t.Fatalf("rels = %d 条, want 1（默认过滤 read，仅正向 query）: %s", len(rels), out)
+		t.Fatalf("rels = %d 条, want 1（默认过滤 read，仅正向 fk）: %s", len(rels), out)
 	}
 	fwd := rels[0]
 	if fwd["from_table"] != "table_a" || fwd["to_table"] != "table_b" ||
 		fwd["from_col"] != "id" || fwd["to_col"] != "a_id" {
 		t.Errorf("fwd = %v, want table_a.id → table_b.a_id", fwd)
 	}
-	if fwd["type"] != "query" {
-		t.Errorf("fwd type = %v, want query", fwd["type"])
+	if fwd["type"] != "fk" {
+		t.Errorf("fwd type = %v, want fk", fwd["type"])
 	}
 
 	out = captureStdout(func() {
@@ -58,7 +58,7 @@ func TestQueryRelationsAllText(t *testing.T) {
 			t.Errorf("relations --all exit = %d", code)
 		}
 	})
-	for _, want := range []string{"table_a", "table_b", "查询关联", "1 条"} {
+	for _, want := range []string{"table_a", "table_b", "外键关联", "1 条"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("relations --all text missing %q:\n%s", want, out)
 		}
@@ -86,8 +86,8 @@ func TestExportRelations(t *testing.T) {
 		t.Fatalf("relations = %d 条, want 2: %s", len(got.Relations), data)
 	}
 	fwd := got.Relations[0]
-	if fwd["from_table"] != "table_a" || fwd["to_table"] != "table_b" || fwd["type"] != "query" {
-		t.Errorf("fwd = %v, want table_a.id → table_b.a_id query", fwd)
+	if fwd["from_table"] != "table_a" || fwd["to_table"] != "table_b" || fwd["type"] != "fk" {
+		t.Errorf("fwd = %v, want table_a.id → table_b.a_id fk", fwd)
 	}
 }
 
@@ -149,8 +149,8 @@ func TestQueryRelationsFilters(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &rels); err != nil {
 		t.Fatalf("json: %v", err)
 	}
-	if len(rels) != 1 || rels[0].ToTable != "table_b" {
-		t.Fatalf("--type=query,write = %+v, want table_b", rels)
+	if len(rels) != 0 {
+		t.Fatalf("--type=query,write = %+v, want 空（Q218：fk 独立类型，不混入 query/write）", rels)
 	}
 
 	out = captureStdout(func() {

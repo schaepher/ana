@@ -50,7 +50,7 @@ func TestGetTableColumns(t *testing.T) {
 		// 读边：节点 → 读出的 row 值（P0-2）
 		{SourceID: domain.CanonicalID(funcID + "#ext.sql.users.name.read@10"),
 			TargetID: domain.CanonicalID(funcID + "#t1"),
-			Kind: domain.FactSummaryIO, ToolSource: domain.ToolSSA, Confidence: 1,
+			Kind:     domain.FactSummaryIO, ToolSource: domain.ToolSSA, Confidence: 1,
 			Metadata: map[string]any{"line_num": 10}},
 	}
 	save(t, r, nodes, edges)

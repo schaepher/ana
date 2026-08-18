@@ -55,7 +55,8 @@
   </div>
   <div class="rel-filter" title="关系显示开关（大规模表默认只画高置信键关联）">
     <label title="直接在全图画全部关系线（无需双击展开）"><input type="checkbox" id="f-alllines">全图画线</label>
-    <label><input type="checkbox" id="f-query" checked>键关联</label>
+    <label><input type="checkbox" id="f-fk" checked>外键关联</label>
+    <label><input type="checkbox" id="f-query">键关联</label>
     <label><input type="checkbox" id="f-write">同源写</label>
     <label><input type="checkbox" id="f-read">间接读</label>
   </div>
@@ -65,7 +66,8 @@
     <label><input id="h-read" type="number" min="0" value="4" style="width:44px">r</label>
   </div>
   <div class="legend">
-    <span class="li"><svg width="30" height="10"><line x1="1" y1="5" x2="29" y2="5" stroke="#1677ff" stroke-width="2.2"/></svg>键关联（实线）</span>
+    <span class="li"><svg width="30" height="10"><line x1="1" y1="5" x2="29" y2="5" stroke="#1677ff" stroke-width="2.8"/></svg>外键关联 fk（粗实线）</span>
+    <span class="li"><svg width="30" height="10"><line x1="1" y1="5" x2="29" y2="5" stroke="#1677ff" stroke-width="2.2" stroke-dasharray="10,4"/></svg>键关联 query（长虚线）</span>
     <span class="li"><svg width="30" height="10"><line x1="1" y1="5" x2="29" y2="5" stroke="#fa8c16" stroke-width="1.6" stroke-dasharray="6,3"/></svg>同源写（虚线）</span>
     <span class="li"><svg width="30" height="10"><line x1="1" y1="5" x2="29" y2="5" stroke="#b0b0b0" stroke-width="1" stroke-dasharray="2,3"/></svg>间接读（点线）</span>
     <span class="li" style="color:#999">颜色区分不同关系</span>
@@ -82,7 +84,7 @@ const COL_GAP2 = 320, ROW_GAP2 = 130;
 
 let DATA = null;   // /api/er 数据缓存（切换画法不重新拉取）
 let MODE = 'tiled'; // tiled 平铺 / nested 嵌套
-let SHOW = { query: true, write: false, read: false }; // 关系显示开关（默认只画高置信键关联）
+let SHOW = { fk: true, query: false, write: false, read: false }; // Q218：默认只画 fk（值流验证的真实键关联）；query 噪声需手动展开
 let SHOW_ALL_LINES = false; // 全图画线开关（Q204：直接画全部关系，无需双击展开）
 let SELECTED = new Set(); // 双击展开的表集合（空=不画线；展开后只显示相关表与其关系）
 // 每条线独立配色（循环调色板；线型仍表达类型：实线=键关联/虚线=同源写/点线=间接读）
@@ -185,7 +187,7 @@ function visibleRels() {
 function bindRelFilter() {
   const saved = (() => { try { return JSON.parse(localStorage.getItem('codeintel.erShow')); } catch (e) { return null; } })();
   if (saved) SHOW = Object.assign(SHOW, saved);
-  ['query', 'write', 'read'].forEach(t => {
+  ['fk', 'query', 'write', 'read'].forEach(t => {
     const cb = document.getElementById('f-' + t);
     cb.checked = SHOW[t] !== false;
     cb.addEventListener('change', () => {
@@ -592,11 +594,13 @@ function styleColor(type) {
   return type === 'query' ? '#1677ff' : type === 'write' ? '#fa8c16' : '#b0b0b0';
 }
 function edgeStyle(type, color) {
-  return type === 'query'
-    ? `stroke:${color};stroke-width:2.2`
-    : type === 'write'
-      ? `stroke:${color};stroke-width:1.6;stroke-dasharray:6,3`
-      : `stroke:${color};stroke-width:1;stroke-dasharray:2,3`;
+  return type === 'fk'
+    ? `stroke:${color};stroke-width:2.8`
+    : type === 'query'
+      ? `stroke:${color};stroke-width:2.2;stroke-dasharray:10,4`
+      : type === 'write'
+        ? `stroke:${color};stroke-width:1.6;stroke-dasharray:6,3`
+        : `stroke:${color};stroke-width:1;stroke-dasharray:2,3`;
 }
 function edgeLabel(x, y, r, color) {
   const sep = r.bi ? ' ↔ ' : ' → ';

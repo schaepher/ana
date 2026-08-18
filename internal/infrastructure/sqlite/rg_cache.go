@@ -13,7 +13,7 @@ import (
 // 读取期行为））——并入缓存键，分析逻辑变更后
 // 旧缓存自动失效，无需手动 clean/reindex。**每次修改 relations 推断
 // 逻辑（rg_*.go / relationsFor*）必须递增此版本**，否则旧缓存残留。
-const relationsAlgoVersion = "q208"
+const relationsAlgoVersion = "q209" // Q218：fk 类型（值流验证）
 
 // cacheKey 缓存键 = build_id + 分析逻辑版本（build_id 变化或逻辑版本
 // 变化都失效）。

@@ -60,9 +60,9 @@ func TestGetUncalledFunctions(t *testing.T) {
 			},
 		},
 		&domain.CodeEntity{
-			ID:   "symbol:go:example.com/m:var.G",
-			Kind: domain.KindSSAValue,
-			Name: "G",
+			ID:         "symbol:go:example.com/m:var.G",
+			Kind:       domain.KindSSAValue,
+			Name:       "G",
 			Properties: map[string]any{"origin_kind": "global"},
 		})
 	save(t, r, nodes, edges)

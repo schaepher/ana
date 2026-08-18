@@ -142,22 +142,22 @@ func TestRelationSQLFilterFKNoiseQueryExempt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sql: %v", err)
 	}
-	// attr.id → attr_item.attr_id 是 query 键关联——hasFK（name 起点）
-	// 时 id 起点过滤豁免；SQL 路径内联版缺豁免会丢弃
-	var fullQuery, sqlQuery bool
+	// attr.id → attr_item.attr_id 是键关联（Q218 值流验证 → fk）——
+	// hasFK（name 起点）时 id 起点过滤豁免；SQL 路径内联版缺豁免会丢弃
+	var fullFK, sqlFK bool
 	for _, rel := range full {
-		if rel.FromCol == "id" && rel.ToCol == "attr_id" && rel.Type == domain.RelationQuery {
-			fullQuery = true
+		if rel.FromCol == "id" && rel.ToCol == "attr_id" && rel.Type == domain.RelationFK {
+			fullFK = true
 		}
 	}
 	for _, rel := range sqlRels {
-		if rel.FromCol == "id" && rel.ToCol == "attr_id" && rel.Type == domain.RelationQuery {
-			sqlQuery = true
+		if rel.FromCol == "id" && rel.ToCol == "attr_id" && rel.Type == domain.RelationFK {
+			sqlFK = true
 		}
 	}
-	if !fullQuery || !sqlQuery {
-		t.Fatalf("id→attr_id query 应保留（豁免）：full query=%v sql query=%v（full=%+v sql=%+v）",
-			fullQuery, sqlQuery, full, sqlRels)
+	if !fullFK || !sqlFK {
+		t.Fatalf("id→attr_id fk 应保留（豁免）：full fk=%v sql fk=%v（full=%+v sql=%+v）",
+			fullFK, sqlFK, full, sqlRels)
 	}
 	if len(full) != len(sqlRels) {
 		t.Fatalf("两路径结果应一致：full=%d sql=%d（full=%+v sql=%+v）", len(full), len(sqlRels), full, sqlRels)

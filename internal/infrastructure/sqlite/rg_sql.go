@@ -36,8 +36,15 @@ func (r *Repo) relationsForSQL(table string) ([]*domain.TableRelation, error) {
 
 		visited := map[string]int{st.id: 0}
 		crossed := map[string]bool{} // 到达该节点的链是否经过跨函数边（Q199）
-		tainted := map[string][]string{st.id: {}} // Q212：节点值级 taint（起点列字段名集合）
-		queue := []bfsNode{{id: st.id}}
+		// Q212/Q218：节点值级 taint（起点列字段名集合）——起点 taint =
+		// 起点列名（与内存路径一致，Q212 同步时遗漏——起点空 taint 导致
+		// 整链 taint 空，fk 判定不一致）
+		stCol := st.name
+		if i := strings.Index(stCol, "."); i >= 0 {
+			stCol = stCol[i+1:]
+		}
+		tainted := map[string][]string{st.id: {stCol}}
+		queue := []bfsNode{{id: st.id, taint: []string{stCol}}}
 		for len(queue) > 0 {
 			curNode := queue[0]
 			cur := curNode.id
@@ -139,12 +146,17 @@ func (r *Repo) relationsForSQL(table string) ([]*domain.TableRelation, error) {
 					}
 					fs.Close()
 					for _, bid := range bridge {
-						queue = append(queue, bfsNode{id: bid, crossed: crossed[bid]})
+						// Q218：桥接延续 taint（与内存路径一致——Q212 同步时
+						// 遗漏，SQL 路径桥接 taint 空 → fk 判定不一致）
+						tainted[bid] = curNode.taint
+						queue = append(queue, bfsNode{id: bid, crossed: crossed[bid], taint: curNode.taint})
 					}
 				}
 			}
 			for _, id := range next {
-				queue = append(queue, bfsNode{id: id, crossed: crossed[id]})
+				// Q218：入队携带 taint（ns 循环已写入 tainted——此前遗漏，
+				// 出队时 curNode.taint 恒空 → 整链 taint 断，fk 判定失效）
+				queue = append(queue, bfsNode{id: id, crossed: crossed[id], taint: tainted[id]})
 			}
 		}
 
@@ -231,6 +243,12 @@ func (r *Repo) relationsForSQL(table string) ([]*domain.TableRelation, error) {
 					rtype = domain.RelationRead
 				}
 			}
+			// Q218：值级 taint 验证（同内存路径）——终点 taint 与终点列
+			// 呼应 → fk（真实键关联）；对象字段换名型噪声保持 query
+			if rtype == domain.RelationQuery && taintMatches(tainted[id], col) {
+				rtype = domain.RelationFK
+			}
+
 			if ex, ok := seen[key]; ok {
 
 				if relTypeRank(rtype) > relTypeRank(ex.Type) {

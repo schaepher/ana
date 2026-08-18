@@ -119,7 +119,10 @@ type TableColumn struct {
 
 // 表关联类型（关联终点虚拟节点的 access_kind 判定）：
 const (
-	RelationQuery = "query" // 终点是 WHERE 过滤列（filter）——A 的值作为 B 的查询条件（键关联，高置信）
+	RelationFK    = "fk"    // Q218：query 的子集——值级 taint 验证通过的真实键关联
+	// （链上对象字段读与起点列 lowercase 呼应，值确实从起点列流来）——
+	// ER 图默认连线类型；fk 默认不限跳（值流已验证）
+	RelationQuery = "query" // 终点是 WHERE 过滤列（filter）——A 的值作为 B 的查询条件（键关联，高置信；含对象字段换名型噪声）
 	RelationWrite = "write" // 终点是写入列——同源/间接写入（值相关，中置信）
 	RelationRead  = "read"  // 终点是读出列——间接扩散（低置信）
 )

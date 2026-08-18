@@ -9,7 +9,8 @@ import (
 // TestDedupRelationNoise：Q195/Q196 关系降噪——
 // ① write/read 按 from字段→to表 聚合（全列 INSERT 的列爆炸收敛为字段级）
 // ② 跳数上限：全部类型 > MaxRelationHops 丢弃（含 query 长链）；
-//    Query=0 时 query 长链保留（--include-long-query 查看）
+//
+//	Query=0 时 query 长链保留（--include-long-query 查看）
 func TestDedupRelationNoise(t *testing.T) {
 	rels := []*domain.TableRelation{
 		// query：10 跳长链默认被滤，Query=0 保留

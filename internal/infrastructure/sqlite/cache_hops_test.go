@@ -59,7 +59,8 @@ func TestRelationCacheHopsWiden(t *testing.T) {
 		t.Fatalf("save meta: %v", err)
 	}
 
-	// ① 首次窄参数（默认 4）：5 跳被滤
+	// ① 首次窄参数（默认 4）：5 跳链值流验证通过（id → a_id 呼应）→
+	// fk——fk 默认不限跳（Q218），默认即保留
 	rels, err := r.GetTableRelations("table_a", "")
 	if err != nil {
 		t.Fatal(err)
@@ -67,8 +68,8 @@ func TestRelationCacheHopsWiden(t *testing.T) {
 	for _, rel := range rels {
 		t.Logf("默认 4 跳 rel: %s.%s -> %s.%s hops=%d type=%s", rel.FromTable, rel.FromCol, rel.ToTable, rel.ToCol, rel.Hops, rel.Type)
 	}
-	if len(rels) != 0 {
-		t.Fatalf("默认 4 跳应滤 5 跳 query，got %d 条", len(rels))
+	if len(rels) != 1 || rels[0].Type != domain.RelationFK {
+		t.Fatalf("5 跳真实链应标 fk 且默认保留（fk 不限跳），got %d 条", len(rels))
 	}
 	// ② 放宽 q_hops=0：缓存命中后应能展示 5 跳长链
 	r.SetRelationHops(domain.RelationHops{Query: 0, Write: 4, Read: 4})

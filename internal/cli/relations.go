@@ -21,6 +21,8 @@ func relationsFilter(f *queryFlags) func([]*domain.TableRelation) []*domain.Tabl
 		}
 	}
 	if len(types) == 0 {
+		// Q218：默认输出 fk（值流验证的真实链）+ query + write
+		types[domain.RelationFK] = true
 		types[domain.RelationQuery] = true
 		types[domain.RelationWrite] = true
 	}
@@ -106,6 +108,9 @@ func queryRelations(acts *action.Actions, table, format string, opts outputOpts,
 	for _, r := range rels {
 		tag := ""
 		switch r.Type {
+		case domain.RelationFK:
+			tag = " [外键关联]"
+			q++
 		case domain.RelationQuery:
 			tag = " [查询关联]"
 			q++
@@ -173,6 +178,9 @@ func queryRelationsAll(acts *action.Actions, format string, opts outputOpts, f *
 		for _, r := range list {
 			tag := ""
 			switch r.Type {
+			case domain.RelationFK:
+				tag = " [外键关联]"
+				q++
 			case domain.RelationQuery:
 				tag = " [查询关联]"
 				q++

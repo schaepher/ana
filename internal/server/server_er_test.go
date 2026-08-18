@@ -108,8 +108,8 @@ func TestHandleER(t *testing.T) {
 	if found == nil {
 		t.Fatalf("relations 缺正向 query（table_a.id → table_b.a_id），got %v", rels)
 	}
-	if (*found)["type"] != "query" {
-		t.Errorf("正向关系 type = %v, want query", (*found)["type"])
+	if (*found)["type"] != "fk" {
+		t.Errorf("正向关系 type = %v, want fk", (*found)["type"])
 	}
 }
 
@@ -171,24 +171,24 @@ func TestHandleERHopsParam(t *testing.T) {
 		rels, _ := m["relations"].([]any)
 		return len(rels)
 	}
-	// 默认（4 跳）：5 跳 query 被滤
-	if n := relsOf("/api/er"); n != 0 {
-		t.Errorf("默认应滤 5 跳 query，got %d 条", n)
+	// 默认：5 跳链值流验证通过 → fk（Q218：fk 默认不限跳，直接保留）
+	if n := relsOf("/api/er"); n != 1 {
+		t.Errorf("默认应保留 5 跳 fk（fk 不限跳），got %d 条", n)
 	}
-	// q_hops=0（不限制）：5 跳 query 可见
+	// q_hops=0（不限制）：5 跳 fk 可见
 	if n := relsOf("/api/er?q_hops=0"); n != 1 {
-		t.Errorf("q_hops=0 应保留 5 跳 query，got %d 条", n)
+		t.Errorf("q_hops=0 应保留 5 跳 fk，got %d 条", n)
 	}
 	// q_hops=6：5 跳 ≤ 6 保留
 	if n := relsOf("/api/er?q_hops=6"); n != 1 {
-		t.Errorf("q_hops=6 应保留 5 跳 query，got %d 条", n)
+		t.Errorf("q_hops=6 应保留 5 跳 fk，got %d 条", n)
 	}
 	// 非法参数（负数/非数字）回退默认
-	if n := relsOf("/api/er?q_hops=-1"); n != 0 {
-		t.Errorf("负数参数应回退默认（滤 5 跳），got %d 条", n)
+	if n := relsOf("/api/er?q_hops=-1"); n != 1 {
+		t.Errorf("负数参数应回退默认（fk 保留），got %d 条", n)
 	}
-	if n := relsOf("/api/er?q_hops=abc"); n != 0 {
-		t.Errorf("非法参数应回退默认，got %d 条", n)
+	if n := relsOf("/api/er?q_hops=abc"); n != 1 {
+		t.Errorf("非法参数应回退默认（fk 保留），got %d 条", n)
 	}
 }
 

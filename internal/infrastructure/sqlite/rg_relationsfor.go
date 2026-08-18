@@ -34,12 +34,16 @@ func contains(list []string, s string) bool {
 	return false
 }
 
-// intersectTaint 两集合交集。
+// intersectTaint 两集合交集（Q218：lowercase 比较——Go 字段名 Id 与
+// 列名 id 是同一逻辑值，精确匹配永远为空，taint 链在真实链上断裂）。
 func intersectTaint(a, b []string) []string {
 	var out []string
 	for _, x := range a {
-		if contains(b, x) {
-			out = append(out, x)
+		for _, y := range b {
+			if strings.EqualFold(x, y) {
+				out = append(out, x)
+				break
+			}
 		}
 	}
 	return out
@@ -233,6 +237,13 @@ func (g *relationGraph) relationsFor(table string) []*domain.TableRelation {
 				if !strings.HasSuffix(lc, lf) && !strings.HasSuffix(lf, lc) {
 					rtype = domain.RelationRead
 				}
+			}
+			// Q218：值级 taint 验证——终点 taint（起点列字段名，经 lowercase
+			// 求交传播）与终点列呼应 → 真实键关联（fk）。对象字段换名型噪声
+			// （pay_order.id → t15.BuyerId：id 与 BuyerId 求交为空）终点
+			// taint 空 → 保持 query。fk 是 ER 图默认连线类型。
+			if rtype == domain.RelationQuery && taintMatches(tainted[id], col) {
+				rtype = domain.RelationFK
 			}
 			key := st.name + "|" + otherTable + "|" + col
 			if ex, ok := seen[key]; ok {
