@@ -193,6 +193,10 @@ function placeTables(order, perRow, hOf, tw, colGap, rowGap) {
       const cx = 20 + c * (tw + colGap);
       return c < perRow - 1 ? cx + tw + colGap / 2 : cx - colGap / 2;
     },
+    colGapLeftX: c => {
+      const cx = 20 + c * (tw + colGap);
+      return c > 0 ? cx - colGap / 2 : cx + tw + colGap / 2;
+    },
     rowGapY: r => rowsTop[r] + rowsMaxH[r] + rowGap / 2,
   };
 }
@@ -228,7 +232,10 @@ function orthPath(ex1, ay, ex2, by, rowA, colA, rowB, colB, L, n, outN, inN) {
       mx: cx, my: (ay + by) / 2 - 6,
     };
   }
-  const cx1 = L.colGapX(colA) + fan(outN) * 8, cx2 = L.colGapX(colB) + fan(inN) * 8;
+  // 通道与端点同侧：目标在右（colB>colA）→ from 右缘出/右间隙、to 左缘入/左间隙；
+  // 目标在左 → 对称。避免出线段/入线段横穿表框
+  const cx1 = (colB > colA ? L.colGapX(colA) : L.colGapLeftX(colA)) + fan(outN) * 8;
+  const cx2 = (colB > colA ? L.colGapLeftX(colB) : L.colGapX(colB)) + fan(inN) * 8;
   const gapY = L.rowGapY(Math.min(rowA, rowB)) + fan(outN) * 8;
   return {
     d: `M ${ex1} ${ay} L ${cx1} ${ay} L ${cx1} ${gapY} L ${cx2} ${gapY} L ${cx2} ${by} L ${ex2} ${by}`,
