@@ -13,6 +13,8 @@
   .mode-switch button { border: none; background: #fff; padding: 4px 12px; font-size: 12px; cursor: pointer; color: #666; }
   .mode-switch button + button { border-left: 1px solid #d9d9d9; }
   .mode-switch button.active { background: #2f54eb; color: #fff; }
+  .rel-filter { display: flex; gap: 12px; font-size: 12px; color: #555; align-items: center; }
+  .rel-filter label { display: flex; align-items: center; gap: 3px; cursor: pointer; }
   #svg-wrap { padding: 20px; overflow: auto; }
   svg { background: #fff; border: 1px solid #e8e8e8; display: block; }
   .tbl { fill: #fff; stroke: #c8c8c8; stroke-width: 1; }
@@ -43,6 +45,11 @@
     <button id="mode-tiled" class="active" title="表卡片平铺，字段行对齐连线">平铺画法</button>
     <button id="mode-nested" title="表外框内嵌字段矩形，字段矩形间连线">嵌套画法</button>
   </div>
+  <div class="rel-filter" title="关系显示开关（大规模表默认只画高置信键关联）">
+    <label><input type="checkbox" id="f-query" checked>键关联</label>
+    <label><input type="checkbox" id="f-write">同源写</label>
+    <label><input type="checkbox" id="f-read">间接读</label>
+  </div>
   <div class="legend">
     <span class="li"><svg width="30" height="10"><line x1="1" y1="5" x2="29" y2="5" stroke="#1677ff" stroke-width="2.2"/></svg>键关联（高置信）</span>
     <span class="li"><svg width="30" height="10"><line x1="1" y1="5" x2="29" y2="5" stroke="#fa8c16" stroke-width="1.6" stroke-dasharray="6,3"/></svg>同源写（中置信）</span>
@@ -60,15 +67,39 @@ const COL_GAP2 = 320, ROW_GAP2 = 130;
 
 let DATA = null;   // /api/er 数据缓存（切换画法不重新拉取）
 let MODE = 'tiled'; // tiled 平铺 / nested 嵌套
+let SHOW = { query: true, write: false, read: false }; // 关系显示开关（默认只画高置信键关联）
 
 async function load() {
   const res = await fetch('/api/er');
   DATA = await res.json();
-  const tables = DATA.tables || [], rels = DATA.relations || [];
-  const q = rels.filter(r => r.type === 'query').length;
-  document.getElementById('info').textContent =
-    tables.length + ' 表 · ' + rels.length + ' 条关联（键 ' + q + ' / 写 ' + (rels.length - q - rels.filter(r => r.type === 'read').length) + ' / 读 ' + rels.filter(r => r.type === 'read').length + '）';
   render();
+}
+
+// 按显示开关过滤关系（大规模表同源写/间接读成千上万，默认只画键关联）
+function visibleRels() {
+  const rels = (DATA.relations || []);
+  const out = rels.filter(r => SHOW[r.type] !== false);
+  const q = out.filter(r => r.type === 'query').length;
+  document.getElementById('info').textContent =
+    (DATA.tables || []).length + ' 表 · ' + out.length + ' 条关联（键 ' + q +
+    ' / 写 ' + out.filter(r => r.type === 'write').length +
+    ' / 读 ' + out.filter(r => r.type === 'read').length + '）';
+  return out;
+}
+
+// 关系类型开关（localStorage 持久化）
+function bindRelFilter() {
+  const saved = (() => { try { return JSON.parse(localStorage.getItem('codeintel.erShow')); } catch (e) { return null; } })();
+  if (saved) SHOW = Object.assign(SHOW, saved);
+  ['query', 'write', 'read'].forEach(t => {
+    const cb = document.getElementById('f-' + t);
+    cb.checked = SHOW[t] !== false;
+    cb.addEventListener('change', () => {
+      SHOW[t] = cb.checked;
+      localStorage.setItem('codeintel.erShow', JSON.stringify(SHOW));
+      render();
+    });
+  });
 }
 
 // 关系优先布局（两种画法共用）：BFS 连通分量 + 中心对称排列
@@ -137,13 +168,14 @@ function placeTables(order, perRow, hOf) {
 function render() {
   document.getElementById('svg-wrap').innerHTML = '';
   if (!DATA) return;
-  if (MODE === 'nested') renderNested(DATA);
-  else renderTiled(DATA);
+  const rels = visibleRels();
+  if (MODE === 'nested') renderNested(DATA, rels);
+  else renderTiled(DATA, rels);
 }
 
 // ---- 平铺画法：表卡片 + 字段行对齐的 水平/S 型/斜线折线 ----
-function renderTiled(data) {
-  const tables = data.tables || [], rels = data.relations || [];
+function renderTiled(data, rels) {
+  const tables = data.tables || [];
   const { order, perRow } = buildOrder(tables, rels);
   const tOf = name => tables.find(t => t.name === name);
   const cardH = t => HEAD_H + t.columns.length * ROW_H + PAD * 2;
@@ -211,8 +243,8 @@ function renderTiled(data) {
 }
 
 // ---- 嵌套画法：表外框内嵌字段矩形，字段矩形之间直线连线 ----
-function renderNested(data) {
-  const tables = data.tables || [], rels = data.relations || [];
+function renderNested(data, rels) {
+  const tables = data.tables || [];
   const { order, perRow } = buildOrder(tables, rels);
   const tOf = name => tables.find(t => t.name === name);
   const tableH = t => TH_HEAD + t.columns.length * ROW_H2 + PAD2;
@@ -350,6 +382,7 @@ function bindModeSwitch() {
     render();
   }
 }
+bindRelFilter();
 bindModeSwitch();
 load();
 </script>
