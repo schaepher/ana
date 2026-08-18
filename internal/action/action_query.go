@@ -65,12 +65,12 @@ func (a *Actions) RelationsAll(memoryMode string) ([]*domain.TableRelation, erro
 	return a.repo.GetAllTableRelations(memoryMode)
 }
 
-// IncludeLongQuery 开启 query 长链展示（--include-long-query，Q196）：
-// 透传给 repo 的 relations 降噪——默认 query 同样受 MaxRelationHops 限制。
-func (a *Actions) IncludeLongQuery(v bool) {
-	type setter interface{ SetIncludeLongQuery(bool) }
+// SetRelationHops 配置三类关系的跳数上限（--query-max-hops 等，Q197）：
+// 0 = 不限制（--include-long-query 即 query 上限 0）；透传 repo。
+func (a *Actions) SetRelationHops(h domain.RelationHops) {
+	type setter interface{ SetRelationHops(domain.RelationHops) }
 	if s, ok := a.repo.(setter); ok {
-		s.SetIncludeLongQuery(v)
+		s.SetRelationHops(h)
 	}
 }
 

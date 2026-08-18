@@ -9,10 +9,10 @@ import (
 // TestDedupRelationNoise：Q195/Q196 关系降噪——
 // ① write/read 按 from字段→to表 聚合（全列 INSERT 的列爆炸收敛为字段级）
 // ② 跳数上限：全部类型 > MaxRelationHops 丢弃（含 query 长链）；
-//    includeLongQuery=true 时 query 长链保留（--include-long-query 查看）
+//    Query=0 时 query 长链保留（--include-long-query 查看）
 func TestDedupRelationNoise(t *testing.T) {
 	rels := []*domain.TableRelation{
-		// query：10 跳长链默认被滤，includeLongQuery=true 保留
+		// query：10 跳长链默认被滤，Query=0 保留
 		{FromTable: "a", FromCol: "id", ToTable: "b", ToCol: "a_id", Hops: 10, Type: domain.RelationQuery},
 		// query：4 跳内默认保留
 		{FromTable: "a", FromCol: "uid", ToTable: "b", ToCol: "b_uid", Hops: 3, Type: domain.RelationQuery},
@@ -26,8 +26,8 @@ func TestDedupRelationNoise(t *testing.T) {
 		// 不同 from 字段 → 同 to 表：不聚合（字段级精度保留）
 		{FromTable: "a", FromCol: "age", ToTable: "b", ToCol: "p3", Hops: 3, Type: domain.RelationWrite},
 	}
-	// 默认：query 长链也滤
-	out := dedupRelationNoise(rels, false)
+	// 默认（全部 4 跳）：query 长链也滤
+	out := dedupRelationNoise(rels, DefaultRelationHops)
 	if len(out) != 3 {
 		t.Fatalf("out = %d, want 3（4 跳内 query + a.name→b 聚合 + a.age→b）: %+v", len(out), out)
 	}
@@ -56,8 +56,8 @@ func TestDedupRelationNoise(t *testing.T) {
 	if r := got["age|p3"]; r == nil {
 		t.Errorf("不同 from 字段不聚合，a.age→b.p3 应保留")
 	}
-	// --include-long-query：query 长链保留
-	out2 := dedupRelationNoise(rels, true)
+	// --include-long-query（Query=0）：query 长链保留
+	out2 := dedupRelationNoise(rels, domain.RelationHops{Query: 0, Write: 4, Read: 4})
 	got2 := map[string]*domain.TableRelation{}
 	for _, r := range out2 {
 		got2[r.FromCol+"|"+r.ToCol] = r
@@ -74,8 +74,41 @@ func TestDedupRelationNoiseOrder(t *testing.T) {
 		{FromTable: "a", FromCol: "x", ToTable: "b", ToCol: "p1", Hops: 4, Type: domain.RelationWrite},
 		{FromTable: "a", FromCol: "x", ToTable: "b", ToCol: "p2", Hops: 2, Type: domain.RelationWrite},
 	}
-	out := dedupRelationNoise(rels, false)
+	out := dedupRelationNoise(rels, DefaultRelationHops)
 	if len(out) != 1 || out[0].ToCol != "p2" || out[0].Hops != 2 {
 		t.Errorf("同 key 后到者 hops 更小应替换值，got %+v", out)
+	}
+}
+
+// TestDedupCustomHops：Q197 三类跳数可分别配置——query 10 跳放行
+// （上限 10）、write 仅 2 跳内、read 3 跳内。
+func TestDedupCustomHops(t *testing.T) {
+	rels := []*domain.TableRelation{
+		{FromTable: "a", FromCol: "id", ToTable: "b", ToCol: "a_id", Hops: 10, Type: domain.RelationQuery},
+		{FromTable: "a", FromCol: "id", ToTable: "c", ToCol: "c_id", Hops: 3, Type: domain.RelationQuery},
+		{FromTable: "a", FromCol: "name", ToTable: "b", ToCol: "p1", Hops: 2, Type: domain.RelationWrite},
+		{FromTable: "a", FromCol: "name", ToTable: "c", ToCol: "p2", Hops: 3, Type: domain.RelationWrite},
+		{FromTable: "a", FromCol: "age", ToTable: "b", ToCol: "r1", Hops: 3, Type: domain.RelationRead},
+		{FromTable: "a", FromCol: "age", ToTable: "c", ToCol: "r2", Hops: 4, Type: domain.RelationRead},
+	}
+	out := dedupRelationNoise(rels, domain.RelationHops{Query: 10, Write: 2, Read: 3})
+	got := map[string]bool{}
+	for _, r := range out {
+		got[r.ToCol] = true
+	}
+	if !got["a_id"] || !got["c_id"] {
+		t.Errorf("query 上限 10：a_id(10跳)/c_id(3跳) 都应保留，got %v", got)
+	}
+	if !got["p1"] {
+		t.Errorf("write 上限 2：p1(2跳) 应保留")
+	}
+	if got["p2"] {
+		t.Errorf("write 上限 2：p2(3跳) 应被滤")
+	}
+	if !got["r1"] {
+		t.Errorf("read 上限 3：r1(3跳) 应保留")
+	}
+	if got["r2"] {
+		t.Errorf("read 上限 3：r2(4跳) 应被滤")
 	}
 }

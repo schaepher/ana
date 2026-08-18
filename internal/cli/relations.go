@@ -9,6 +9,7 @@ import (
 
 	"github.com/schaepher/codeintel/internal/action"
 	"github.com/schaepher/codeintel/internal/domain"
+	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
 )
 
 // relationsFilter P0④ 输出过滤：--type/--max-hops/--max-results。
@@ -42,13 +43,33 @@ func relationsFilter(f *queryFlags) func([]*domain.TableRelation) []*domain.Tabl
 	}
 }
 
+// relationHopsFromFlags 组装三类跳数上限（Q197）：默认 4；
+// 显式传 0 = 不限制；--include-long-query 等价 --query-max-hops 0。
+func relationHopsFromFlags(f *queryFlags) domain.RelationHops {
+	h := sqlite.DefaultRelationHops
+	// -1 = 未传（保持默认）；>=0 = 显式设置（0 = 不限制）
+	if f.queryMaxHops >= 0 {
+		h.Query = f.queryMaxHops
+	}
+	if f.writeMaxHops >= 0 {
+		h.Write = f.writeMaxHops
+	}
+	if f.readMaxHops >= 0 {
+		h.Read = f.readMaxHops
+	}
+	if f.includeLongQuery {
+		h.Query = 0
+	}
+	return h
+}
+
 // queryRelations 实现 `codeintel query relations <表名> [--mermaid]`：
 // 表间关联分析——本表列的值沿数据流链流入其他表列（A.x 读出 → B.y
 // 过滤/写入，代码层推断，无外键依赖）。--mermaid 输出列级 mermaid 图；
 // --type/--max-hops/--max-results 过滤输出；--memory full|sql 选择实现
 // 路径（默认 auto 按规模）。
 func queryRelations(acts *action.Actions, table, format string, opts outputOpts, f *queryFlags) int {
-	acts.IncludeLongQuery(f.includeLongQuery)
+	acts.SetRelationHops(relationHopsFromFlags(f))
 	rels, err := acts.Relations(table, f.memory)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -103,7 +124,7 @@ func queryRelations(acts *action.Actions, table, format string, opts outputOpts,
 // 一次遍历全部表返回所有表对关联（合并去重），AGENT 单次调用拿全库。
 // --json 输出数组（与单表同构）；文本模式按表分组展示。
 func queryRelationsAll(acts *action.Actions, format string, opts outputOpts, f *queryFlags) int {
-	acts.IncludeLongQuery(f.includeLongQuery)
+	acts.SetRelationHops(relationHopsFromFlags(f))
 	rels, err := acts.RelationsAll(f.memory)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

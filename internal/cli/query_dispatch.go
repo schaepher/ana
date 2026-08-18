@@ -134,6 +134,8 @@ func parseQueryFlags(args []string) queryFlags {
 	logger.Debug("enter parseQueryFlags")
 	defer logger.Debug("exit parseQueryFlags")
 	f := queryFlags{repoPath: "."}
+	// Q197 跳数上限：-1 = 未传（用默认 4）；显式 0 = 该类型不限制
+	f.queryMaxHops, f.writeMaxHops, f.readMaxHops = -1, -1, -1
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
@@ -197,6 +199,21 @@ func parseQueryFlags(args []string) queryFlags {
 			f.maxResults, _ = strconv.Atoi(strings.TrimPrefix(a, "--max-results="))
 		case a == "--include-long-query":
 			f.includeLongQuery = true
+		case a == "--query-max-hops" && i+1 < len(args):
+			f.queryMaxHops, _ = strconv.Atoi(args[i+1])
+			i++
+		case strings.HasPrefix(a, "--query-max-hops="):
+			f.queryMaxHops, _ = strconv.Atoi(strings.TrimPrefix(a, "--query-max-hops="))
+		case a == "--write-max-hops" && i+1 < len(args):
+			f.writeMaxHops, _ = strconv.Atoi(args[i+1])
+			i++
+		case strings.HasPrefix(a, "--write-max-hops="):
+			f.writeMaxHops, _ = strconv.Atoi(strings.TrimPrefix(a, "--write-max-hops="))
+		case a == "--read-max-hops" && i+1 < len(args):
+			f.readMaxHops, _ = strconv.Atoi(args[i+1])
+			i++
+		case strings.HasPrefix(a, "--read-max-hops="):
+			f.readMaxHops, _ = strconv.Atoi(strings.TrimPrefix(a, "--read-max-hops="))
 		case a == "--memory" && i+1 < len(args):
 			f.memory = args[i+1]
 			i++

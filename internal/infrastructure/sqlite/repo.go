@@ -15,13 +15,13 @@ var _ domain.BuildMetadataRepository = (*Repo)(nil)
 // Repo 实现 CodeRepository / BuildMetadataRepository。
 type Repo struct {
 	*DB
-	includeLongQuery bool // Q196：--include-long-query 时 query 长链（>4 跳）保留
+	relationHops domain.RelationHops // Q197：三类关系跳数上限（0=不限制），默认 4
 }
 
-// SetIncludeLongQuery 开启 query 长链展示（--include-long-query）：
-// 默认 query 与 write/read 同样受 MaxRelationHops 限制。
-func (r *Repo) SetIncludeLongQuery(v bool) {
-	r.includeLongQuery = v
+// SetRelationHops 配置三类关系的跳数上限（--query-max-hops 等，Q197）：
+// 传入 0 的类型不限制；未调用时默认 DefaultRelationHops（全部 4 跳）。
+func (r *Repo) SetRelationHops(h domain.RelationHops) {
+	r.relationHops = h
 }
 
 // NewRepo 基于已打开的数据库创建仓储。
@@ -29,7 +29,7 @@ func NewRepo(db *DB) *Repo {
 	logger := zap.L()
 	logger.Debug("enter NewRepo")
 	defer logger.Debug("exit NewRepo")
-	return &Repo{DB: db}
+	return &Repo{DB: db, relationHops: DefaultRelationHops}
 }
 
 const insertNodeSQL = `
