@@ -56,9 +56,10 @@
     <label><input type="checkbox" id="f-read">间接读</label>
   </div>
   <div class="legend">
-    <span class="li"><svg width="30" height="10"><line x1="1" y1="5" x2="29" y2="5" stroke="#1677ff" stroke-width="2.2"/></svg>键关联（高置信）</span>
-    <span class="li"><svg width="30" height="10"><line x1="1" y1="5" x2="29" y2="5" stroke="#fa8c16" stroke-width="1.6" stroke-dasharray="6,3"/></svg>同源写（中置信）</span>
-    <span class="li"><svg width="30" height="10"><line x1="1" y1="5" x2="29" y2="5" stroke="#b0b0b0" stroke-width="1" stroke-dasharray="2,3"/></svg>间接读（低置信）</span>
+    <span class="li"><svg width="30" height="10"><line x1="1" y1="5" x2="29" y2="5" stroke="#1677ff" stroke-width="2.2"/></svg>键关联（实线）</span>
+    <span class="li"><svg width="30" height="10"><line x1="1" y1="5" x2="29" y2="5" stroke="#fa8c16" stroke-width="1.6" stroke-dasharray="6,3"/></svg>同源写（虚线）</span>
+    <span class="li"><svg width="30" height="10"><line x1="1" y1="5" x2="29" y2="5" stroke="#b0b0b0" stroke-width="1" stroke-dasharray="2,3"/></svg>间接读（点线）</span>
+    <span class="li" style="color:#999">颜色区分不同关系</span>
   </div>
 </header>
 <div id="svg-wrap"></div>
@@ -74,6 +75,9 @@ let DATA = null;   // /api/er 数据缓存（切换画法不重新拉取）
 let MODE = 'tiled'; // tiled 平铺 / nested 嵌套
 let SHOW = { query: true, write: false, read: false }; // 关系显示开关（默认只画高置信键关联）
 let SELECTED = new Set(); // 双击展开的表集合（空=不画线；展开后只显示相关表与其关系）
+// 每条线独立配色（循环调色板；线型仍表达类型：实线=键关联/虚线=同源写/点线=间接读）
+const PALETTE = ['#1677ff', '#fa8c16', '#52c41a', '#f5222d', '#722ed1', '#13c2c2',
+  '#eb2f96', '#a0d911', '#2f54eb', '#faad14', '#08979c', '#d4380d'];
 
 async function load() {
   const res = await fetch('/api/er');
@@ -279,6 +283,7 @@ function renderTiled(data, rels, draw) {
   });
   let svg = svgHead(L.Wpx, L.Hpx);
   const lineCounts = new Map(), outCounts = new Map(), inCounts = new Map();
+  let lineIdx = 0;
   for (const r of draw) {
     const pa = pos.get(r.from_table), pb = pos.get(r.to_table);
     if (!pa || !pb) continue;
@@ -304,11 +309,13 @@ function renderTiled(data, rels, draw) {
     const inKey = r.to_table + '>' + r.to_col;
     const inN = inCounts.get(inKey) || 0;
     inCounts.set(inKey, inN + 1);
+    const lineColor = PALETTE[lineIdx % PALETTE.length];
+    lineIdx++;
     const p = orthPath(ex1, ay, ex2, by,
       L.rowOf.get(r.from_table), L.colOf.get(r.from_table),
       L.rowOf.get(r.to_table), L.colOf.get(r.to_table), L, n, outN, inN);
-    svg += `<path d="${p.d}" fill="none" style="${edgeStyle(r.type)}"/>`;
-    svg += edgeLabel(p.mx, p.my, r, styleColor(r.type));
+    svg += `<path d="${p.d}" fill="none" style="${edgeStyle(r.type, lineColor)}"/>`;
+    svg += edgeLabel(p.mx, p.my, r, lineColor);
   }
   // 卡片
   for (const t of tables) {
@@ -366,6 +373,7 @@ function renderNested(data, rels, draw) {
   }
   // 连线：字段矩形边缘 → 字段矩形边缘（正交绕障折线 + 锚点圆点，最上层）
   const lineCounts = new Map(), outCounts = new Map(), inCounts = new Map();
+  let lineIdx = 0;
   for (const r of draw) {
     const pa = pos.get(r.from_table), pb = pos.get(r.to_table);
     if (!pa || !pb) continue;
@@ -389,11 +397,12 @@ function renderNested(data, rels, draw) {
     const inKey = r.to_table + '>' + r.to_col;
     const inN = inCounts.get(inKey) || 0;
     inCounts.set(inKey, inN + 1);
-    const color = styleColor(r.type);
+    const color = PALETTE[lineIdx % PALETTE.length];
+    lineIdx++;
     const p = orthPath(ex1, ay, ex2, by,
       L.rowOf.get(r.from_table), L.colOf.get(r.from_table),
       L.rowOf.get(r.to_table), L.colOf.get(r.to_table), L, n, outN, inN);
-    svg += `<path d="${p.d}" fill="none" style="${edgeStyle(r.type)}"/>`;
+    svg += `<path d="${p.d}" fill="none" style="${edgeStyle(r.type, color)}"/>`;
     // 锚点圆点（线端，精确落在字段矩形边缘）
     svg += `<circle class="nest-anchor" cx="${ex1}" cy="${ay}" r="3" fill="${color}"/>`;
     svg += `<circle class="nest-anchor" cx="${ex2}" cy="${by}" r="3" fill="${color}"/>`;
@@ -410,8 +419,7 @@ function svgHead(w, h) {
 function styleColor(type) {
   return type === 'query' ? '#1677ff' : type === 'write' ? '#fa8c16' : '#b0b0b0';
 }
-function edgeStyle(type) {
-  const color = styleColor(type);
+function edgeStyle(type, color) {
   return type === 'query'
     ? `stroke:${color};stroke-width:2.2`
     : type === 'write'
