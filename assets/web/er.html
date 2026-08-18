@@ -96,12 +96,16 @@ function render(tables, rels) {
     if (ia === undefined || ib === undefined) continue;
     const ay = pa.y + HEAD_H + ia * ROW_H + ROW_H / 2;
     const by = pb.y + HEAD_H + ib * ROW_H + ROW_H / 2;
-    // 边缘锚点：目标在右 → from 右缘出 / to 左缘入；目标在左 → 对称；
-    // 同列（上下行）→ 垂直中线连接
-    let ax, bx;
-    if (pa.x < pb.x) { ax = pa.x + pa.w; bx = pb.x; }
-    else if (pa.x > pb.x) { ax = pa.x; bx = pb.x + pb.w; }
-    else { ax = pa.x + pa.w / 2; bx = ax; }
+    // 折线：字段行边缘水平出线（OUT 长，明确起点行）→ 斜线 → 水平进目标
+    // 字段行。边缘锚点：目标在右 → from 右缘出 / to 左缘入；目标在左 →
+    // 对称；同列（上下行）→ 同侧绕出（都在中线右/左 OUT），避免垂直贴边
+    // 造成"表指向表"错觉。
+    const OUT = 18;
+    let ex1, ex2, dir;
+    if (pa.x < pb.x) { ex1 = pa.x + pa.w; ex2 = pb.x; dir = 1; }
+    else if (pa.x > pb.x) { ex1 = pa.x; ex2 = pb.x + pb.w; dir = -1; }
+    else { ex1 = pa.x + pa.w / 2; ex2 = ex1; dir = 1; }
+    const hx1 = ex1 + dir * OUT, hx2 = ex2 - dir * OUT;
     const color = r.type === 'query' ? '#1677ff' : r.type === 'write' ? '#fa8c16' : '#b0b0b0';
     const style = r.type === 'query'
       ? `stroke:${color};stroke-width:2.2;marker-end:url(#arr)`
@@ -114,9 +118,9 @@ function render(tables, rels) {
     lineCounts.set(pairKey, n + 1);
     let dx = 0;
     if (n > 0) dx = (n % 2 === 1 ? -1 : 1) * Math.ceil(n / 2) * 12;
-    svg += `<line x1="${ax + dx}" y1="${ay}" x2="${bx + dx}" y2="${by}" style="${style}"/>`;
-    // 标签：线中点上方（from_col → to_col）
-    const mx = (ax + bx) / 2 + dx, my = (ay + by) / 2 - 6;
+    svg += `<path d="M ${ex1 + dx} ${ay} L ${hx1 + dx} ${ay} L ${hx2 + dx} ${by} L ${ex2 + dx} ${by}" fill="none" style="${style}"/>`;
+    // 标签：斜段中点上方（from_col → to_col）
+    const mx = (hx1 + hx2) / 2 + dx, my = (ay + by) / 2 - 6;
     svg += `<text x="${mx}" y="${my}" class="edge-label" text-anchor="middle">
       <tspan fill="${color}" font-weight="600">${r.from_col}</tspan> → ${r.to_col}
     </text>`;
