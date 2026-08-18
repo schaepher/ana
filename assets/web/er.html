@@ -242,9 +242,14 @@ function placeTables(order, perRow, hOf, tw, colGap, rowGap) {
 // 同行相邻表 → 直线/S 型（垂直段在同列间隙内）；其余 → 6 段绕行
 // （字段边缘水平出 → 列通道垂直 → 行通道水平 → 列通道垂直 → 水平入）。
 // 通道 x/y 位于表矩形之外，跨行跨列段落只经过间隙，绝不穿表。
-function orthPath(ex1, ay, ex2, by, rowA, colA, rowB, colB, L, n, outN, inN) {
-  n = n || 0; outN = outN || 0; inN = inN || 0;
+function orthPath(ex1, ay, ex2, by, rowA, colA, rowB, colB, L, n, outN, inN, lineIdx) {
+  n = n || 0; outN = outN || 0; inN = inN || 0; lineIdx = lineIdx || 0;
   const fan = k => (k % 2 === 1 ? -1 : 1) * Math.ceil(k / 2); // 分叉偏移量（左右交替）
+  // 端点微弯：同出端/同入端多条线（outN/inN > 0）的共享起点段/终点段
+  // 部分重叠（短段被长段覆盖、颜色丢失）——在端点处先垂直弯再水平走，
+  // 共享段 y 错开；端点仍精确落在字段矩形边缘（最后一段垂直回正）。
+  // 出端微弯 5 系列、入端回正 8 系列：同字段既入又出（双向）时不互撞
+  const off1 = fan(outN) * 5, off2 = fan(inN) * 8;
   if (rowA === rowB && Math.abs(colA - colB) === 1) {
     if (ay === by) {
       if (!n) {
@@ -257,27 +262,49 @@ function orthPath(ex1, ay, ex2, by, rowA, colA, rowB, colB, L, n, outN, inN) {
         mx: (ex1 + ex2) / 2, my: ay + off - 6,
       };
     }
-    // S 型：垂直段在同列间隙内，出线段长度按出端点计数递增（同表多线不重合）
+    // S 型：垂直段在同列间隙内，出线段长度按出端点计数递增
     const vx = ex1 + (colB > colA ? 1 : -1) * (18 + outN * 12);
-    return { d: `M ${ex1} ${ay} L ${vx} ${ay} L ${vx} ${by} L ${ex2} ${by}`, mx: vx, my: (ay + by) / 2 - 6 };
+    return {
+      d: segPath(ex1, ay, off1, vx, ay + off1, vx, by + off2, ex2, by + off2, ex2, by),
+      mx: vx, my: (ay + by) / 2 - 6,
+    };
   }
   if (rowA === rowB && colA === colB) {
-    // 同列跨行：同一列通道垂直直连（多线水平段错开）
-    const cx = L.colGapX(colA) + fan(outN) * 8;
+    // 同列跨行：同一列通道垂直直连（多线垂直段错开）。
+    // 偏移 = 出端计数 + 表对计数：同出端多条线（A→B、A→C）与双向线
+    // （A→B、B→A）都分叉——否则双向线垂直段完全重合、颜色被覆盖
+    const cx = L.colGapX(colA) + fan(outN + n) * 8;
     return {
-      d: `M ${ex1} ${ay} L ${cx} ${ay} L ${cx} ${by} L ${ex2} ${by}`,
+      d: segPath(ex1, ay, off1, cx, ay + off1, cx, by + off2, ex2, by + off2, ex2, by),
       mx: cx, my: (ay + by) / 2 - 6,
     };
   }
   // 通道与端点同侧：目标在右（colB>colA）→ from 右缘出/右间隙、to 左缘入/左间隙；
-  // 目标在左 → 对称。避免出线段/入线段横穿表框
-  const cx1 = (colB > colA ? L.colGapX(colA) : L.colGapLeftX(colA)) + fan(outN) * 8;
-  const cx2 = (colB > colA ? L.colGapLeftX(colB) : L.colGapX(colB)) + fan(inN) * 8;
-  const gapY = L.rowGapY(Math.min(rowA, rowB)) + fan(outN) * 8;
+  // 目标在左 → 对称。避免出线段/入线段横穿表框。
+  // 列通道偏移叠加表对计数 n：双向线（A→B、B→A）的主干段各自偏移，
+  // 否则在 gapY 水平段完全重合、颜色被后画线覆盖
+  const cx1 = (colB > colA ? L.colGapX(colA) : L.colGapLeftX(colA)) + fan(outN + n) * 8;
+  const cx2 = (colB > colA ? L.colGapLeftX(colB) : L.colGapX(colB)) + fan(inN + n) * 8;
+  // gapY 用全局线序号偏移：不同表对共享同一行通道时（垂直段/水平段
+  // 可能完全重合）按线唯一错开；fan 值对任意序号唯一，通道宽 90px 容纳
+  const gapY = L.rowGapY(Math.min(rowA, rowB)) + fan(lineIdx) * 8;
   return {
-    d: `M ${ex1} ${ay} L ${cx1} ${ay} L ${cx1} ${gapY} L ${cx2} ${gapY} L ${cx2} ${by} L ${ex2} ${by}`,
+    d: segPath(ex1, ay, off1, cx1, ay + off1, cx1, gapY, cx2, gapY, cx2, by + off2, ex2, by + off2, ex2, by),
     mx: (cx1 + cx2) / 2, my: gapY - 6,
   };
+}
+
+// segPath 按点序列拼路径，跳过零长段（off=0 时微弯段与起点/终点同点，
+// 冗余段不输出——避免同点 L 段被重合检查误报）
+function segPath(x1, y1, off1, ...rest) {
+  let d = `M ${x1} ${y1}`;
+  let px = x1, py = y1;
+  for (let i = 0; i + 1 < rest.length; i += 2) {
+    const x = rest[i], y = rest[i + 1];
+    if (x !== px || y !== py) d += ` L ${x} ${y}`;
+    px = x; py = y;
+  }
+  return d;
 }
 
 function render() {
@@ -361,7 +388,7 @@ function renderTiled(data, rels, draw) {
     lineIdx++;
     const p = orthPath(ex1, ay, ex2, by,
       L.rowOf.get(r.from_table), L.colOf.get(r.from_table),
-      L.rowOf.get(r.to_table), L.colOf.get(r.to_table), L, n, outN, inN);
+      L.rowOf.get(r.to_table), L.colOf.get(r.to_table), L, n, outN, inN, lineIdx);
     svg += `<path d="${p.d}" fill="none" style="${edgeStyle(r.type, lineColor)}"/>`;
     svg += edgeLabel(p.mx, p.my, r, lineColor);
   }
@@ -449,7 +476,7 @@ function renderNested(data, rels, draw) {
     lineIdx++;
     const p = orthPath(ex1, ay, ex2, by,
       L.rowOf.get(r.from_table), L.colOf.get(r.from_table),
-      L.rowOf.get(r.to_table), L.colOf.get(r.to_table), L, n, outN, inN);
+      L.rowOf.get(r.to_table), L.colOf.get(r.to_table), L, n, outN, inN, lineIdx);
     svg += `<path d="${p.d}" fill="none" style="${edgeStyle(r.type, color)}"/>`;
     // 锚点圆点（线端，精确落在字段矩形边缘）
     svg += `<circle class="nest-anchor" cx="${ex1}" cy="${ay}" r="3" fill="${color}"/>`;
