@@ -169,9 +169,10 @@ function visibleRels() {
   const rels = (DATA.relations || []);
   const out = rels.filter(r => SHOW[r.type] !== false);
   const q = out.filter(r => r.type === 'query').length;
-  let info = (DATA.tables || []).length + ' 表 · ' + out.length + ' 条关联（键 ' + q +
+  let info = (DATA.tables || []).length + ' 表 · ' + out.length + ' 条关联（fk ' +
+    out.filter(r => r.type === 'fk').length + ' / 键 ' + q +
     ' / 写 ' + out.filter(r => r.type === 'write').length +
-    ' / 读 ' + out.filter(r => r.type === 'read').length + '）';
+    ' / 读 ' + out.filter(r => r.type === 'read').length + '）'; // Q219：统计补 fk（默认线，缺统计误导）
   if (SHOW_ALL_LINES) {
     info += ' · 全图画线 ' + out.length + ' 条';
   } else if (SELECTED.size > 0) {
@@ -424,7 +425,7 @@ function mergeBidirectional(rels) {
     out.push(item);
   }
   return out;
-  function relRank(t) { return t === 'query' ? 2 : t === 'write' ? 1 : 0; }
+  function relRank(t) { return t === 'fk' ? 3 : t === 'query' ? 2 : t === 'write' ? 1 : 0; } // Q219：补 fk（与后端 relTypeRank 一致，防混合反向对降级）
 }
 
 // 双击表 → 展开/收起（多选：可同时展开多个表）

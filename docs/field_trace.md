@@ -507,7 +507,10 @@ SSA 语义与映射类决策全部保留：Q1（SSA_VALUE 统一建模）、Q2�
     包级缓存、XORM、relations 内存 BFS；Q178–Q193（§48–§49）——
     参数节点统一、展示名恢复、信息栏展示
   - **08-18**：Q195–Q210（§41–§47）——relations 降噪链、ER 图前端
-    （双画法/绕障/懒加载三级）、可观测性、缓存语义修正
+    （双画法/绕障/懒加载三级）、可观测性、缓存语义修正；Q211–Q218
+    （§50–§51）——orm.Mapping 表名映射、包级缓存失效、SQL 路径 taint
+    同步、e2e 自包含、fk 类型（值流验证）；Q219（§45）——ER 双向合并
+    relRank 补 fk
 
 ---
 
@@ -1945,6 +1948,18 @@ localStorage 恢复为 true 时初始化只加载表清单（Q209 skip_relations
 未触发 ensureFullRels（线必须手动点击开关才出现）。修复：绑定逻辑
 末尾补 `if (SHOW_ALL_LINES) ensureFullRels().then(render)`——恢复开启
 状态时自动全量加载。实测刷新后 linePaths 0 → 8。
+
+**Q219（2026-08-18）**：同字段反向对（A.x→B.y 与 B.y→A.x）合并为一条
+双向线（Q200 mergeBidirectional）——但合并取类型的 relRank 在 Q218
+引入 fk 后未更新：fk 得 0 分，混合反向对（一方向 fk、另一方向
+query/write，go2o 实测 1 对：mm_block_list.member_id ↔
+mm_extra_field.id，write+fk）合并结果降级为 query/write（细虚线），
+默认只画 fk 视图下样式错误。修复：relRank 补 fk=3（与后端 relTypeRank
+一致）；info 栏类型统计补 fk 计数（fk 为默认线，缺统计误导）。测试
+先行：e2e 新增 6 项断言（fk+query→fk / write+fk→fk / fk+fk /
+query+query 回归 / 非严格反向不合并 / info 栏 fk 计数），红→绿。
+go2o 实测：185 条关系合并后 140 条线（45 对反向对各合并为一条 bi
+线），混合对合并为 fk 双向线。
 
 ---
 

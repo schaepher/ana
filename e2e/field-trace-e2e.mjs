@@ -280,6 +280,60 @@ check('元素访问节点出现在 flows（map 常量 key 路径）',
   'elem=' + (elem ? elem.name : 'none'));
 }
 
+// 14. ER 图：同字段反向对合并为一条双向线（Q200 机制 + Q219 fk 类型修正）——
+//     严格反向同字段对（A.x→B.y 与 B.y→A.x）合并为一条（bi 标注 ↔）；
+//     混合对（一方向 fk、另一方向 query/write）合并后类型取最高
+//     （fk > query > write > read，与后端 relTypeRank 一致）——
+//     relRank 漏 fk（Q218 引入）会把混合对降级，默认只画 fk 视图下样式错误
+await page.goto(BASE + 'er.html', { waitUntil: 'networkidle' });
+await page.waitForTimeout(800);
+const mergeBi = await page.evaluate(() => {
+  const mk = (t, c, tt, tc, type) =>
+    ({ from_table: t, from_col: c, to_table: tt, to_col: tc, type, hops: 1 });
+  return {
+    fkQuery: mergeBidirectional([
+      mk('a', 'id', 'b', 'item_id', 'fk'),
+      mk('b', 'item_id', 'a', 'id', 'query'),
+    ]),
+    writeFk: mergeBidirectional([
+      mk('a', 'id', 'b', 'item_id', 'write'),
+      mk('b', 'item_id', 'a', 'id', 'fk'),
+    ]),
+    fkFk: mergeBidirectional([
+      mk('a', 'id', 'b', 'item_id', 'fk'),
+      mk('b', 'item_id', 'a', 'id', 'fk'),
+    ]),
+    queryQuery: mergeBidirectional([
+      mk('a', 'id', 'b', 'item_id', 'query'),
+      mk('b', 'item_id', 'a', 'id', 'query'),
+    ]),
+    notReverse: mergeBidirectional([
+      mk('a', 'id', 'b', 'item_id', 'fk'),
+      mk('b', 'item_id', 'a', 'name', 'fk'),
+    ]),
+  };
+});
+check('ER 同字段反向对合并为一条双向线（fk+query → fk 不降级）',
+  mergeBi.fkQuery.length === 1 && mergeBi.fkQuery[0].bi === true && mergeBi.fkQuery[0].type === 'fk',
+  JSON.stringify(mergeBi.fkQuery));
+check('ER 反向混合对类型取最高（write+fk → fk，不降级为 write）',
+  mergeBi.writeFk.length === 1 && mergeBi.writeFk[0].type === 'fk',
+  JSON.stringify(mergeBi.writeFk));
+check('ER fk+fk 反向对合并为一条双向 fk',
+  mergeBi.fkFk.length === 1 && mergeBi.fkFk[0].bi === true && mergeBi.fkFk[0].type === 'fk',
+  JSON.stringify(mergeBi.fkFk));
+check('ER query+query 反向对仍合并（Q200 回归）',
+  mergeBi.queryQuery.length === 1 && mergeBi.queryQuery[0].bi === true && mergeBi.queryQuery[0].type === 'query',
+  JSON.stringify(mergeBi.queryQuery));
+check('ER 非严格反向对不合并（两条独立线）',
+  mergeBi.notReverse.length === 2 && mergeBi.notReverse.every((r) => !r.bi),
+  JSON.stringify(mergeBi.notReverse));
+// info 栏类型统计含 fk（Q219：fk 为默认线，缺统计误导）
+const erInfo = await page.evaluate(() => document.getElementById('info').textContent);
+check('ER info 栏统计含 fk 计数',
+  /条关联（fk \d+/.test(erInfo),
+  'info=' + erInfo.slice(0, 80));
+
 console.log('\n===== 字段追溯 e2e: ' + passed + ' passed, ' + failed + ' failed =====');
 await browser.close();
 process.exit(failed ? 1 : 0);
