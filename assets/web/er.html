@@ -425,7 +425,7 @@ function renderTiled(data, rels, draw) {
     svg += `<rect class="tbl${sel}" data-tbl="${t.name}" x="${p.x}" y="${p.y}" width="${W}" height="${h}" rx="6"/>`;
     svg += `<rect class="tbl-head${sel}" data-tbl="${t.name}" x="${p.x}" y="${p.y}" width="${W}" height="${HEAD_H}" rx="6"/>`;
     svg += `<rect x="${p.x}" y="${p.y + HEAD_H - 6}" width="${W}" height="6" fill="#2f54eb"/>`;
-    svg += `<text class="tbl-title" x="${p.x + 12}" y="${p.y + 21}">${t.name}</text>`;
+    svg += `<text class="tbl-title" data-tbl="${t.name}" x="${p.x + 12}" y="${p.y + 21}">${t.name}</text>`;
     t.columns.forEach((c, i) => {
       const cy = p.y + HEAD_H + i * ROW_H + ROW_H - 6;
       if (i % 2 === 1) svg += `<rect class="tbl-row-alt" x="${p.x + 1}" y="${p.y + HEAD_H + i * ROW_H}" width="${W - 2}" height="${ROW_H}"/>`;
@@ -464,7 +464,7 @@ function renderNested(data, rels, draw) {
     svg += `<rect class="nest-tbl${sel}" data-tbl="${t.name}" x="${p.x}" y="${p.y}" width="${TW}" height="${p.h}" rx="4"/>`;
     svg += `<rect class="nest-head${sel}" data-tbl="${t.name}" x="${p.x}" y="${p.y}" width="${TW}" height="${TH_HEAD}" rx="4"/>`;
     svg += `<rect x="${p.x}" y="${p.y + TH_HEAD - 6}" width="${TW}" height="6" fill="#5b6b7c"/>`;
-    svg += `<text class="nest-title" x="${p.x + 12}" y="${p.y + 22}">${t.name}</text>`;
+    svg += `<text class="nest-title" data-tbl="${t.name}" x="${p.x + 12}" y="${p.y + 22}">${t.name}</text>`;
     t.columns.forEach((c, i) => {
       const fr = fieldRect(p, i);
       svg += `<rect class="nest-field" x="${fr.x}" y="${fr.y}" width="${fr.w}" height="${fr.h}"/>`;
@@ -535,10 +535,11 @@ function edgeLabel(x, y, r, color) {
 }
 function fieldText(x, y, c) {
   const colName = c.name.includes('.') ? c.name.slice(c.name.indexOf('.') + 1) : c.name;
+  const tbl = c.name.includes('.') ? c.name.slice(0, c.name.indexOf('.')) : '';
   const acc = c.access === 'write' ? '写' : c.access === 'filter' ? '过滤' : c.access === 'read' ? '读' : c.access;
   const accClass = c.access === 'write' ? 'acc-write' : c.access === 'filter' ? 'acc-filter' : 'acc-read';
   const accText = acc ? `<tspan class="acc ${accClass}" dx="4">[${acc}]</tspan>` : '';
-  return `<text class="tbl-row" x="${x}" y="${y}"><tspan class="col" title="${c.name}">${colName}</tspan>${accText}</text>`;
+  return `<text class="tbl-row" data-tbl="${tbl}" x="${x}" y="${y}"><tspan class="col" title="${c.name}">${colName}</tspan>${accText}</text>`;
 }
 
 // 画法切换
