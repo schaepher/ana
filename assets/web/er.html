@@ -255,11 +255,12 @@ function renderNested(data) {
     const ib = colIdx.get(r.to_table).get(r.to_col);
     if (ia === undefined || ib === undefined) continue;
     const fa = fieldRect(pa, ia), fb = fieldRect(pb, ib);
-    // 边缘锚点：目标在右 → from 右缘 / to 左缘；目标在左 → 对称；同列 → 垂直中线
-    let ax, bx;
-    if (pa.x < pb.x) { ax = fa.x + fa.w; bx = fb.x; }
-    else if (pa.x > pb.x) { ax = fa.x; bx = fb.x + fb.w; }
-    else { ax = pa.x + TW / 2; bx = ax; }
+    // 边缘锚点（字段矩形边缘）：目标在右 → from 右缘 / to 左缘；目标在左 →
+    // 对称；同列（上下行）→ 同侧右缘绕出
+    let ex1, ex2, dir;
+    if (pa.x < pb.x) { ex1 = fa.x + fa.w; ex2 = fb.x; dir = 1; }
+    else if (pa.x > pb.x) { ex1 = fa.x; ex2 = fb.x + fb.w; dir = -1; }
+    else { ex1 = fa.x + fa.w; ex2 = fb.x + fb.w; dir = 1; }
     const ay = fa.y + fa.h / 2, by = fb.y + fb.h / 2;
     const pairKey = [r.from_table, r.to_table].sort().join('|');
     const n = lineCounts.get(pairKey) || 0;
@@ -267,11 +268,23 @@ function renderNested(data) {
     let dx = 0;
     if (n > 0) dx = (n % 2 === 1 ? -1 : 1) * Math.ceil(n / 2) * 12;
     const color = styleColor(r.type);
-    svg += `<line x1="${ax + dx}" y1="${ay}" x2="${bx + dx}" y2="${by}" style="${edgeStyle(r.type)}"/>`;
+    // 折线（大规模表适配，避免斜穿）：同行同字段行 → 水平直线；
+    // 其余 → S 型正交（字段矩形边缘水平出 18px → 垂直段 → 水平入）
+    const OUT = 18;
+    let d, mx, my;
+    if (ay === by && ex1 !== ex2) {
+      d = `M ${ex1 + dx} ${ay} L ${ex2 + dx} ${ay}`;
+      mx = (ex1 + ex2) / 2 + dx; my = ay - 6;
+    } else {
+      const vx = ex1 + dir * OUT;
+      d = `M ${ex1 + dx} ${ay} L ${vx + dx} ${ay} L ${vx + dx} ${by} L ${ex2 + dx} ${by}`;
+      mx = vx + dx; my = (ay + by) / 2 - 6;
+    }
+    svg += `<path d="${d}" fill="none" style="${edgeStyle(r.type)}"/>`;
     // 锚点圆点（后画，盖在表边框上——线从字段矩形明确伸出）
-    svg += `<circle class="nest-anchor" cx="${ax + dx}" cy="${ay}" r="3" fill="${color}"/>`;
-    svg += `<circle class="nest-anchor" cx="${bx + dx}" cy="${by}" r="3" fill="${color}"/>`;
-    svg += edgeLabel((ax + bx) / 2 + dx, (ay + by) / 2 - 6, r, color);
+    svg += `<circle class="nest-anchor" cx="${ex1 + dx}" cy="${ay}" r="3" fill="${color}"/>`;
+    svg += `<circle class="nest-anchor" cx="${ex2 + dx}" cy="${by}" r="3" fill="${color}"/>`;
+    svg += edgeLabel(mx, my, r, color);
   }
   // 表外框 + 字段矩形
   for (const t of tables) {
