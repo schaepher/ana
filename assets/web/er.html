@@ -73,7 +73,7 @@ const COL_GAP2 = 320, ROW_GAP2 = 130;
 let DATA = null;   // /api/er 数据缓存（切换画法不重新拉取）
 let MODE = 'tiled'; // tiled 平铺 / nested 嵌套
 let SHOW = { query: true, write: false, read: false }; // 关系显示开关（默认只画高置信键关联）
-let SELECTED = null; // 双击选中的表名（null=不画线；选中后只画该表相关的关系）
+let SELECTED = new Set(); // 双击展开的表集合（空=不画线；展开后只显示相关表与其关系）
 
 async function load() {
   const res = await fetch('/api/er');
@@ -89,11 +89,11 @@ function visibleRels() {
   let info = (DATA.tables || []).length + ' 表 · ' + out.length + ' 条关联（键 ' + q +
     ' / 写 ' + out.filter(r => r.type === 'write').length +
     ' / 读 ' + out.filter(r => r.type === 'read').length + '）';
-  if (SELECTED) {
-    const n = out.filter(r => r.from_table === SELECTED || r.to_table === SELECTED).length;
-    info += ' · 选中 ' + SELECTED + '（' + n + ' 条线）';
+  if (SELECTED.size > 0) {
+    const n = out.filter(r => SELECTED.has(r.from_table) || SELECTED.has(r.to_table)).length;
+    info += ' · 展开 ' + [...SELECTED].join(', ') + '（' + n + ' 条线）';
   }
-  info += ' · 双击表显示其关联线';
+  info += ' · 双击表展开/收起其关联线';
   document.getElementById('info').textContent = info;
   return out;
 }
@@ -122,6 +122,8 @@ function buildOrder(tables, rels) {
   const adj = new Map();
   tables.forEach(t => adj.set(t.name, []));
   rels.forEach(r => {
+    // 展开模式：rels 可能包含已被隐藏的表——跳过，避免 undefined 崩溃
+    if (!deg.has(r.from_table) || !deg.has(r.to_table)) return;
     deg.set(r.from_table, (deg.get(r.from_table) || 0) + 1);
     deg.set(r.to_table, (deg.get(r.to_table) || 0) + 1);
     adj.get(r.from_table).push(r.to_table);
@@ -195,35 +197,35 @@ function placeTables(order, perRow, hOf, tw, colGap, rowGap) {
 // 同行相邻表 → 直线/S 型（垂直段在同列间隙内）；其余 → 6 段绕行
 // （字段边缘水平出 → 列通道垂直 → 行通道水平 → 列通道垂直 → 水平入）。
 // 通道 x/y 位于表矩形之外，跨行跨列段落只经过间隙，绝不穿表。
-function orthPath(ex1, ay, ex2, by, rowA, colA, rowB, colB, L, n) {
-  n = n || 0;
+function orthPath(ex1, ay, ex2, by, rowA, colA, rowB, colB, L, n, outN, inN) {
+  n = n || 0; outN = outN || 0; inN = inN || 0;
+  const fan = k => (k % 2 === 1 ? -1 : 1) * Math.ceil(k / 2); // 分叉偏移量（左右交替）
   if (rowA === rowB && Math.abs(colA - colB) === 1) {
     if (ay === by) {
       if (!n) {
         return { d: `M ${ex1} ${ay} L ${ex2} ${ay}`, mx: (ex1 + ex2) / 2, my: ay - 6 };
       }
       // 多线：两端垂直微弯分叉（端点仍在表边）
-      const off = (n % 2 === 1 ? -1 : 1) * Math.ceil(n / 2) * 5;
+      const off = fan(n) * 5;
       return {
         d: `M ${ex1} ${ay} L ${ex1} ${ay + off} L ${ex2} ${ay + off} L ${ex2} ${ay}`,
         mx: (ex1 + ex2) / 2, my: ay + off - 6,
       };
     }
-    // S 型：垂直段在同列间隙内，出线段长度随 n 递增
-    const vx = ex1 + (colB > colA ? 1 : -1) * (18 + n * 12);
+    // S 型：垂直段在同列间隙内，出线段长度按出端点计数递增（同表多线不重合）
+    const vx = ex1 + (colB > colA ? 1 : -1) * (18 + outN * 12);
     return { d: `M ${ex1} ${ay} L ${vx} ${ay} L ${vx} ${by} L ${ex2} ${by}`, mx: vx, my: (ay + by) / 2 - 6 };
   }
   if (rowA === rowB && colA === colB) {
     // 同列跨行：同一列通道垂直直连（多线水平段错开）
-    const cx = L.colGapX(colA);
-    const off = n ? (n % 2 === 1 ? -1 : 1) * Math.ceil(n / 2) * 8 : 0;
+    const cx = L.colGapX(colA) + fan(outN) * 8;
     return {
-      d: `M ${ex1} ${ay} L ${cx + off} ${ay} L ${cx + off} ${by} L ${ex2} ${by}`,
-      mx: cx + off, my: (ay + by) / 2 - 6,
+      d: `M ${ex1} ${ay} L ${cx} ${ay} L ${cx} ${by} L ${ex2} ${by}`,
+      mx: cx, my: (ay + by) / 2 - 6,
     };
   }
-  const cx1 = L.colGapX(colA), cx2 = L.colGapX(colB);
-  const gapY = L.rowGapY(Math.min(rowA, rowB)) + (n ? (n % 2 === 1 ? -1 : 1) * Math.ceil(n / 2) * 8 : 0);
+  const cx1 = L.colGapX(colA) + fan(outN) * 8, cx2 = L.colGapX(colB) + fan(inN) * 8;
+  const gapY = L.rowGapY(Math.min(rowA, rowB)) + fan(outN) * 8;
   return {
     d: `M ${ex1} ${ay} L ${cx1} ${ay} L ${cx1} ${gapY} L ${cx2} ${gapY} L ${cx2} ${by} L ${ex2} ${by}`,
     mx: (cx1 + cx2) / 2, my: gapY - 6,
@@ -233,20 +235,30 @@ function orthPath(ex1, ay, ex2, by, rowA, colA, rowB, colB, L, n) {
 function render() {
   document.getElementById('svg-wrap').innerHTML = '';
   if (!DATA) return;
-  const rels = visibleRels(); // 布局与统计用（SHOW 过滤后的全量）
-  // 画线：默认不连线；选中表后只画与该表相关的关系
-  const draw = SELECTED ? rels.filter(r => r.from_table === SELECTED || r.to_table === SELECTED) : [];
-  if (MODE === 'nested') renderNested(DATA, rels, draw);
-  else renderTiled(DATA, rels, draw);
+  const rels = visibleRels(); // SHOW 过滤后的全量（统计用）
+  let tables = DATA.tables || [];
+  let draw = [];
+  if (SELECTED.size > 0) {
+    // 画线：只画与任一展开表相关的关系
+    draw = rels.filter(r => SELECTED.has(r.from_table) || SELECTED.has(r.to_table));
+    // 隐藏无关表：保留展开表 + 有线的表，重新布局渲染
+    const keep = new Set();
+    draw.forEach(r => { keep.add(r.from_table); keep.add(r.to_table); });
+    SELECTED.forEach(s => keep.add(s));
+    tables = tables.filter(t => keep.has(t.name));
+  }
+  const data = { tables, relations: rels };
+  if (MODE === 'nested') renderNested(data, rels, draw);
+  else renderTiled(data, rels, draw);
 }
 
-// 双击表 → 切换选中（再次双击取消；双击其他表切换）
+// 双击表 → 展开/收起（多选：可同时展开多个表）
 function bindDblClick() {
   document.getElementById('svg-wrap').addEventListener('dblclick', evt => {
     const el = evt.target.closest('[data-tbl]');
     if (!el) return;
     const name = el.getAttribute('data-tbl');
-    SELECTED = SELECTED === name ? null : name;
+    if (SELECTED.has(name)) SELECTED.delete(name); else SELECTED.add(name);
     render();
   });
 }
@@ -266,7 +278,7 @@ function renderTiled(data, rels, draw) {
     colIdx.set(t.name, m);
   });
   let svg = svgHead(L.Wpx, L.Hpx);
-  const lineCounts = new Map();
+  const lineCounts = new Map(), outCounts = new Map(), inCounts = new Map();
   for (const r of draw) {
     const pa = pos.get(r.from_table), pb = pos.get(r.to_table);
     if (!pa || !pb) continue;
@@ -283,16 +295,25 @@ function renderTiled(data, rels, draw) {
     const pairKey = [r.from_table, r.to_table].sort().join('|');
     const n = lineCounts.get(pairKey) || 0;
     lineCounts.set(pairKey, n + 1);
+    // 端点分叉：同出端（表+字段+方向）出线段递增、同入端入线段偏移——
+    // 多线共享端点时不重合
+    const dir = pa.x < pb.x ? 1 : pa.x > pb.x ? -1 : 1;
+    const outKey = r.from_table + '>' + r.from_col + (dir > 0 ? 'R' : 'L');
+    const outN = outCounts.get(outKey) || 0;
+    outCounts.set(outKey, outN + 1);
+    const inKey = r.to_table + '>' + r.to_col;
+    const inN = inCounts.get(inKey) || 0;
+    inCounts.set(inKey, inN + 1);
     const p = orthPath(ex1, ay, ex2, by,
       L.rowOf.get(r.from_table), L.colOf.get(r.from_table),
-      L.rowOf.get(r.to_table), L.colOf.get(r.to_table), L, n);
+      L.rowOf.get(r.to_table), L.colOf.get(r.to_table), L, n, outN, inN);
     svg += `<path d="${p.d}" fill="none" style="${edgeStyle(r.type)}"/>`;
     svg += edgeLabel(p.mx, p.my, r, styleColor(r.type));
   }
   // 卡片
   for (const t of tables) {
     const p = pos.get(t.name), h = cardH(t);
-    const sel = t.name === SELECTED ? ' selected' : '';
+    const sel = SELECTED.has(t.name) ? ' selected' : '';
     svg += `<rect class="tbl${sel}" data-tbl="${t.name}" x="${p.x}" y="${p.y}" width="${W}" height="${h}" rx="6"/>`;
     svg += `<rect class="tbl-head${sel}" data-tbl="${t.name}" x="${p.x}" y="${p.y}" width="${W}" height="${HEAD_H}" rx="6"/>`;
     svg += `<rect x="${p.x}" y="${p.y + HEAD_H - 6}" width="${W}" height="6" fill="#2f54eb"/>`;
@@ -331,7 +352,7 @@ function renderNested(data, rels, draw) {
   // 线在所有表矩形之上，全程可见（含表内穿过的段落）
   for (const t of tables) {
     const p = pos.get(t.name);
-    const sel = t.name === SELECTED ? ' selected' : '';
+    const sel = SELECTED.has(t.name) ? ' selected' : '';
     svg += `<rect class="nest-tbl${sel}" data-tbl="${t.name}" x="${p.x}" y="${p.y}" width="${TW}" height="${p.h}" rx="4"/>`;
     svg += `<rect class="nest-head${sel}" data-tbl="${t.name}" x="${p.x}" y="${p.y}" width="${TW}" height="${TH_HEAD}" rx="4"/>`;
     svg += `<rect x="${p.x}" y="${p.y + TH_HEAD - 6}" width="${TW}" height="6" fill="#5b6b7c"/>`;
@@ -344,7 +365,7 @@ function renderNested(data, rels, draw) {
     });
   }
   // 连线：字段矩形边缘 → 字段矩形边缘（正交绕障折线 + 锚点圆点，最上层）
-  const lineCounts = new Map();
+  const lineCounts = new Map(), outCounts = new Map(), inCounts = new Map();
   for (const r of draw) {
     const pa = pos.get(r.from_table), pb = pos.get(r.to_table);
     if (!pa || !pb) continue;
@@ -361,10 +382,17 @@ function renderNested(data, rels, draw) {
     const pairKey = [r.from_table, r.to_table].sort().join('|');
     const n = lineCounts.get(pairKey) || 0;
     lineCounts.set(pairKey, n + 1);
+    const dir = pa.x < pb.x ? 1 : pa.x > pb.x ? -1 : 1;
+    const outKey = r.from_table + '>' + r.from_col + (dir > 0 ? 'R' : 'L');
+    const outN = outCounts.get(outKey) || 0;
+    outCounts.set(outKey, outN + 1);
+    const inKey = r.to_table + '>' + r.to_col;
+    const inN = inCounts.get(inKey) || 0;
+    inCounts.set(inKey, inN + 1);
     const color = styleColor(r.type);
     const p = orthPath(ex1, ay, ex2, by,
       L.rowOf.get(r.from_table), L.colOf.get(r.from_table),
-      L.rowOf.get(r.to_table), L.colOf.get(r.to_table), L, n);
+      L.rowOf.get(r.to_table), L.colOf.get(r.to_table), L, n, outN, inN);
     svg += `<path d="${p.d}" fill="none" style="${edgeStyle(r.type)}"/>`;
     // 锚点圆点（线端，精确落在字段矩形边缘）
     svg += `<circle class="nest-anchor" cx="${ex1}" cy="${ay}" r="3" fill="${color}"/>`;
