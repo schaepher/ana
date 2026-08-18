@@ -240,7 +240,10 @@ function placeTables(order, perRow, hOf, tw, colGap, rowGap) {
     pos.set(name, { x: 20 + c * (tw + colGap), y: rowsTop[r], w: tw, h: hOf(name) });
   });
   const Wpx = perRow * (tw + colGap) - colGap + 40;
-  const Hpx = y - rowGap + 20;
+  // 最后一行下方保留整段行间隙：线绕障的垂直段走行间隙通道中心
+  // （rowGapY = 行底 + rowGap/2），1 行布局也须留空间（此前 Hpx 只到
+  // 行底 + 20，线底部被 SVG 裁剪——Q205c 垂直截断）
+  const Hpx = y + 20;
   return {
     pos, rowOf, colOf, rowsTop, rowsMaxH, perRow, Wpx, Hpx,
     // 列间隙中心 x（最右列取左侧间隙）、行间隙中心 y
