@@ -1,6 +1,7 @@
 package ssa
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/schaepher/codeintel/internal/domain"
@@ -83,5 +84,68 @@ func f(db *sql.DB) {
 	}
 	if !found {
 		t.Error("$N 占位符的 WHERE 过滤列未提取（mm_member.level filter 缺失）")
+	}
+}
+
+// TestSQLQueryCallbackClosure：Q201——Query(sql, callback) 形态的读出值
+// 进入回调闭包形参（rows），read 节点边指向闭包形参（归属父函数）
+// 而非返回值（返回值与回调形参静态无连接，链断在闭包）。
+// 闭包内 rows.Scan(&id) 后 id 参与后续值流，跨函数链贯通
+// （go2o 实测：settleRiseData 的 pf_riseinfo.person_id 读出值因闭包
+// 断链，person_id → usr_person 键关联缺失）。
+func TestSQLQueryCallbackClosure(t *testing.T) {
+	nodes, facts := indexFixture(t, map[string]string{
+		"go.mod": moduleGoMod,
+		"field-summary.yaml": `
+summaries:
+  - iface: example.com/mtest.Conn
+    method: Query
+    kind: sql
+    sql_write: false
+    where_arg: 0
+`,
+		"main.go": `package m
+
+type Rows struct{}
+
+type Conn interface {
+	Query(sql string, cb func(*Rows))
+}
+
+func settle(c Conn) {
+	var ids []int
+	c.Query("SELECT id FROM users WHERE name = ?", func(r *Rows) {
+		var id int
+		_ = r
+		ids = append(ids, id)
+	})
+	_ = ids
+}
+`,
+	})
+	var readID string
+	for _, n := range nodes {
+		if n.Kind == domain.KindFieldAccess && n.Name == "users.id" &&
+			n.Property("access_kind") == "read" {
+			readID = string(n.ID)
+		}
+	}
+	if readID == "" {
+		t.Fatal("users.id read 节点缺失（SQL 摘要未触发）")
+	}
+	var outs []string
+	for _, f := range facts {
+		if f.SourceID == domain.CanonicalID(readID) && f.Kind == domain.FactSummaryIO {
+			outs = append(outs, string(f.TargetID))
+		}
+	}
+	found := false
+	for _, tgt := range outs {
+		if strings.Contains(tgt, "settle#param.r") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("users.id.read 出边应指向回调闭包形参 settle#param.r（非返回值），got %v", outs)
 	}
 }

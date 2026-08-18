@@ -40,7 +40,14 @@ func (ext *fieldExtractor) applySQLSummary(cc *ssa.CallCommon, calleeID domain.C
 			cols = []string{""}
 		}
 		var callID domain.CanonicalID
-		if callVal != nil {
+		// Q201：Query(sql, callback) 形态——读出值进入回调闭包的形参
+		// （rows），read 节点边指向闭包形参（归属父函数）而非调用返回值
+		// （返回值与回调形参静态无连接，链断在闭包；go2o 实测
+		// settleRiseData 的 pf_riseinfo.person_id 读出值因此断链）。
+		// 闭包内 rows.Scan(&i) 后 i 参与后续值流，跨函数链贯通
+		if cb := callbackClosureParam(cc); cb != nil {
+			callID, _ = ext.emitValue(cb)
+		} else if callVal != nil {
 			callID, _ = ext.emitValue(callVal)
 		}
 		for _, col := range cols {
@@ -206,6 +213,27 @@ func (ext *fieldExtractor) applySQLSummary(cc *ssa.CallCommon, calleeID domain.C
 			if err := ext.emitEdgeKindLine(argID, id, domain.FactSummaryIO, line); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+// callbackClosureParam SQL 调用实参中的回调闭包首参（Query(sql,
+// func(rows){...}) 的 rows）：读出值经回调形参进入闭包，闭包内
+// Scan(&i) 后 i 参与后续值流。无回调实参返回 nil。
+func callbackClosureParam(cc *ssa.CallCommon) ssa.Value {
+	for _, a := range cc.Args {
+		var fn *ssa.Function
+		switch x := a.(type) {
+		case *ssa.MakeClosure:
+			fn, _ = x.Fn.(*ssa.Function)
+		case *ssa.MakeInterface:
+			if mc, ok := x.X.(*ssa.MakeClosure); ok {
+				fn, _ = mc.Fn.(*ssa.Function)
+			}
+		}
+		if fn != nil && len(fn.Params) > 0 {
+			return fn.Params[0]
 		}
 	}
 	return nil
