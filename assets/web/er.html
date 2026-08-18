@@ -34,6 +34,11 @@
   .nest-title { fill: #fff; font-size: 13px; font-weight: 600; }
   .nest-field { fill: #fff; stroke: #c8c8c8; stroke-width: 1; }
   .nest-anchor { stroke: none; }
+  /* 双击选中的表高亮 */
+  .tbl.selected { stroke: #fa8c16; stroke-width: 2.5; }
+  .tbl-head.selected { fill: #fa8c16; }
+  .nest-tbl.selected { stroke: #fa8c16; stroke-width: 3; }
+  .nest-head.selected { fill: #fa8c16; }
 </style>
 </head>
 <body>
@@ -68,6 +73,7 @@ const COL_GAP2 = 320, ROW_GAP2 = 130;
 let DATA = null;   // /api/er 数据缓存（切换画法不重新拉取）
 let MODE = 'tiled'; // tiled 平铺 / nested 嵌套
 let SHOW = { query: true, write: false, read: false }; // 关系显示开关（默认只画高置信键关联）
+let SELECTED = null; // 双击选中的表名（null=不画线；选中后只画该表相关的关系）
 
 async function load() {
   const res = await fetch('/api/er');
@@ -80,10 +86,15 @@ function visibleRels() {
   const rels = (DATA.relations || []);
   const out = rels.filter(r => SHOW[r.type] !== false);
   const q = out.filter(r => r.type === 'query').length;
-  document.getElementById('info').textContent =
-    (DATA.tables || []).length + ' 表 · ' + out.length + ' 条关联（键 ' + q +
+  let info = (DATA.tables || []).length + ' 表 · ' + out.length + ' 条关联（键 ' + q +
     ' / 写 ' + out.filter(r => r.type === 'write').length +
     ' / 读 ' + out.filter(r => r.type === 'read').length + '）';
+  if (SELECTED) {
+    const n = out.filter(r => r.from_table === SELECTED || r.to_table === SELECTED).length;
+    info += ' · 选中 ' + SELECTED + '（' + n + ' 条线）';
+  }
+  info += ' · 双击表显示其关联线';
+  document.getElementById('info').textContent = info;
   return out;
 }
 
@@ -222,13 +233,26 @@ function orthPath(ex1, ay, ex2, by, rowA, colA, rowB, colB, L, n) {
 function render() {
   document.getElementById('svg-wrap').innerHTML = '';
   if (!DATA) return;
-  const rels = visibleRels();
-  if (MODE === 'nested') renderNested(DATA, rels);
-  else renderTiled(DATA, rels);
+  const rels = visibleRels(); // 布局与统计用（SHOW 过滤后的全量）
+  // 画线：默认不连线；选中表后只画与该表相关的关系
+  const draw = SELECTED ? rels.filter(r => r.from_table === SELECTED || r.to_table === SELECTED) : [];
+  if (MODE === 'nested') renderNested(DATA, rels, draw);
+  else renderTiled(DATA, rels, draw);
+}
+
+// 双击表 → 切换选中（再次双击取消；双击其他表切换）
+function bindDblClick() {
+  document.getElementById('svg-wrap').addEventListener('dblclick', evt => {
+    const el = evt.target.closest('[data-tbl]');
+    if (!el) return;
+    const name = el.getAttribute('data-tbl');
+    SELECTED = SELECTED === name ? null : name;
+    render();
+  });
 }
 
 // ---- 平铺画法：表卡片 + 正交绕障折线（不越过任何表）----
-function renderTiled(data, rels) {
+function renderTiled(data, rels, draw) {
   const tables = data.tables || [];
   const { order, perRow } = buildOrder(tables, rels);
   const tOf = name => tables.find(t => t.name === name);
@@ -243,7 +267,7 @@ function renderTiled(data, rels) {
   });
   let svg = svgHead(L.Wpx, L.Hpx);
   const lineCounts = new Map();
-  for (const r of rels) {
+  for (const r of draw) {
     const pa = pos.get(r.from_table), pb = pos.get(r.to_table);
     if (!pa || !pb) continue;
     const ia = colIdx.get(r.from_table).get(r.from_col);
@@ -268,8 +292,9 @@ function renderTiled(data, rels) {
   // 卡片
   for (const t of tables) {
     const p = pos.get(t.name), h = cardH(t);
-    svg += `<rect class="tbl" x="${p.x}" y="${p.y}" width="${W}" height="${h}" rx="6"/>`;
-    svg += `<rect class="tbl-head" x="${p.x}" y="${p.y}" width="${W}" height="${HEAD_H}" rx="6"/>`;
+    const sel = t.name === SELECTED ? ' selected' : '';
+    svg += `<rect class="tbl${sel}" data-tbl="${t.name}" x="${p.x}" y="${p.y}" width="${W}" height="${h}" rx="6"/>`;
+    svg += `<rect class="tbl-head${sel}" data-tbl="${t.name}" x="${p.x}" y="${p.y}" width="${W}" height="${HEAD_H}" rx="6"/>`;
     svg += `<rect x="${p.x}" y="${p.y + HEAD_H - 6}" width="${W}" height="6" fill="#2f54eb"/>`;
     svg += `<text class="tbl-title" x="${p.x + 12}" y="${p.y + 21}">${t.name}</text>`;
     t.columns.forEach((c, i) => {
@@ -283,7 +308,7 @@ function renderTiled(data, rels) {
 }
 
 // ---- 嵌套画法：表外框内嵌字段矩形，字段矩形之间直线连线 ----
-function renderNested(data, rels) {
+function renderNested(data, rels, draw) {
   const tables = data.tables || [];
   const { order, perRow } = buildOrder(tables, rels);
   const tOf = name => tables.find(t => t.name === name);
@@ -306,8 +331,9 @@ function renderNested(data, rels) {
   // 线在所有表矩形之上，全程可见（含表内穿过的段落）
   for (const t of tables) {
     const p = pos.get(t.name);
-    svg += `<rect class="nest-tbl" x="${p.x}" y="${p.y}" width="${TW}" height="${p.h}" rx="4"/>`;
-    svg += `<rect class="nest-head" x="${p.x}" y="${p.y}" width="${TW}" height="${TH_HEAD}" rx="4"/>`;
+    const sel = t.name === SELECTED ? ' selected' : '';
+    svg += `<rect class="nest-tbl${sel}" data-tbl="${t.name}" x="${p.x}" y="${p.y}" width="${TW}" height="${p.h}" rx="4"/>`;
+    svg += `<rect class="nest-head${sel}" data-tbl="${t.name}" x="${p.x}" y="${p.y}" width="${TW}" height="${TH_HEAD}" rx="4"/>`;
     svg += `<rect x="${p.x}" y="${p.y + TH_HEAD - 6}" width="${TW}" height="6" fill="#5b6b7c"/>`;
     svg += `<text class="nest-title" x="${p.x + 12}" y="${p.y + 22}">${t.name}</text>`;
     t.columns.forEach((c, i) => {
@@ -319,7 +345,7 @@ function renderNested(data, rels) {
   }
   // 连线：字段矩形边缘 → 字段矩形边缘（正交绕障折线 + 锚点圆点，最上层）
   const lineCounts = new Map();
-  for (const r of rels) {
+  for (const r of draw) {
     const pa = pos.get(r.from_table), pb = pos.get(r.to_table);
     if (!pa || !pb) continue;
     const ia = colIdx.get(r.from_table).get(r.from_col);
@@ -390,6 +416,7 @@ function bindModeSwitch() {
 }
 bindRelFilter();
 bindModeSwitch();
+bindDblClick();
 load();
 </script>
 </body>
