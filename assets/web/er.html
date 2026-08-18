@@ -322,6 +322,7 @@ function render() {
     SELECTED.forEach(s => keep.add(s));
     tables = tables.filter(t => keep.has(t.name));
   }
+  draw = mergeBidirectional(draw);
   const data = { tables, relations: rels };
   if (MODE === 'nested') renderNested(data, rels, draw);
   else renderTiled(data, rels, draw);
@@ -329,6 +330,31 @@ function render() {
   // 后续内容不在可视区（双击展开表数量多时尤其明显）。
   // 滚动容器是 window（#svg-wrap 高度由内容撑开，页面整体滚动）
   window.scrollTo(0, 0);
+}
+
+// 同字段双向合并（Q200）：A.x → B.y 与 B.y → A.x 完全反向同字段对
+// 合并为一条双向线（标注 x ↔ y）——避免同字段互查画两条平行线；
+// 仅严格反向（表对、字段对都互换）才合并，取置信度更高类型。
+function mergeBidirectional(rels) {
+  const out = [];
+  const byKey = new Map();
+  for (const r of rels) {
+    const tables = [r.from_table, r.to_table].sort().join('|');
+    const cols = [r.from_col, r.to_col].sort().join('|');
+    const key = tables + '~' + cols;
+    const ex = byKey.get(key);
+    if (ex && ex.from_table === r.to_table && ex.from_col === r.to_col &&
+        ex.to_table === r.from_table && ex.to_col === r.from_col) {
+      ex.bi = true;
+      if (relRank(r.type) > relRank(ex.type)) ex.type = r.type;
+      continue;
+    }
+    const item = Object.assign({}, r, { bi: false });
+    byKey.set(key, item);
+    out.push(item);
+  }
+  return out;
+  function relRank(t) { return t === 'query' ? 2 : t === 'write' ? 1 : 0; }
 }
 
 // 双击表 → 展开/收起（多选：可同时展开多个表）
@@ -502,8 +528,9 @@ function edgeStyle(type, color) {
       : `stroke:${color};stroke-width:1;stroke-dasharray:2,3`;
 }
 function edgeLabel(x, y, r, color) {
+  const sep = r.bi ? ' ↔ ' : ' → ';
   return `<text x="${x}" y="${y}" class="edge-label" text-anchor="middle">
-    <tspan fill="${color}" font-weight="600">${r.from_col}</tspan> → ${r.to_col}
+    <tspan fill="${color}" font-weight="600">${r.from_col}</tspan>${sep}${r.to_col}
   </text>`;
 }
 function fieldText(x, y, c) {
