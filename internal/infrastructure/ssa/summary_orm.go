@@ -253,6 +253,19 @@ func (ext *fieldExtractor) tableNameOf(entity types.Type) string {
 	if !ok {
 		return ""
 	}
+	// Q205 缓存：TableName() 方法扫描（FuncValue + returnOperands）在无
+	// spec 接口调用兜底下被高频触发（go2o 数千接口调用），同类型只算一次
+	if cached, ok := ext.tableNames[named]; ok {
+		return cached
+	}
+	name := tableNameOfSlow(ext, entity, named)
+	ext.tableNames[named] = name // 缓存任何结果（含空串——该类型无 TableName）
+	return name
+}
+
+// tableNameOfSlow 表名解析本体（Q205 拆出供缓存包裹）：
+// TableName() 方法（SSA Return 常量）优先，fallback snakeCase(类型名)。
+func tableNameOfSlow(ext *fieldExtractor, entity types.Type, named *types.Named) string {
 	if m := types.NewMethodSet(types.NewPointer(entity)).Lookup(nil, "TableName"); m != nil {
 		if fn, ok := m.Obj().(*types.Func); ok {
 			if ssaFn := ext.prog.FuncValue(fn); ssaFn != nil {

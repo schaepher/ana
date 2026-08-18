@@ -176,6 +176,31 @@ func builtinSummaries() map[string]summarySpec {
 	specs["iface:github.com/ixre/gof/db/orm.Orm.Get"] = summarySpec{
 		Interface: "github.com/ixre/gof/db/orm.Orm",
 		Method:    "Get", Kind: "read", ObjArg: 1, IDArg: 0}
+
+	// Q205 gof orm.Orm 字符串 where 形态（go2o p.o.Select/GetBy/Delete 等
+	// 封装调用——此前无 spec，where 串列名不产 filter 节点，键关联漏报）：
+	//   - Select(dst, where, args...) / GetBy(entity, where, args...)：读出
+	//     （dst/entity 推断表名 + 全列 read）+ where 串列名 → filter 节点
+	//   - Delete(entity, where, args...)：实体类型全列 write + where filter
+	//   - SelectByQuery/GetByQuery(dst, sql, args...)：直写 SQL 同 database/sql
+	//   - Save(primary, entity)：方法形态与包级 orm.Save 同语义（write）
+	ormIface := "iface:github.com/ixre/gof/db/orm.Orm."
+	for _, fn := range []string{"Select", "GetBy"} {
+		specs[ormIface+fn] = summarySpec{
+			Interface: "github.com/ixre/gof/db/orm.Orm",
+			Method:    fn, Kind: "read", ObjArg: 0, WhereArg: 1}
+	}
+	specs[ormIface+"Delete"] = summarySpec{
+		Interface: "github.com/ixre/gof/db/orm.Orm",
+		Method:    "Delete", Kind: "write", ObjArg: 0, WhereArg: 1}
+	for _, fn := range []string{"SelectByQuery", "GetByQuery"} {
+		specs[ormIface+fn] = summarySpec{
+			Interface: "github.com/ixre/gof/db/orm.Orm",
+			Method:    fn, Kind: "sql", WhereArg: 1}
+	}
+	specs[ormIface+"Save"] = summarySpec{
+		Interface: "github.com/ixre/gof/db/orm.Orm",
+		Method:    "Save", Kind: "write", ObjArg: 1}
 	return specs
 }
 

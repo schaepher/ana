@@ -160,6 +160,26 @@ func (ext *fieldExtractor) emitValue(v ssa.Value) (domain.CanonicalID, error) {
 		_, isAlloc := uo.X.(*ssa.Alloc)
 		_, isIdx := uo.X.(*ssa.IndexAddr)
 		_, isFld := uo.X.(*ssa.FieldAddr)
+		if isAlloc {
+			// Q205 双发射修复：*alloc（读整个 slice/对象变量）与 Alloc
+			// 是同一逻辑值——统一用变量名 ID（applyScanOut/load 分支的
+			// instancePath 规则），Alloc 直接 emit 时也走变量名（见通用
+			// 分支的 Alloc 特判），读边/返回边/Scan 边同节点（go2o
+			// SelectAttr 的 `return list` 连 #list（load）而读边连 #t0
+			// （Alloc），链断）
+			if id, ok := ext.values[uo.X]; ok {
+				ext.values[v] = id
+				return id, nil
+			}
+			if fid, ok := ext.funcIDOf(uo.X); ok {
+				if name := ext.instancePath(uo); !isSSAName(name) {
+					id := domain.CanonicalID(string(fid) + "#" + name)
+					ext.values[uo.X] = id
+					ext.values[v] = id
+					return id, nil
+				}
+			}
+		}
 		if isAlloc || isIdx || isFld {
 			if name := ext.instancePath(uo); !isSSAName(name) {
 				fid, ok2 := ext.funcIDOf(uo)
@@ -186,6 +206,29 @@ func (ext *fieldExtractor) emitValue(v ssa.Value) (domain.CanonicalID, error) {
 	funcID, ok := ext.funcIDOf(v)
 	if !ok {
 		return "", nil
+	}
+	// Q205 双发射修复：Alloc（变量地址）直接 emit 时用变量名 ID——与
+	// applyScanOut（#x）/load 分支（*alloc → #x）统一（go2o SelectAttr
+	// 的 &list 读边连 #list 而 `return list` 连 #t0，链断；统一变量名后
+	// 同节点）。shadowing 同名变量会合并（与 load/scan 既有规则一致）
+	if _, isAlloc := v.(*ssa.Alloc); isAlloc {
+		if name := ext.instancePath(v); !isSSAName(name) {
+			id := domain.CanonicalID(string(funcID) + "#" + name)
+			ext.values[v] = id
+			n := &domain.CodeEntity{
+				ID:        id,
+				Kind:      domain.KindSSAValue,
+				Name:      name,
+				LineStart: lineOf(ext, v),
+				Properties: map[string]any{
+					"origin_kind": "local",
+					"ssa_op":      "alloc",
+					"type_string": v.Type().String(),
+					"func_id":     string(funcID),
+				},
+			}
+			return id, ext.emit(domain.Item{Node: n})
+		}
 	}
 	slots := ext.slotsFor[funcID]
 	if slots == nil {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"go/constant"
 	"go/types"
+	"strings"
 
 	"github.com/schaepher/codeintel/internal/domain"
 	"go.uber.org/zap"
@@ -35,9 +36,64 @@ func (ext *fieldExtractor) applyInterfaceSummary(cc *ssa.CallCommon, callVal ssa
 	spec, ok := ext.specs[key]
 	if !ok {
 		logger.Debug("iface spec 未匹配", zap.String("key", key))
+		// Q205 兜底：无 spec 的业务接口方法（go2o SelectAttr/SelectAttrItem
+		// 等包裹查询形态——内部 p.o.Select 的 where 是形参，常量不跨函数
+		// 传播），调用点若带 where 字符串常量实参（"col = $1"）+ slice
+		// 返回类型（实体列表），按 where 列名 + 返回元素表名发射 filter
+		// 节点（键关联链贯通）。失败静默，不影响其他路径。
+		ext.inferInterfaceFilter(cc, callVal)
 		return false, nil
 	}
 	return ext.applySpecKind(cc, callVal, spec, key)
+}
+
+// inferInterfaceFilter Q205 兜底：无 spec 的业务接口方法调用，若带
+// where 字符串常量实参（"col = $1" 形态，含 = 与 $ 占位符）+ slice
+// 返回类型（实体列表查询——go2o SelectAttr/SelectAttrItem 等包裹查询，
+// 内部 p.o.Select 的 where 是形参、常量在调用点），按 where 列名 +
+// 返回元素表名发射 filter 节点 + 绑定值边（键关联链贯通）。失败静默。
+// 注意：invoke 调用的 cc.Value 是 receiver（接口值），返回值类型取
+// callVal。
+func (ext *fieldExtractor) inferInterfaceFilter(cc *ssa.CallCommon, callVal ssa.Value) {
+	logger := zap.L()
+	logger.Debug("enter (fieldExtractor).inferInterfaceFilter")
+	defer logger.Debug("exit (fieldExtractor).inferInterfaceFilter")
+	if callVal == nil {
+		return
+	}
+	t := callVal.Type()
+	sl, ok := t.(*types.Slice)
+	if !ok {
+		return
+	}
+	elem := derefType(sl.Elem())
+	named, ok := elem.(*types.Named)
+	if !ok {
+		return
+	}
+	table := ext.tableNameOf(named)
+	if table == "" {
+		return
+	}
+	for i, a := range cc.Args {
+		c, ok := unwrapConst(a)
+		if !ok || c.Value == nil || c.Value.Kind() != constant.String {
+			continue // 仅字符串常量是 where 候选（bool/int 常量直接跳过）
+		}
+		s := constant.StringVal(c.Value)
+		if !strings.Contains(s, "=") || !strings.Contains(s, "$") {
+			continue
+		}
+		cols := whereColsOf(s)
+		if len(cols) == 0 {
+			continue
+		}
+		line := ext.prog.Fset.PositionFor(cc.Pos(), false).Line
+		if err := ext.emitWhereFilterTyped(cc, cols, i, table, line, ""); err != nil {
+			return
+		}
+		return // 首个 where 串即可（多 where 参数罕见）
+	}
 }
 
 // applySpecKind 按 spec.Kind 分派的公共逻辑（Q177 修复：静态摘要

@@ -45,6 +45,7 @@ func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Func
 		rets:          map[*ssa.Function][][]ssa.Value{},
 		dispatchRegs:  *dispatchRegs,
 		chainTables:   map[ssa.Value]string{},
+		tableNames:    map[*types.Named]string{},
 	}
 
 	for _, b := range fn.Blocks {

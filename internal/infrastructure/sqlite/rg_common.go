@@ -35,7 +35,10 @@ func filterFKNoise(all []*domain.TableRelation) []*domain.TableRelation {
 			if r.FromCol == "id" && r.ToCol == "id" {
 				continue
 			}
-			if hasFK && r.FromCol == "id" {
+			// Q205：id 起点过滤只作用于低置信（read/write）——query 键
+			// 关联列级独立有意义（attr.id 读出 → 查 attr_item.attr_id
+			// 是真实键关联，Q159 的 id 起点=对象值桥接噪音假设不适用）
+			if hasFK && r.FromCol == "id" && r.Type != domain.RelationQuery {
 				continue
 			}
 			out = append(out, r)
