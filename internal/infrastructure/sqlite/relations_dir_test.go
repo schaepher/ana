@@ -84,3 +84,78 @@ func TestRelationArgumentDirection(t *testing.T) {
 		t.Errorf("orders 列节点应保留，got %v, %v", cols, err)
 	}
 }
+
+// TestRelationWriteFieldAssign：Q202——跨函数 write 若链上存在与
+// 起点列同名的字段级赋值（a.OrderId = t），则字段值真实传递，
+// write 保留（order.id 读出 → 赋给 A.order_id → 写入）；仅对象整体
+// 传递（无字段赋值）才丢弃（create_time 场景）。
+func TestRelationWriteFieldAssign(t *testing.T) {
+	r := newTestRepo(t)
+	readFn := "symbol:go:example.com/m:readOrder"
+	saveFn := "symbol:go:example.com/m:saveA"
+	svcFn := "symbol:go:example.com/m:svc"
+	nodes := []*domain.CodeEntity{
+		{ID: domain.CanonicalID(readFn), Kind: domain.KindFunction, Name: "readOrder"},
+		{ID: domain.CanonicalID(saveFn), Kind: domain.KindFunction, Name: "saveA"},
+		{ID: domain.CanonicalID(svcFn), Kind: domain.KindFunction, Name: "svc"},
+		// 值节点
+		{ID: domain.CanonicalID(readFn + "#t1"), Kind: domain.KindSSAValue, Name: "t1",
+			Properties: map[string]any{"func_id": readFn}},
+		{ID: domain.CanonicalID(svcFn + "#t2"), Kind: domain.KindSSAValue, Name: "t2",
+			Properties: map[string]any{"func_id": svcFn}},
+		{ID: domain.CanonicalID(svcFn + "#a"), Kind: domain.KindSSAValue, Name: "a",
+			Properties: map[string]any{"func_id": svcFn}},
+		{ID: domain.CanonicalID(saveFn + "#param.v"), Kind: domain.KindSSAValue, Name: "param.v",
+			Properties: map[string]any{"func_id": saveFn}},
+		// 字段级赋值中间节点：a.OrderId 字段写（非 external）
+		{ID: domain.CanonicalID(svcFn + "#a.OrderId.write@10"), Kind: domain.KindFieldAccess,
+			Name: "a.OrderId", FilePath: "a.go", LineStart: 10,
+			Properties: map[string]any{"full_path": "example.com/m.Order.OrderId", "instance_path": "a.OrderId",
+				"access_kind": "write"}},
+		// 表列
+		{ID: domain.CanonicalID(readFn + "#ext.gorm.order.id.read@5"), Kind: domain.KindFieldAccess,
+			Name: "order.id", FilePath: "a.go", LineStart: 5,
+			Properties: map[string]any{"full_path": "order.id", "instance_path": "order.id",
+				"access_kind": "read", "type_string": "gorm", "is_external": "true", "func_id": readFn}},
+		{ID: domain.CanonicalID(saveFn + "#ext.gorm.A.order_id.write@15"), Kind: domain.KindFieldAccess,
+			Name: "A.order_id", FilePath: "a.go", LineStart: 15,
+			Properties: map[string]any{"full_path": "A.order_id", "instance_path": "A.order_id",
+				"access_kind": "write", "type_string": "gorm", "is_external": "true", "func_id": saveFn}},
+	}
+	edges := []*domain.Fact{
+		// order.id 读出 → t1 →(returns) t2
+		{SourceID: domain.CanonicalID(readFn + "#ext.gorm.order.id.read@5"), TargetID: domain.CanonicalID(readFn + "#t1"),
+			Kind: domain.FactSummaryIO, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: domain.CanonicalID(readFn + "#t1"), TargetID: domain.CanonicalID(svcFn + "#t2"),
+			Kind: domain.FactReturns, ToolSource: domain.ToolSSA, Confidence: 1},
+		// 字段级赋值：t2 → a.OrderId 字段写 + 基地址 a ↔ 字段节点
+		{SourceID: domain.CanonicalID(svcFn + "#t2"), TargetID: domain.CanonicalID(svcFn + "#a.OrderId.write@10"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: domain.CanonicalID(svcFn + "#a"), TargetID: domain.CanonicalID(svcFn + "#a.OrderId.write@10"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+		// 基地址 a →(argument) param.v(saveA)
+		{SourceID: domain.CanonicalID(svcFn + "#a"), TargetID: domain.CanonicalID(saveFn + "#param.v"),
+			Kind: domain.FactArgument, ToolSource: domain.ToolSSA, Confidence: 1},
+		// param.v → A.order_id 写入
+		{SourceID: domain.CanonicalID(saveFn + "#param.v"), TargetID: domain.CanonicalID(saveFn + "#ext.gorm.A.order_id.write@15"),
+			Kind: domain.FactSummaryIO, ToolSource: domain.ToolSSA, Confidence: 1},
+	}
+	save(t, r, nodes, edges)
+
+	// order 表 BFS：order.id 读出值经字段赋值（a.OrderId = t）写入
+	// A.order_id——跨函数 write 应保留（taint {id} 与 order_id 呼应）
+	rels, err := r.GetTableRelations("order", "full")
+	if err != nil {
+		t.Fatalf("GetTableRelations: %v", err)
+	}
+	found := false
+	for _, rel := range rels {
+		if rel.FromTable == "order" && rel.FromCol == "id" && rel.ToTable == "A" &&
+			rel.ToCol == "order_id" && rel.Type == domain.RelationWrite {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("跨函数 write 带字段级赋值（order.id → A.order_id）应保留，got %+v", rels)
+	}
+}

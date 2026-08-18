@@ -7,10 +7,59 @@ import (
 	"github.com/schaepher/codeintel/internal/domain"
 )
 
-// bfsNode BFS 队列元素：id + 链是否已跨函数（Q199）
+// bfsNode BFS 队列元素：id + 链是否已跨函数（Q199）+ 值级 taint
+// （Q202：起点列字段名集合——跨函数 write 时用 taint 与终点列呼应
+// 判定字段值是否真实传递；仅对象整体传递无 taint 则丢弃）
 type bfsNode struct {
 	id      string
 	crossed bool
+	taint   []string
+}
+
+// colNameOf 节点名的列部分（"a.OrderId" → "OrderId"；无点返回空）。
+func colNameOf(name string) string {
+	if i := strings.LastIndex(name, "."); i >= 0 {
+		return name[i+1:]
+	}
+	return ""
+}
+
+// contains 切片包含判断。
+func contains(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+// intersectTaint 两集合交集。
+func intersectTaint(a, b []string) []string {
+	var out []string
+	for _, x := range a {
+		if contains(b, x) {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+// taintMatches taint 中任一字段与列名呼应（Q159 规则：a_id 含 id 或
+// id 含 a_id，大小写不敏感）——order_id 与 id 呼应，create_time 与
+// id 不呼应。
+func taintMatches(taint []string, col string) bool {
+	if len(taint) == 0 {
+		return false
+	}
+	lc := strings.ToLower(col)
+	for _, tf := range taint {
+		lt := strings.ToLower(tf)
+		if strings.HasSuffix(lc, lt) || strings.HasSuffix(lt, lc) {
+			return true
+		}
+	}
+	return false
 }
 
 func (g *relationGraph) relationsFor(table string) []*domain.TableRelation {
@@ -27,7 +76,13 @@ func (g *relationGraph) relationsFor(table string) []*domain.TableRelation {
 	for _, st := range starts {
 		visited := map[string]int{st.id: 0}
 		crossed := map[string]bool{} // 到达该节点的链是否经过跨函数边（argument/returns）
-		queue := []bfsNode{{id: st.id}}
+		stCol := st.name
+		if i := strings.Index(stCol, "."); i >= 0 {
+			stCol = stCol[i+1:]
+		}
+		tainted := map[string][]string{}
+		queue := []bfsNode{{id: st.id, taint: []string{stCol}}}
+		tainted[st.id] = queue[0].taint
 		for len(queue) > 0 {
 			cur := queue[0]
 			queue = queue[1:]
@@ -42,7 +97,19 @@ func (g *relationGraph) relationsFor(table string) []*domain.TableRelation {
 				}
 				visited[other] = depth + 1
 				crossed[other] = cur.crossed || g.crossEdges[cur.id][other]
-				queue = append(queue, bfsNode{id: other, crossed: crossed[other]})
+				// Q202 值级 taint 传播：字段读节点 → 解引用值 时 taint 与
+				// 该字段名求交（role.Id.read 只取出 id 的 taint——create_time
+				// 的 taint 不流入 id 值）；其余边 taint 延续（对象整体携带
+				// 起点字段 taint，字段赋值处延续到目标对象）
+				t := cur.taint
+				if n := g.nodes[cur.id]; n != nil && n.kind == string(domain.KindFieldAccess) &&
+					n.access == "read" && contains(g.allOut[cur.id], other) {
+					if cn := colNameOf(n.name); cn != "" {
+						t = intersectTaint(cur.taint, []string{cn})
+					}
+				}
+				tainted[other] = t
+				queue = append(queue, bfsNode{id: other, crossed: crossed[other], taint: t})
 			}
 
 			if n := g.nodes[cur.id]; n != nil && n.funcID != "" {
@@ -54,7 +121,7 @@ func (g *relationGraph) relationsFor(table string) []*domain.TableRelation {
 						if _, ok := visited[n2.id]; !ok {
 							visited[n2.id] = depth + 1
 							crossed[n2.id] = cur.crossed
-							queue = append(queue, bfsNode{id: n2.id, crossed: crossed[n2.id]})
+							queue = append(queue, bfsNode{id: n2.id, crossed: crossed[n2.id], taint: cur.taint})
 						}
 					}
 				}
@@ -89,11 +156,11 @@ func (g *relationGraph) relationsFor(table string) []*domain.TableRelation {
 			case "filter":
 				rtype = domain.RelationQuery
 			case "write":
-				// Q199：同源写要求"同一值"写入两表列——链经过跨函数边
-				// （argument/returns 整对象传递）时只是对象级连通，字段值
-				// 并未流入（go2o 实测：role 对象整体传参后 rbac_role 全部
-				// 字段列误连 rbac_role_res.id）——丢弃跨函数 write
-				if crossed[id] {
+				// Q199/Q202：跨函数 write——链上值级 taint（起点列字段名）
+				// 与终点列呼应（id ⊆ order_id）则字段值真实传递（order.id
+				// 读出 → 赋 A.order_id），保留；仅对象整体传递无 taint 或
+				// 不呼应则丢弃（create_time → res.id 假同源）
+				if crossed[id] && !taintMatches(tainted[id], col) {
 					continue
 				}
 				rtype = domain.RelationWrite
