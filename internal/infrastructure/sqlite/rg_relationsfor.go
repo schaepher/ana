@@ -209,10 +209,16 @@ func (g *relationGraph) relationsFor(table string) []*domain.TableRelation {
 				// （xxx_id/xxx 与表名呼应，如 rbac_role_res.role_id ↔
 				// rbac_role）时保留：外键值即使来自请求参数，业务上
 				// 也引用本表主键（用户确认）
-				if crossed[id] && !taintMatches(tainted[id], col) {
-					// Q202b：外键回退——起点列须是主键形态（id/表名单数，
-					// 防任意列误连），目标列须是外键形态（xxx_id 呼应本表）
-					if !(fkColMatches(col, table) && pkColMatches(fromCol, table)) {
+				if crossed[id] {
+					if !(fkColMatches(col, table) && pkColMatches(fromCol, table)) &&
+						!taintMatches(tainted[id], col) {
+						continue
+					}
+					// Q202c：跨函数 write 目标列须外键形态（呼应本表名）——
+					// role.id → res_id 虽值流 taint 呼应（{id} ⊆ res_id），
+					// 但 res_id 是资源 id 非角色外键（值仅同函数上下文
+					// 连通，非直接关系），不展示；role_id/order_id 呼应
+					if !fkColMatches(col, table) {
 						continue
 					}
 				}
