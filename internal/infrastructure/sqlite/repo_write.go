@@ -104,9 +104,9 @@ func (r *Repo) SaveBatchStats(nodes []*domain.CodeEntity, edges []*domain.Fact,
 		stmt.Close()
 	}
 	if len(allOrigins) > 0 {
-		stmt, err := tx.Prepare(`INSERT OR IGNORE INTO summary_origins
+		stmt, err := tx.Prepare(`INSERT OR REPLACE INTO summary_origins
 			(function_id, access_kind, field_path, call_line, callee_id)
-			VALUES (?, ?, ?, ?, ?)`)
+			VALUES (?, ?, ?, ?, ?)`) // Q215：覆盖旧行（同 Q215 summary）
 		if err != nil {
 			return nil, fmt.Errorf("prepare origin insert: %w", err)
 		}

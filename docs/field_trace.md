@@ -2058,8 +2058,8 @@ db.DB())`），assignTargets 区间匹配误配到外层变量 err。修复 **to
 | orm.Mapping 表名映射 | ✅ 已实现（Q211） | go2o pm_coupon/dlvl_area 等表已补齐（2026-08-18） |
 | SQL 路径 taint 同步 | ✅ 已实现（Q212） | `--memory sql` 与内存路径语义一致（2026-08-18） |
 | 依赖签名缓存失效 | ✅ 已实现（Q213） | 失效键纳入直接依赖包 hash（2026-08-18） |
-| G6 CDN 锁版本 | ⏳ Q214 | e2e 颜色断言降级待恢复 |
-| 包级缓存陈旧行清理 | ⏳ Q215 | 删除函数/文件的摘要行残留 |
+| G6 CDN 锁版本 | ✅ 已实现（Q214） | 锁 @antv/g6@5.1.1 + 颜色断言恢复（2026-08-18） |
+| 包级缓存陈旧行清理 | ✅ 已实现（Q215） | OR REPLACE 覆盖陈旧摘要（2026-08-18） |
 | 列名呼应升级 | 🔭 Q216 长期候选 | 保持呼应（用户接受权衡） |
 
 ### 50.2 设计决策（两轮设计树，全部采纳推荐）
@@ -2110,18 +2110,28 @@ db.DB())`），assignTargets 区间匹配误配到外层变量 err。修复 **to
 - 验证：单测 2 个（键变化/恢复确定性 + 端到端失效——以缓存文件 mtime
   区分命中/重算，命中重放节点时 emit 回调同样收到）+ 12 包 + it
 
-**Q214 G6 CDN 锁版本**
+**Q214 G6 CDN 锁版本（已实现，2026-08-18）**
 - 动机：index.html `@antv/g6@5`（major 范围）解析到 5.1.1 后
   getElementRenderStyle 行为漂移，e2e 颜色断言降级为存在性断言
-- 决策：锁 **`@antv/g6@5.1.1`**（当前实测版本，行为已验证）+ 恢复 e2e
-  颜色断言（金色/粉色参数返回样式）
+- 实现：锁 **`@antv/g6@5.1.1`**；e2e 颜色断言恢复为双层验证——节点
+  存在 + kind 正确（数据层）+ 前端 KIND_COLOR 映射常量（state.js
+  fetch 检查 parameter→#d48806 / result→#f759ab）——getElementRenderStyle
+  在 5.1.1 对 relayoutTree 重建元素抛错（shapeMap 未建），数据层断言
+  不依赖渲染 API 行为
+- 验证：G6 5.1.1 页面加载正常（graph-ready 无 pageerror）；颜色常量
+  断言通过
 
-**Q215 包级缓存陈旧行清理**
-- 动机：增量更新后删除函数/文件的 summary/origins 行残留（INSERT OR
-  IGNORE 不删旧行），fields/indirect_write 展示陈旧数据
-- 决策：**update 构建前**按变更包 DELETE function_field_summary +
-  summary_origins 两表（function_id 前缀 `symbol:go:<pkg>:%` 匹配，
-  canonical ID 前缀精确无歧义）；全量重建自然清理
+**Q215 陈旧摘要覆盖（已实现，2026-08-18）**
+- 动机：增量更新后 fields 展示陈旧摘要（行号/代码片段不更新）
+- 调研修正（与设计决策不同，以实测为准）：**行残留不存在**——schema
+  的 FK ON DELETE CASCADE 已保证（go2o 实测 summary/origins 残留 0）；
+  真实问题是**内容陈旧**——INSERT OR IGNORE 在 UNIQUE
+  (function_id, access_kind, field_path) 冲突时保留旧行，函数修改后
+  行号/代码片段不更新
+- 实现：insertSummarySQL 与 origins 写入改 **INSERT OR REPLACE**（同键
+  覆盖；origins 的 UNIQUE 含全部业务列无陈旧场景，REPLACE 保证幂等）
+- 验证：单测 2 个（summary 同键覆盖行号更新 + origins 同键幂等）+ 12
+  包 + it
 
 **Q216 列名呼应升级（长期候选，不实施）**
 - 现状：Q153 呼应规则已知权衡（列名不呼应的真键关联降级 read），

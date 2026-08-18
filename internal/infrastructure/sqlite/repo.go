@@ -57,8 +57,13 @@ ON CONFLICT(source_id, target_id, kind) DO UPDATE SET
     metadata = excluded.metadata
 WHERE excluded.confidence > edges.confidence`
 
+// insertSummarySQL Q215：OR REPLACE 覆盖（原 OR IGNORE——UNIQUE 冲突
+// 保留旧行，函数修改后行号/代码片段陈旧，fields 展示旧数据）。行残留
+// （函数删除）由 FK ON DELETE CASCADE 保证（nodes 删除级联）。REPLACE
+// 语义：DELETE 旧行 + INSERT 新行——同 UNIQUE 键内容覆盖；origins 无
+// 子表依赖不受影响。
 const insertSummarySQL = `
-INSERT OR IGNORE INTO function_field_summary
+INSERT OR REPLACE INTO function_field_summary
     (function_id, access_kind, field_path, instance_path, line_start, code_snippet)
 VALUES (?, ?, ?, ?, ?, ?)`
 

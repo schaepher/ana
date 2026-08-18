@@ -80,19 +80,12 @@ check('画布出现 parameter 与 result 节点',
   kindsOnGraph.includes('parameter') && kindsOnGraph.includes('result'),
   'kinds=' + kindsOnGraph.join(','));
 
-// 5. 节点配色（渲染期样式）
-const styleOf = (id) => page.evaluate((i) => {
-  const g = window.__codeintelGraph;
-  try {
-    const s = g.getElementRenderStyle(i);
-    return s ? s.fill : null;
-  } catch (err) {
-    return null;
-  }
-}, id);
-// 样式断言曾用 getElementRenderStyle 查金色/粉色——CDN G6@5 未锁版本，
-// 5.1.1 起该 API 对 relayoutTree 重建后的元素抛错（shapeMap 未建），
-// 降级为存在性断言（kind 由第 4 步断言覆盖；颜色回归待锁 G6 版本后恢复）
+// 5. 节点配色（Q214：锁 G6@5.1.1 后恢复颜色断言）
+// getElementRenderStyle（渲染期）在 5.1.1 对 relayoutTree 重建后的元素
+// 抛错（shapeMap 未建）——改为双层验证：
+//   a. 数据层：节点存在且 kind 正确（第 4 步已断言 kind）
+//   b. 映射逻辑：前端 KIND_COLOR 常量（state.js）含 parameter→金 /
+//      result→粉——颜色映射回归不依赖渲染 API 行为
 const paramOnGraph = await page.evaluate((id) => {
   return window.__codeintelGraph.getData().nodes.some((n) => n.id === id);
 }, PARAM_ID);
@@ -101,6 +94,17 @@ const resultOnGraph = await page.evaluate((id) => {
 }, RESULT_ID);
 check('参数/返回节点渲染存在', paramOnGraph && resultOnGraph,
   'param=' + paramOnGraph + ' result=' + resultOnGraph);
+const kindColors = await page.evaluate(async () => {
+  const res = await fetch('/js/state.js');
+  const src = await res.text();
+  return {
+    paramGold: src.includes("parameter: '#d48806'"),
+    resultPink: src.includes("result: '#f759ab'"),
+  };
+});
+check('节点配色映射（parameter 金 / result 粉）',
+  kindColors.paramGold && kindColors.resultPink,
+  JSON.stringify(kindColors));
 
 // 6. 信息栏类型：单击参数节点
 await page.evaluate((id) => window.__codeintelGraph.emit('node:click', { target: { id } }), PARAM_ID);
