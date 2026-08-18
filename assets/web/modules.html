@@ -50,19 +50,18 @@ function render(calls) {
     y: 20 + Math.floor(i / cols) * ROW_GAP,
   }));
   let svg = `<svg width="${W}" height="${H}">`;
-  // 边
+  // 节点先画（底层），边最后画（顶层）——线不被节点矩形掩盖
+  for (const m of list) {
+    const p = pos.get(m.name);
+    svg += `<rect class="${m.external ? 'mod-ext' : 'mod'}" x="${p.x}" y="${p.y}" width="${NODE_W}" height="${NODE_H}" rx="6"/>`;
+    svg += `<text x="${p.x + NODE_W / 2}" y="${p.y + NODE_H / 2 + 4}" text-anchor="middle">${m.name}</text>`;
+  }
   for (const e of edges) {
     const a = pos.get(e.from), b = pos.get(e.to);
     const x1 = a.x + NODE_W, y1 = a.y + NODE_H / 2, x2 = b.x, y2 = b.y + NODE_H / 2;
     svg += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#1677ff" stroke-width="1.5" marker-end="url(#arrow)"/>`;
     const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
     svg += `<text x="${mx}" y="${my - 4}" class="edge-label" text-anchor="middle">${e.label}</text>`;
-  }
-  // 节点
-  for (const m of list) {
-    const p = pos.get(m.name);
-    svg += `<rect class="${m.external ? 'mod-ext' : 'mod'}" x="${p.x}" y="${p.y}" width="${NODE_W}" height="${NODE_H}" rx="6"/>`;
-    svg += `<text x="${p.x + NODE_W / 2}" y="${p.y + NODE_H / 2 + 4}" text-anchor="middle">${m.name}</text>`;
   }
   svg += `<defs><marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#1677ff"/></marker></defs>`;
   svg += '</svg>';
