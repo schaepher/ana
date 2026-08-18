@@ -209,6 +209,11 @@ function bindRelFilter() {
     // Q210：全图画线开关才触发全量加载
     ensureFullRels().then(render);
   });
+  // Q217：localStorage 恢复 SHOW_ALL_LINES=true 时初始化只加载了
+  // 表清单（skip_relations）——须自动触发全量加载，否则刷新后无线
+  if (SHOW_ALL_LINES) {
+    ensureFullRels().then(render);
+  }
 }
 
 // 关系优先布局（两种画法共用）：BFS 连通分量 + 中心对称排列
