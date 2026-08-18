@@ -54,7 +54,7 @@ func isModuleFunction(fn *ssa.Function, modules []string) bool {
 func emitFunction(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
 	idents map[token.Pos]string, assignTargets []assignTarget,
 	specs map[string]summarySpec, fallbackTotal *atomic.Int64, emit domain.EmitFunc,
-	pkgs []*types.Package, dispatchRegs *dispatchReg) (domain.CanonicalID, *funcData, error) {
+	pkgs []*types.Package, dispatchRegs *dispatchReg, typeMapping map[*types.Named]string) (domain.CanonicalID, *funcData, error) {
 	logger := zap.L()
 	logger.Debug("enter emitFunction")
 	defer logger.Debug("exit emitFunction")
@@ -73,7 +73,7 @@ func emitFunction(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
 			return "", nil, nil
 		}
 		fd := &funcData{}
-		err := emitFunctionFields(repo, prog, fn, pid, idents, assignTargets, fd, specs, fallbackTotal, emit, pkgs, dispatchRegs)
+		err := emitFunctionFields(repo, prog, fn, pid, idents, assignTargets, fd, specs, fallbackTotal, emit, pkgs, dispatchRegs, typeMapping)
 		return pid, fd, err
 	}
 	obj, ok := fn.Object().(*types.Func)
@@ -109,7 +109,7 @@ func emitFunction(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
 		return "", nil, err
 	}
 	fd := &funcData{}
-	err := emitFunctionFields(repo, prog, fn, id, idents, assignTargets, fd, specs, fallbackTotal, emit, pkgs, dispatchRegs)
+	err := emitFunctionFields(repo, prog, fn, id, idents, assignTargets, fd, specs, fallbackTotal, emit, pkgs, dispatchRegs, typeMapping)
 	return id, fd, err
 }
 

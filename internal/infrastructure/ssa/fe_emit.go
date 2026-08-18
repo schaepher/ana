@@ -14,7 +14,7 @@ import (
 func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
 	funcID domain.CanonicalID, idents map[token.Pos]string, assignTargets []assignTarget,
 	funcData *funcData, specs map[string]summarySpec, fallbackTotal *atomic.Int64, emit domain.EmitFunc,
-	pkgs []*types.Package, dispatchRegs *dispatchReg) error {
+	pkgs []*types.Package, dispatchRegs *dispatchReg, typeMapping map[*types.Named]string) error {
 	logger := zap.L()
 	logger.Debug("enter emitFunctionFields")
 	defer logger.Debug("exit emitFunctionFields")
@@ -46,6 +46,7 @@ func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Func
 		dispatchRegs:  *dispatchRegs,
 		chainTables:   map[ssa.Value]string{},
 		tableNames:    map[*types.Named]string{},
+		typeMapping:   typeMapping,
 	}
 
 	for _, b := range fn.Blocks {

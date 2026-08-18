@@ -254,8 +254,11 @@ func (ext *fieldExtractor) applySpecKind(cc *ssa.CallCommon, callVal ssa.Value, 
 		if spec.WhereArg >= len(cc.Args) {
 			return false, nil
 		}
-		if c, ok := unwrapConst(cc.Args[spec.WhereArg]); ok {
-			// Q177 真实形态：Where(query interface{}) 常量被包装
+		if c, ok := unwrapConst(cc.Args[spec.WhereArg]); ok && c.Value != nil && c.Value.Kind() == constant.String {
+			// Q177 真实形态：Where(query interface{}) 常量被包装。
+			// Kind 检查（Q211）：WhereArg 零值=未设置 的 spec（如 Save）
+			// 会把首参（可能是 int 常量）误当 where 串——StringVal 对
+			// 非字符串常量 panic（"0 not a String"）
 			cols := whereColsOf(constant.StringVal(c.Value))
 			if err := ext.emitWhereFilterTyped(cc, cols, spec.WhereArg, table, line, spec.Type); err != nil {
 				return false, err

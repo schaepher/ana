@@ -2055,7 +2055,7 @@ db.DB())`），assignTargets 区间匹配误配到外层变量 err。修复 **to
 | 接口摘要泛化（xorm/sqlx 之外框架） | ✅ 已实现 | field-summary.yaml 用户自定义即当初方案，无需代码改动 |
 | 配置表入库 | ✅ 预留完成 | ResetGraphTables 只 DROP 三张图表（edges/function_field_summary/nodes），build_metadata 与未来配置表保留；配置功能无需求未开始 |
 | 动态调用盲区 / 入口可达 / Count-Pluck / ER 懒加载语义 / e2e 断言形态 | 🔒 设计边界 | 用户确认保持或设计权衡（§10/§14.10/§22/§45 已记录） |
-| orm.Mapping 表名映射 | ⏳ Q211 | go2o `orm.Mapping(ValueCoupon{}, "pm_coupon")` 未识别 → pm_coupon/dlvl_area 等表缺失 |
+| orm.Mapping 表名映射 | ✅ 已实现（Q211） | go2o pm_coupon/dlvl_area 等表已补齐（2026-08-18） |
 | SQL 路径 taint 同步 | ⏳ Q212 | `--memory sql` 逃生口 write 精度低于内存路径 |
 | 依赖签名缓存失效 | ⏳ Q213 | 依赖包 API 变化 → 本包缓存命中旧产物 |
 | G6 CDN 锁版本 | ⏳ Q214 | e2e 颜色断言降级待恢复 |
@@ -2064,18 +2064,23 @@ db.DB())`），assignTargets 区间匹配误配到外层变量 err。修复 **to
 
 ### 50.2 设计决策（两轮设计树，全部采纳推荐）
 
-**Q211 orm.Mapping 表名映射**
-- 动机：gof `orm.Mapping(ValueCoupon{}, "pm_coupon")` 静态注册实体→表名，
-  未识别 → go2o pm_coupon/dlvl_area 等表缺失（映射表名只存在于注册点）
-- 决策：**内置 gof spec** 识别 Mapping 为"类型→表名"注册（静态调用 +
-  第二参字符串常量，unwrapConst 已有）；生效于 applyORMWrite/
-  emitWhereFilterTyped 等表名溯源处
-- 匹配键：**实体类型标识（types.Type）精确匹配**（编译期确定性，无
-  字符串歧义）
-- 跨包时序：**收集阶段独立于发射**（先全量收集 typeMapping 再发射——
-  Mapping 可能在包 A 注册、包 B 使用，emitFunction 按包处理顺序不定）
-- 优先级：**链式 Table() 优先**（调用点局部具体），Mapping 兜底（全局
-  注册）；与 orm.Orm spec 的 TableName() 方法并存
+**Q211 orm.Mapping 表名映射（已实现，2026-08-18）**
+- 动机：gof `orm.Mapping(ValueCoupon{}, "pm_coupon")` 注册实体→表名，
+  未识别 → go2o pm_coupon/dlvl_area 等表缺失
+- 实现：**collectOrmMappings 预扫描**（Index 开头全量扫描模块内动态
+  invoke：接口路径 = github.com/ixre/gof/db/orm.Orm + 方法名 Mapping，
+  解 MakeInterface 实体类型 + 表名常量）→ extractor.typeMapping；
+  tableNameOfSlow 在 TableName() 之后、snakeCase fallback 之前查映射
+- 匹配键：**实体类型标识（*types.Named）精确匹配**
+- 跨包时序：**收集独立于发射**（Index 开头一次，emitFunction 并发期间
+  只读——Mapping 在包 A 注册、包 B 使用）
+- 优先级：链式 Table()（调用点）> TableName() 方法 > Mapping > snakeCase
+- 顺带修复：applySpecKind 的 WhereArg 对非字符串常量调 StringVal panic
+  （Save(0, item) 等未配 where_arg 的 spec 把首参 int 常量误当 where
+  串——补 Kind 检查）
+- 验证：单测 3 个（跨包/TableName 优先/写路径，replace 模拟 gof 接口
+  路径）+ 12 包 + it；go2o 实测 pm_coupon/dlvl_area 等表补齐（162 表，
+  含 read/write/filter 全形态）
 
 **Q212 SQL 路径同步 Q202 值级 taint**
 - 动机：`--memory sql` 逃生口路径跨函数 write 仍是 Q199"一律丢弃"，

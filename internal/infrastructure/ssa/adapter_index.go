@@ -89,6 +89,10 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 		}
 	}
 
+	// Q211：orm.Mapping 实体类型→表名收集（发射前全量扫描——Mapping
+	// 可能在包 A 注册、包 B 使用；emitFunction 按包并发期间只读）
+	a.typeMapping = collectOrmMappings(prog, repo.Modules)
+
 	byPkg := map[string][]*ssa.Function{}
 	for fn := range ssautil.AllFunctions(prog) {
 		if !isModuleFunction(fn, repo.Modules) {
@@ -198,7 +202,7 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 				sem <- struct{}{}
 				defer func() { <-sem }()
 				for _, fn := range block {
-					owner, fd, err := emitFunction(repo, prog, fn, idents, assignTargets, specs, &fallbackTotal, pkgEmit, typePkgs, &a.dispatchRegs)
+					owner, fd, err := emitFunction(repo, prog, fn, idents, assignTargets, specs, &fallbackTotal, pkgEmit, typePkgs, &a.dispatchRegs, a.typeMapping)
 					if err != nil {
 						fmt.Fprintf(os.Stderr, "emitFunction %s: %v\n", fn.Name(), err)
 						return

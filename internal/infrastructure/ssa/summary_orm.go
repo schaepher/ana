@@ -281,6 +281,12 @@ func tableNameOfSlow(ext *fieldExtractor, entity types.Type, named *types.Named)
 			}
 		}
 	}
+	// Q211：orm.Mapping 注册（实体类型→表名，go2o Mapping(ValueCoupon{},
+	// "pm_coupon")）——TableName() 方法之后、snakeCase fallback 之前；
+	// 链式 Table() 在调用点（chainTableNameValue）已优先
+	if t, ok := ext.typeMapping[named]; ok {
+		return t
+	}
 	return snakeCase(named.Obj().Name())
 }
 

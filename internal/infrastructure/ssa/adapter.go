@@ -8,6 +8,7 @@ package ssa
 
 import (
 	"go/token"
+	"go/types"
 
 	"github.com/schaepher/codeintel/internal/domain"
 )
@@ -21,6 +22,10 @@ type Adapter struct {
 	// dispatchRegs 接口注册点缓存（Q161 动态边候选元数据）：Index 级
 	// 共享一次扫描——放 extractor（每函数新建）会每函数全 prog 扫描
 	dispatchRegs dispatchReg
+	// typeMapping Q211：orm.Mapping 实体类型→表名注册（Index 级收集，
+	// 发射前全量扫描——规避按包处理顺序：Mapping 可能在包 A 注册、
+	// 包 B 使用）
+	typeMapping map[*types.Named]string
 	// workers 按包并发数（Q169/Q170）：默认 1=串行；命令行 --workers N
 	// 指定（orchestrator SetWorkers 注入）
 	workers int

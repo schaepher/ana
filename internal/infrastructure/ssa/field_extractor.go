@@ -199,6 +199,7 @@ type fieldExtractor struct {
 	regHits       map[string]map[string]bool             // Q168：iface.String() → candidateKey → register 命中（O(1) 判定）
 	chainTables   map[ssa.Value]string                   // Q175：XORM 链式表名（Table 调用返回值 → 表名）
 	tableNames    map[*types.Named]string                // Q205：tableNameOf 结果缓存（无 spec 接口调用兜底高频触发）
+	typeMapping   map[*types.Named]string                // Q211：orm.Mapping 实体类型→表名（Index 级收集共享）
 }
 
 // isSSAName 判断是否为 SSA 临时名（t0、t91 等），用于决定展示名回退。
