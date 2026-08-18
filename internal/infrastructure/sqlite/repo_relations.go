@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/schaepher/codeintel/internal/domain"
 	"go.uber.org/zap"
@@ -80,8 +81,11 @@ func (r *Repo) GetTables() ([]string, error) {
 // 逐表走 relationsForSQL。
 func (r *Repo) GetAllTableRelations(mode string) ([]*domain.TableRelation, error) {
 	logger := zap.L()
-	logger.Debug("enter (Repo).GetAllTableRelations")
-	defer logger.Debug("exit (Repo).GetAllTableRelations")
+	logger.Info("enter (Repo).GetAllTableRelations", zap.String("mode", mode)) // Q207：全库 BFS 耗时可观测
+	start := time.Now()
+	defer func() {
+		logger.Info("exit (Repo).GetAllTableRelations", zap.Duration("elapsed", time.Since(start)))
+	}()
 	// 缓存优先：该 build_id（含分析逻辑版本）已完整计算（覆盖全部表）→ 直接返回
 	if buildID := r.cacheKey(); buildID != "" {
 		if rels, ok := r.loadAllRelationCandidates(buildID); ok {

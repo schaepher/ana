@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/schaepher/codeintel/internal/domain"
 	"go.uber.org/zap"
@@ -16,8 +17,11 @@ import (
 // 空库返回空图（BFS 自然空结果，不报错）。
 func loadRelationGraph(r *Repo) (*relationGraph, error) {
 	logger := zap.L()
-	logger.Debug("enter loadRelationGraph")
-	defer logger.Debug("exit loadRelationGraph")
+	logger.Info("enter loadRelationGraph") // Q207：内存图加载耗时可观测（大仓库秒级）
+	start := time.Now()
+	defer func() {
+		logger.Info("exit loadRelationGraph", zap.Duration("elapsed", time.Since(start)))
+	}()
 	g := &relationGraph{
 		dataAdj:     map[string][]string{},
 		crossEdges:  map[string]map[string]bool{}, // Q199：跨函数边（argument/returns 正向）
