@@ -51,27 +51,14 @@ async function load() {
   render(tables, rels);
 }
 
-// 同对表（无向）关系合并：query > write > read 取主样式，列对标注叠加
-function groupRels(rels) {
-  const g = new Map();
-  for (const r of rels) {
-    const key = [r.from_table, r.to_table].sort().join('|');
-    let e = g.get(key);
-    if (!e) { e = { a: r.from_table, b: r.to_table, type: r.type, items: [] }; g.set(key, e); }
-    if (rank(r.type) > rank(e.type)) e.type = r.type;
-    e.items.push(r);
-  }
-  // 标签排序：高置信 query 优先在前（read 反向垫底）
-  for (const e of g.values()) e.items.sort((x, y) => rank(y.type) - rank(x.type));
-  return [...g.values()];
-  function rank(t) { return t === 'query' ? 2 : t === 'write' ? 1 : 0; }
-}
-
 function cardH(tbl) { return HEAD_H + tbl.columns.length * ROW_H + PAD * 2; }
 
+// 列行在卡片内的锚点（列行中点）
+function colAnchor(p, colName, colIndex) {
+  return { x: p.x + p.w / 2, y: p.y + HEAD_H + colIndex * ROW_H + ROW_H / 2 };
+}
+
 function render(tables, rels) {
-  const byName = new Map(tables.map(t => [t.name, t]));
-  const edges = groupRels(rels);
   const N = tables.length;
   const perRow = Math.max(1, Math.ceil(Math.sqrt(N)));
   // 网格布局：行高取该行最大卡片高
@@ -95,26 +82,34 @@ function render(tables, rels) {
 
   let svg = `<svg width="${Wpx}" height="${Hpx}" xmlns="http://www.w3.org/2000/svg">`;
   svg += `<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#1677ff"/></marker></defs>`;
-  // 边（先画，垫在卡片下）
-  for (const e of edges) {
-    const pa = pos.get(e.a), pb = pos.get(e.b);
+  // 列索引（表 → 列名 → 行号）
+  const colIdx = new Map();
+  tables.forEach(t => {
+    const m = new Map();
+    t.columns.forEach((c, i) => m.set(c.name.includes('.') ? c.name.slice(c.name.indexOf('.') + 1) : c.name, i));
+    colIdx.set(t.name, m);
+  });
+  // 字段指向字段：每条关系从 from 列行锚点 → to 列行锚点
+  // （高置信 query 粗实线 + 箭头，write 虚线，read 点线）
+  for (const r of rels) {
+    const pa = pos.get(r.from_table), pb = pos.get(r.to_table);
     if (!pa || !pb) continue;
-    const ax = pa.x + pa.w / 2, ay = pa.y + pa.h / 2;
-    const bx = pb.x + pb.w / 2, by = pb.y + pb.h / 2;
-    const style = e.type === 'query'
-      ? 'stroke:#1677ff;stroke-width:2.2;marker-end:url(#arr)'
-      : e.type === 'write'
-        ? 'stroke:#fa8c16;stroke-width:1.6;stroke-dasharray:6,3;marker-end:url(#arr)'
-        : 'stroke:#b0b0b0;stroke-width:1;stroke-dasharray:2,3';
-    svg += `<line x1="${ax}" y1="${ay}" x2="${bx}" y2="${by}" style="${style}"/>`;
-    // 标签：线中点上方，同组多列对垂直堆叠
-    const mx = (ax + bx) / 2, my = (ay + by) / 2 - 6;
-    e.items.forEach((r, i) => {
-      const colA = r.from_table + '.' + r.from_col, colB = r.to_table + '.' + r.to_col;
-      svg += `<text x="${mx}" y="${my - i * 13}" class="edge-label" text-anchor="middle">
-        <tspan fill="${e.type === 'query' ? '#1677ff' : e.type === 'write' ? '#d46b08' : '#999'}" font-weight="600">${r.from_col}</tspan> → ${r.to_col}
-      </text>`;
-    });
+    const ia = colIdx.get(r.from_table).get(r.from_col);
+    const ib = colIdx.get(r.to_table).get(r.to_col);
+    if (ia === undefined || ib === undefined) continue;
+    const a = colAnchor(pa, r.from_col, ia), b = colAnchor(pb, r.to_col, ib);
+    const color = r.type === 'query' ? '#1677ff' : r.type === 'write' ? '#fa8c16' : '#b0b0b0';
+    const style = r.type === 'query'
+      ? `stroke:${color};stroke-width:2.2;marker-end:url(#arr)`
+      : r.type === 'write'
+        ? `stroke:${color};stroke-width:1.6;stroke-dasharray:6,3;marker-end:url(#arr)`
+        : `stroke:${color};stroke-width:1;stroke-dasharray:2,3`;
+    svg += `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" style="${style}"/>`;
+    // 标签：线中点上方（from_col → to_col）
+    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2 - 6;
+    svg += `<text x="${mx}" y="${my}" class="edge-label" text-anchor="middle">
+      <tspan fill="${color}" font-weight="600">${r.from_col}</tspan> → ${r.to_col}
+    </text>`;
   }
   // 卡片
   for (const t of tables) {
