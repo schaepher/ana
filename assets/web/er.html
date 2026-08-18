@@ -30,8 +30,7 @@
   .nest-tbl { fill: #fafbfc; stroke: #5b6b7c; stroke-width: 1.5; }
   .nest-head { fill: #5b6b7c; }
   .nest-title { fill: #fff; font-size: 13px; font-weight: 600; }
-  .nest-field { stroke: #c8c8c8; stroke-width: 1; }
-  .nest-field-alt { fill: #f2f4f7; }
+  .nest-field { fill: #fff; stroke: #c8c8c8; stroke-width: 1; }
   .nest-anchor { stroke: none; }
 </style>
 </head>
@@ -283,7 +282,6 @@ function renderNested(data) {
     svg += `<text class="nest-title" x="${p.x + 12}" y="${p.y + 22}">${t.name}</text>`;
     t.columns.forEach((c, i) => {
       const fr = fieldRect(p, i);
-      if (i % 2 === 1) svg += `<rect class="nest-field nest-field-alt" x="${fr.x}" y="${fr.y}" width="${fr.w}" height="${fr.h}"/>`;
       svg += `<rect class="nest-field" x="${fr.x}" y="${fr.y}" width="${fr.w}" height="${fr.h}"/>`;
       const cy = fr.y + fr.h / 2 + 4;
       svg += fieldText(fr.x + 8, cy, c);
