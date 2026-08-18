@@ -9,7 +9,6 @@ import (
 
 	"github.com/schaepher/codeintel/internal/action"
 	"github.com/schaepher/codeintel/internal/domain"
-	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
 )
 
 // relationsFilter P0④ 输出过滤：--type/--max-hops/--max-results。
@@ -46,7 +45,7 @@ func relationsFilter(f *queryFlags) func([]*domain.TableRelation) []*domain.Tabl
 // relationHopsFromFlags 组装三类跳数上限（Q197）：默认 4；
 // 显式传 0 = 不限制；--include-long-query 等价 --query-max-hops 0。
 func relationHopsFromFlags(f *queryFlags) domain.RelationHops {
-	h := sqlite.DefaultRelationHops
+	h := domain.DefaultRelationHops
 	// -1 = 未传（保持默认）；>=0 = 显式设置（0 = 不限制）
 	if f.queryMaxHops >= 0 {
 		h.Query = f.queryMaxHops

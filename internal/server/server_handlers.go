@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/schaepher/codeintel/internal/action"
 	"github.com/schaepher/codeintel/internal/domain"
@@ -49,6 +50,18 @@ func (s *Server) handleModuleCalls(w http.ResponseWriter, r *http.Request) {
 // （query 键关联高置信 / write 同源中置信 / read 间接低置信）——
 // 前端 er.html 数据源。
 func (s *Server) handleER(w http.ResponseWriter, r *http.Request) {
+	// 跳数上限参数（Q197，网页版可配置）：q_hops/w_hops/r_hops，
+	// 缺省或非法用默认 4；0 = 不限制
+	h := domain.DefaultRelationHops
+	for _, kv := range []struct {
+		key string
+		dst *int
+	}{{"q_hops", &h.Query}, {"w_hops", &h.Write}, {"r_hops", &h.Read}} {
+		if v, err := strconv.Atoi(r.URL.Query().Get(kv.key)); err == nil && v >= 0 {
+			*kv.dst = v
+		}
+	}
+	s.acts.SetRelationHops(h)
 	data, err := s.acts.ER()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())

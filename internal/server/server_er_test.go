@@ -112,3 +112,82 @@ func TestHandleER(t *testing.T) {
 		t.Errorf("正向关系 type = %v, want query", (*found)["type"])
 	}
 }
+
+// TestHandleERHopsParam：/api/er 跳数上限参数（Q197，网页版可配置）——
+// 默认滤 >4 跳 query；?q_hops=0 不限制（长链可见）。
+func TestHandleERHopsParam(t *testing.T) {
+	dir := t.TempDir()
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	r := sqlite.NewRepo(db)
+
+	funcID := "symbol:go:example.com/m:find"
+	nodes := []*domain.CodeEntity{
+		{ID: domain.CanonicalID(funcID), Kind: domain.KindFunction, Name: "find", FilePath: "a.go"},
+		// 5 跳 query 链：a.id read → t1 → t2 → t3 → t4 → b.a_id filter
+		{ID: domain.CanonicalID(funcID + "#ext.sql.table_a.id.read@6"), Kind: domain.KindFieldAccess,
+			Name: "table_a.id", FilePath: "a.go", LineStart: 6,
+			Properties: map[string]any{"full_path": "table_a.id", "instance_path": "table_a.id",
+				"access_kind": "read", "type_string": "sql", "is_external": "true", "func_id": funcID}},
+		{ID: domain.CanonicalID(funcID + "#ext.sql.table_b.a_id.filter@9"), Kind: domain.KindFieldAccess,
+			Name: "table_b.a_id", FilePath: "a.go", LineStart: 9,
+			Properties: map[string]any{"full_path": "table_b.a_id", "instance_path": "table_b.a_id",
+				"access_kind": "filter", "type_string": "sql", "is_external": "true", "func_id": funcID}},
+		{ID: domain.CanonicalID(funcID + "#t1"), Kind: domain.KindSSAValue, Name: "t1",
+			Properties: map[string]any{"func_id": funcID}},
+		{ID: domain.CanonicalID(funcID + "#t2"), Kind: domain.KindSSAValue, Name: "t2",
+			Properties: map[string]any{"func_id": funcID}},
+		{ID: domain.CanonicalID(funcID + "#t3"), Kind: domain.KindSSAValue, Name: "t3",
+			Properties: map[string]any{"func_id": funcID}},
+		{ID: domain.CanonicalID(funcID + "#t4"), Kind: domain.KindSSAValue, Name: "t4",
+			Properties: map[string]any{"func_id": funcID}},
+	}
+	edges := []*domain.Fact{
+		{SourceID: domain.CanonicalID(funcID + "#ext.sql.table_a.id.read@6"), TargetID: domain.CanonicalID(funcID + "#t1"),
+			Kind: domain.FactSummaryIO, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: domain.CanonicalID(funcID + "#t1"), TargetID: domain.CanonicalID(funcID + "#t2"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: domain.CanonicalID(funcID + "#t2"), TargetID: domain.CanonicalID(funcID + "#t3"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: domain.CanonicalID(funcID + "#t3"), TargetID: domain.CanonicalID(funcID + "#t4"),
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+		{SourceID: domain.CanonicalID(funcID + "#t4"), TargetID: domain.CanonicalID(funcID + "#ext.sql.table_b.a_id.filter@9"),
+			Kind: domain.FactSummaryIO, ToolSource: domain.ToolSSA, Confidence: 1},
+	}
+	if _, err := r.SaveBatchStats(nodes, edges, nil); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	web := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<html></html>")}}
+	srv := New(context.Background(), action.New(r), web, dir)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	relsOf := func(path string) int {
+		_, m := get(t, ts, path)
+		rels, _ := m["relations"].([]any)
+		return len(rels)
+	}
+	// 默认（4 跳）：5 跳 query 被滤
+	if n := relsOf("/api/er"); n != 0 {
+		t.Errorf("默认应滤 5 跳 query，got %d 条", n)
+	}
+	// q_hops=0（不限制）：5 跳 query 可见
+	if n := relsOf("/api/er?q_hops=0"); n != 1 {
+		t.Errorf("q_hops=0 应保留 5 跳 query，got %d 条", n)
+	}
+	// q_hops=6：5 跳 ≤ 6 保留
+	if n := relsOf("/api/er?q_hops=6"); n != 1 {
+		t.Errorf("q_hops=6 应保留 5 跳 query，got %d 条", n)
+	}
+	// 非法参数（负数/非数字）回退默认
+	if n := relsOf("/api/er?q_hops=-1"); n != 0 {
+		t.Errorf("负数参数应回退默认（滤 5 跳），got %d 条", n)
+	}
+	if n := relsOf("/api/er?q_hops=abc"); n != 0 {
+		t.Errorf("非法参数应回退默认，got %d 条", n)
+	}
+}

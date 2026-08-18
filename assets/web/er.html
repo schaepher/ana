@@ -15,6 +15,9 @@
   .mode-switch button.active { background: #2f54eb; color: #fff; }
   .rel-filter { display: flex; gap: 12px; font-size: 12px; color: #555; align-items: center; }
   .rel-filter label { display: flex; align-items: center; gap: 3px; cursor: pointer; }
+  .hops-config { display: flex; gap: 6px; font-size: 12px; color: #555; align-items: center; }
+  .hops-config label { display: flex; align-items: center; gap: 2px; }
+  .hops-config input { border: 1px solid #d9d9d9; border-radius: 4px; padding: 2px 4px; font-size: 12px; }
   #svg-wrap { padding: 20px; overflow: auto; }
   svg { background: #fff; border: 1px solid #e8e8e8; display: block; }
   .tbl { fill: #fff; stroke: #c8c8c8; stroke-width: 1; }
@@ -55,6 +58,11 @@
     <label><input type="checkbox" id="f-write">同源写</label>
     <label><input type="checkbox" id="f-read">间接读</label>
   </div>
+  <div class="hops-config" title="三类关系的跳数上限（0=不限制），回车应用；配置本地保存">
+    <label>跳数 <input id="h-query" type="number" min="0" value="4" style="width:44px">q</label>
+    <label><input id="h-write" type="number" min="0" value="4" style="width:44px">w</label>
+    <label><input id="h-read" type="number" min="0" value="4" style="width:44px">r</label>
+  </div>
   <div class="legend">
     <span class="li"><svg width="30" height="10"><line x1="1" y1="5" x2="29" y2="5" stroke="#1677ff" stroke-width="2.2"/></svg>键关联（实线）</span>
     <span class="li"><svg width="30" height="10"><line x1="1" y1="5" x2="29" y2="5" stroke="#fa8c16" stroke-width="1.6" stroke-dasharray="6,3"/></svg>同源写（虚线）</span>
@@ -80,9 +88,38 @@ const PALETTE = ['#1677ff', '#fa8c16', '#52c41a', '#f5222d', '#722ed1', '#13c2c2
   '#eb2f96', '#a0d911', '#2f54eb', '#faad14', '#08979c', '#d4380d'];
 
 async function load() {
-  const res = await fetch('/api/er');
-  DATA = await res.json();
+  // 跳数上限（localStorage 持久化，默认 4；0 = 不限制）
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem('codeintel.erHops')); } catch (e) {}
+  const hops = Object.assign({ q: 4, w: 4, r: 4 }, saved || {});
+  document.getElementById('h-query').value = hops.q;
+  document.getElementById('h-write').value = hops.w;
+  document.getElementById('h-read').value = hops.r;
+  DATA = await fetchER(hops);
   render();
+}
+
+async function fetchER(hops) {
+  const res = await fetch('/api/er?q_hops=' + hops.q + '&w_hops=' + hops.w + '&r_hops=' + hops.r);
+  return res.json();
+}
+
+// 跳数配置：change/回车应用（重新拉取数据）
+function bindHopsConfig() {
+  ['h-query', 'h-write', 'h-read'].forEach(id => {
+    const el = document.getElementById(id);
+    const apply = () => {
+      const hops = {
+        q: parseInt(document.getElementById('h-query').value) || 0,
+        w: parseInt(document.getElementById('h-write').value) || 0,
+        r: parseInt(document.getElementById('h-read').value) || 0,
+      };
+      localStorage.setItem('codeintel.erHops', JSON.stringify(hops));
+      fetchER(hops).then(d => { DATA = d; render(); });
+    };
+    el.addEventListener('change', apply);
+    el.addEventListener('keydown', evt => { if (evt.key === 'Enter') apply(); });
+  });
 }
 
 // 按显示开关过滤关系（大规模表同源写/间接读成千上万，默认只画键关联）
@@ -460,6 +497,7 @@ function bindModeSwitch() {
 bindRelFilter();
 bindModeSwitch();
 bindDblClick();
+bindHopsConfig();
 load();
 </script>
 </body>

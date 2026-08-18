@@ -148,8 +148,8 @@ func relTypeRank(t string) int {
 // MaxRelationHops 关系跳数上限默认值（Q195/Q196：6-10 跳长链为噪音失真）。
 const MaxRelationHops = 4
 
-// DefaultRelationHops 默认跳数上限（当前设定值：三类全部 4 跳）。
-var DefaultRelationHops = domain.RelationHops{Query: MaxRelationHops, Write: MaxRelationHops, Read: MaxRelationHops}
+// DefaultRelationHops 默认跳数上限（引用 domain 版，当前设定值 4/4/4）。
+var DefaultRelationHops = domain.DefaultRelationHops
 
 // dedupRelationNoise 关系降噪（Q195/Q196/Q197，全部 relations 出口统一应用——
 // 缓存命中路径也过一遍，保证旧缓存同样被降噪）：

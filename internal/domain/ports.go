@@ -136,13 +136,16 @@ type TableRelation struct {
 }
 
 // RelationHops 三类关系的跳数上限（Q197，0 = 不限制）：
-// Query 键关联 / Write 同源写 / Read 间接读。默认 4 跳
-// （与 MaxRelationHops 一致，见 sqlite 包 DefaultRelationHops）。
+// Query 键关联 / Write 同源写 / Read 间接读。
 type RelationHops struct {
 	Query int `json:"query"`
 	Write int `json:"write"`
 	Read  int `json:"read"`
 }
+
+// DefaultRelationHops 默认跳数上限（当前设定值：三类全部 4 跳；
+// 与 sqlite 包 MaxRelationHops 一致，Q195/Q196）。
+var DefaultRelationHops = RelationHops{Query: 4, Write: 4, Read: 4}
 
 // ERTable ER 图的一个表节点（/api/er）：表名 + 列清单。
 type ERTable struct {
