@@ -241,6 +241,51 @@ func caller(o Orm) {
 	}
 }
 
+// TestInferIfaceFilterSQLType：Q205 通用性——inferInterfaceFilter 的
+// vtype 不写死 gorm：where 串是完整 SQL（SELECT/FROM/WHERE）时标注
+// sql（业务接口方法如 SelectByQuery 封装返回 []T 的形态），列条件
+// 占位符形态（"col = $1"）保持 gorm。
+func TestInferIfaceFilterSQLType(t *testing.T) {
+	nodes, _, _ := indexFixtureFull(t, map[string]string{
+		"go.mod": moduleGoMod,
+		"main.go": `package m
+
+type AttrItem struct {
+	Id     int
+	AttrId int
+	Value  string
+}
+
+type Repo interface {
+	QueryBySQL(where string, args ...interface{}) []*AttrItem
+	QueryByCol(where string, args ...interface{}) []*AttrItem
+}
+
+func use(r Repo, attrId int) {
+	_ = r.QueryBySQL("SELECT * FROM attr_item WHERE attr_id = $1", attrId)
+	_ = r.QueryByCol("attr_id = $1", attrId)
+}
+`,
+	})
+	funcID := "symbol:go:example.com/mtest:use"
+	find := func(name, access, ts string) bool {
+		for _, n := range nodes {
+			if n.Kind == domain.KindFieldAccess && n.Property("func_id") == funcID &&
+				n.Name == name && n.Property("access_kind") == access &&
+				n.Property("type_string") == ts {
+				return true
+			}
+		}
+		return false
+	}
+	if !find("attr_item.attr_id", "filter", "sql") {
+		t.Error("SQL 全文 where 的 filter 节点应为 type_string=sql（非固定 gorm）")
+	}
+	if !find("attr_item.attr_id", "filter", "gorm") {
+		t.Error("列条件占位符形态保持 gorm")
+	}
+}
+
 // TestBuiltinGofOrmSpecs：Q205 内置 spec 注册校验——gof orm.Orm 字符串
 // where 形态的 key 与参数（防止误删/参数漂移）。
 func TestBuiltinGofOrmSpecs(t *testing.T) {

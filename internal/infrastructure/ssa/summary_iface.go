@@ -88,8 +88,22 @@ func (ext *fieldExtractor) inferInterfaceFilter(cc *ssa.CallCommon, callVal ssa.
 		if len(cols) == 0 {
 			continue
 		}
+		// Q205 通用性：vtype 不写死 gorm——where 串是完整 SQL（SELECT/
+		// UPDATE/DELETE 全文，如 SelectByQuery 类封装返回 []T 的接口
+		// 方法）标注 sql，且列名用 parseSQLStmt 提取（whereColsOf 只
+		// 适用于列条件占位符形态，对 SQL 全文会解析出整串）；列条件
+		// 占位符形态（"col = $1"）保持 gorm
+		vtype := "gorm"
+		up := strings.ToUpper(strings.TrimSpace(s))
+		if strings.HasPrefix(up, "SELECT ") || strings.HasPrefix(up, "UPDATE ") ||
+			strings.HasPrefix(up, "DELETE FROM ") || strings.HasPrefix(up, "INSERT INTO ") {
+			vtype = "sql"
+			if _, _, wc := parseSQLStmt(s); len(wc) > 0 {
+				cols = wc
+			}
+		}
 		line := ext.prog.Fset.PositionFor(cc.Pos(), false).Line
-		if err := ext.emitWhereFilterTyped(cc, cols, i, table, line, ""); err != nil {
+		if err := ext.emitWhereFilterTyped(cc, cols, i, table, line, vtype); err != nil {
 			return
 		}
 		return // 首个 where 串即可（多 where 参数罕见）
