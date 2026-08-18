@@ -35,6 +35,8 @@ type fileCtx struct {
 	// HTTP req 变量（P1-3）：req 名 → URL（req := http.NewRequest(...) 赋值追踪，
 	// 供 client.Do(req) 消费防重复判断）
 	reqVars map[string]string
+	// Q205d：req 名 → HTTP method（NewRequest 的 method 实参，Do 消费复用）
+	reqMethods map[string]string
 	// 本函数已 emit http_call 的 URL（NewRequest 建边后，Do(req) 不重复）
 	httpURLsSeen map[string]bool
 	// 函数值变量（P2-1）：f := g / f := obj.Method → f 名 → *types.Func
@@ -172,6 +174,7 @@ func (ctx *fileCtx) trackBindings(n ast.Node) {
 					// （URL 提取含常量拼接；client.Do(req) 消费时防重复判断）
 					if url, okU := httpURLString(ctx.pkg, ctx.methodVars, call, cc); okU {
 						ctx.reqVars[id.Name] = url
+						ctx.reqMethods[id.Name] = httpMethodOf(ctx.pkg, ctx.methodVars, call, cc)
 					}
 				}
 			}

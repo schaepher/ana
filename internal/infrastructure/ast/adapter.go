@@ -118,6 +118,7 @@ func (a *Adapter) processFile(repo *domain.Repository, pkg *packages.Package, f 
 		// HTTP req 变量（P1-3）：req 名 → URL（req := http.NewRequest(...) 赋值追踪，
 		// 供 client.Do(req) 消费防重复判断）
 		reqVars: map[string]string{},
+		reqMethods: map[string]string{},
 		// 本函数已 emit http_call 的 URL（NewRequest 建边后，Do(req) 不重复）
 		httpURLsSeen: map[string]bool{},
 		// 函数值变量（P2-1）：f := g / f := obj.Method → f 名 → *types.Func

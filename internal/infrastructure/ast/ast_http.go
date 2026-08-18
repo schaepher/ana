@@ -75,3 +75,28 @@ func httpURLString(pkg *packages.Package, methodVars map[string]string,
 	}
 	return u, true
 }
+
+// httpMethodOf Q205d：按调用形态取 HTTP method 实参（常量传播）：
+// http.Get → "GET"；NewRequest → Args[0]；NewRequestWithContext →
+// Args[1]；未知/非常量 → ""（emitHTTP 默认 GET）。此前 emitHTTP 在
+// 内部猜 Args[0]，http.Get(字面量 URL) 会把 URL 当 method。
+func httpMethodOf(pkg *packages.Package, methodVars map[string]string, call *ast.CallExpr, callee *types.Func) string {
+	if callee == nil {
+		return ""
+	}
+	idx := -1
+	switch callee.Name() {
+	case "Get":
+		return "GET"
+	case "NewRequest":
+		idx = 0
+	case "NewRequestWithContext":
+		idx = 1
+	default:
+		return ""
+	}
+	if len(call.Args) <= idx {
+		return ""
+	}
+	return extractStringArg(pkg, methodVars, call.Args[idx])
+}

@@ -2,9 +2,7 @@ package ast
 
 import (
 	"go/ast"
-	"go/token"
 	"go/types"
-	"strconv"
 
 	"github.com/schaepher/codeintel/internal/domain"
 )
@@ -205,7 +203,11 @@ func (ctx *fileCtx) emitCall(call *ast.CallExpr) {
 // client、HTTP 客户端、uses 边。
 
 // emitHTTP §18.7：URL → 路由表匹配 → http_call 边 + http 路由节点。
-func (ctx *fileCtx) emitHTTP(call *ast.CallExpr, callerID domain.CanonicalID, url string, line int) {
+// httpMethod 由调用方按形态提取（Q205d：Get → GET；NewRequest →
+// Args[0]；NewRequestWithContext → Args[1]；Do → 复用 NewRequest 的），
+// 空则默认 GET——此前在函数内猜 Args[0] 会把 http.Get(url) 的 URL 当
+// method（模块间调用页 label 显示 "http http://..." 噪音）。
+func (ctx *fileCtx) emitHTTP(call *ast.CallExpr, callerID domain.CanonicalID, url string, line int, httpMethod string) {
 	host, path := parseURL(url)
 	target := ""
 	for _, re := range ctx.a.routes {
@@ -221,13 +223,8 @@ func (ctx *fileCtx) emitHTTP(call *ast.CallExpr, callerID domain.CanonicalID, ur
 		}
 		target = "symbol:http:" + h + ":route." + path
 	}
-	httpMethod := "GET"
-	if len(call.Args) > 0 {
-		if bl, ok := call.Args[0].(*ast.BasicLit); ok && bl.Kind == token.STRING {
-			if m, err := strconv.Unquote(bl.Value); err == nil && m != "" {
-				httpMethod = m
-			}
-		}
+	if httpMethod == "" {
+		httpMethod = "GET"
 	}
 	_ = ctx.emit(domain.Item{Node: &domain.CodeEntity{
 		ID:         domain.CanonicalID(target),

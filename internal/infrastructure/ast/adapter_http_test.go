@@ -144,6 +144,11 @@ func callUsers() {
 func callExt() {
 	http.Get("https://ext.example.com/other")
 }
+
+// ④ Get 字面量 URL：method 应为 GET（不得误取 URL 当 method）
+func callGetLit() {
+	http.Get("https://orders.example.com/api/orders")
+}
 `,
 		"svc_orders/svc.go": `package svc_orders
 
@@ -159,10 +164,14 @@ func (h *Handler) List() {}
 `,
 	})
 	gotCall := map[string]string{}
+	gotMethod := map[string]string{}
 	for _, f := range facts {
 		if f.Kind == domain.FactHTTPCall {
 			key := string(f.SourceID)
 			gotCall[key] = string(f.TargetID) + "|" + f.Metadata["path"].(string) + "|" + f.Metadata["host"].(string)
+			if m, _ := f.Metadata["method"].(string); m != "" {
+				gotMethod[key] = m
+			}
 		}
 	}
 
@@ -185,6 +194,14 @@ func (h *Handler) List() {}
 
 	if !strings.Contains(gotCall[key3], "ext.example.com") {
 		t.Errorf("callExt host 缺失: %q", gotCall[key3])
+	}
+	// Q205d：method 标注——http.Get(字面量 URL) 不得把 URL 当 method；
+	// NewRequest 形态取 method 实参
+	if gotMethod["symbol:go:example.com/mtest/svc_a:callGetLit"] != "GET" {
+		t.Errorf("callGetLit method = %q, want GET（http.Get(url) 误取 URL 当 method）", gotMethod["symbol:go:example.com/mtest/svc_a:callGetLit"])
+	}
+	if gotMethod["symbol:go:example.com/mtest/svc_a:callUsers"] != "GET" {
+		t.Errorf("callUsers method = %q, want GET（NewRequest 取 method 实参）", gotMethod["symbol:go:example.com/mtest/svc_a:callUsers"])
 	}
 }
 

@@ -205,16 +205,23 @@ func (ctx *fileCtx) emitSelectorCall(call *ast.CallExpr, callee *types.Func, sel
 	}
 	// §18.7 HTTP 客户端：http.Get(url) / http.NewRequest(method, url, ...)
 	// / NewRequestWithContext(ctx, method, url, ...)（P1-3 补）
-	// URL 字面量+常量传播 → 路由表匹配 → http_call 边
+	// URL 字面量+常量传播 → 路由表匹配 → http_call 边。
+	// Q205d：method 按调用形态取实参（Get → GET；NewRequest → Args[0]；
+	// NewRequestWithContext → Args[1]）——不得把 URL 当 method
 	if url, okURL := httpURLString(pkg, ctx.methodVars, call, callee); okURL {
-		ctx.emitHTTP(call, callerID, url, pkg.Fset.PositionFor(call.Pos(), false).Line)
+		ctx.emitHTTP(call, callerID, url, pkg.Fset.PositionFor(call.Pos(), false).Line,
+			httpMethodOf(pkg, ctx.methodVars, call, callee))
 	}
 	// P1-3：client.Do(req)——req 由本函数 NewRequest 赋值（URL 已建
 	// 边 → 防重复跳过；请求发出点语义仍以 NewRequest 行号为准）
 	if callee != nil && callee.Name() == "Do" && len(call.Args) > 0 {
 		if xid2, isID := call.Args[0].(*ast.Ident); isID {
 			if url, okR := ctx.reqVars[xid2.Name]; okR && !ctx.httpURLsSeen[url] {
-				ctx.emitHTTP(call, callerID, url, pkg.Fset.PositionFor(call.Pos(), false).Line)
+				m := ctx.reqMethods[xid2.Name]
+				if m == "" {
+					m = "GET"
+				}
+				ctx.emitHTTP(call, callerID, url, pkg.Fset.PositionFor(call.Pos(), false).Line, m)
 			}
 		}
 	}
