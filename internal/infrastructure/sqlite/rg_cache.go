@@ -4,10 +4,11 @@ import "github.com/schaepher/codeintel/internal/domain"
 
 // relationsAlgoVersion relations 推断逻辑版本（Q199：跨函数 write 丢弃；
 // Q200：缓存键版本化后 query 恢复验证；Q205：filterFKNoise 的 id 起点
-// 过滤不再作用于 query 键关联）——并入缓存键，分析逻辑变更后
+// 过滤不再作用于 query 键关联；Q208：缓存改存未过滤全量（hops 过滤
+// 读取期行为））——并入缓存键，分析逻辑变更后
 // 旧缓存自动失效，无需手动 clean/reindex。**每次修改 relations 推断
 // 逻辑（rg_*.go / relationsFor*）必须递增此版本**，否则旧缓存残留。
-const relationsAlgoVersion = "q205"
+const relationsAlgoVersion = "q208"
 
 // cacheKey 缓存键 = build_id + 分析逻辑版本（build_id 变化或逻辑版本
 // 变化都失效）。

@@ -39,9 +39,11 @@ func (r *Repo) GetTableRelations(table, mode string) ([]*domain.TableRelation, e
 	if err != nil {
 		return nil, err
 	}
-	rels = dedupRelationNoise(rels, r.relationHops)
+	// Q208：缓存存未过滤全量——hops 过滤是读取期行为（缓存命中路径
+	// 也过 dedup）。此前存 dedup 后行：首次窄参数查询后放宽 q_hops
+	// 无法展示长链（长链行没进缓存）。
 	r.saveRelationCandidates(table, rels)
-	return rels, nil
+	return dedupRelationNoise(rels, r.relationHops), nil
 }
 
 // GetTables 枚举全库外部表名（gorm/sql 虚拟节点表名去重，Q160）。
@@ -132,9 +134,9 @@ func (r *Repo) GetAllTableRelations(mode string) ([]*domain.TableRelation, error
 		}
 		return a.ToCol < b.ToCol
 	})
-	out = dedupRelationNoise(out, r.relationHops)
+	// Q208：缓存存未过滤全量（rebuild 写全量；返回仍按当前 hops 过滤）
 	r.rebuildRelationCandidates(out, tables)
-	return out, nil
+	return dedupRelationNoise(out, r.relationHops), nil
 }
 
 // relTypeRank 关联类型优先级（聚合去重用）：query > write > read。
@@ -165,9 +167,8 @@ var DefaultRelationHops = domain.DefaultRelationHops
 //    query 保持列级（键关联每列独立有意义）。
 // 输出保持输入顺序（第一条位次，后续 hops 更小者替换值）。
 func dedupRelationNoise(rels []*domain.TableRelation, h domain.RelationHops) []*domain.TableRelation {
-	if len(rels) < 2 {
-		return rels
-	}
+	// Q208：无快速路径（曾 `len(rels) < 2 直接返回`）——跳数上限过滤
+	// 对单条同样生效（单表查询只有 1 条长链时曾被跳过过滤）
 	seen := map[string]*domain.TableRelation{}
 	var order []string
 	for _, r := range rels {

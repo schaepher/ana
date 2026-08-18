@@ -26,10 +26,11 @@ func TestDedupRelationNoise(t *testing.T) {
 		// 不同 from 字段 → 同 to 表：不聚合（字段级精度保留）
 		{FromTable: "a", FromCol: "age", ToTable: "b", ToCol: "p3", Hops: 3, Type: domain.RelationWrite},
 	}
-	// 默认（全部 4 跳）：query 长链也滤
+	// 默认（Q208 后 write 不限制；query/read 4 跳）：query 长链滤、
+	// 5 跳 write 保留（Q202 精确判定取代 write 跳数上限）
 	out := dedupRelationNoise(rels, DefaultRelationHops)
-	if len(out) != 3 {
-		t.Fatalf("out = %d, want 3（4 跳内 query + a.name→b 聚合 + a.age→b）: %+v", len(out), out)
+	if len(out) != 4 {
+		t.Fatalf("out = %d, want 4（4 跳内 query + a.name→b 聚合 + a.age→b + 5 跳 write 保留）: %+v", len(out), out)
 	}
 	got := map[string]*domain.TableRelation{}
 	for _, r := range out {
@@ -37,6 +38,9 @@ func TestDedupRelationNoise(t *testing.T) {
 	}
 	if _, ok := got["id|a_id"]; ok {
 		t.Errorf("10 跳 query 默认应被跳数上限过滤")
+	}
+	if _, ok := got["name|q1"]; !ok {
+		t.Errorf("5 跳 write 应保留（Q208：write 不限制跳数）")
 	}
 	if r := got["uid|b_uid"]; r == nil || r.Type != domain.RelationQuery || r.Hops != 3 {
 		t.Errorf("4 跳内 query 应保留，got %+v", r)
@@ -47,8 +51,8 @@ func TestDedupRelationNoise(t *testing.T) {
 	if _, ok := got["name|p2"]; ok {
 		t.Errorf("a.name→b.p2 应与 p1 聚合（同字段同表只留一条）")
 	}
-	if _, ok := got["name|q1"]; ok {
-		t.Errorf("5 跳 write 应被跳数上限过滤")
+	if _, ok := got["name|q1"]; !ok {
+		t.Errorf("5 跳 write 应保留（Q208：write 不限制跳数——Q202 精确判定已取代跳数上限）")
 	}
 	if _, ok := got["id|r"]; ok {
 		t.Errorf("10 跳 read 应被跳数上限过滤")

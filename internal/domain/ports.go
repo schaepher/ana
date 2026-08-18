@@ -143,9 +143,11 @@ type RelationHops struct {
 	Read  int `json:"read"`
 }
 
-// DefaultRelationHops 默认跳数上限（当前设定值：三类全部 4 跳；
-// 与 sqlite 包 MaxRelationHops 一致，Q195/Q196）。
-var DefaultRelationHops = RelationHops{Query: 4, Write: 4, Read: 4}
+// DefaultRelationHops 默认跳数上限（Q208 调整：Write=0 不限制——
+// Q199/Q202 已把无值流 taint 的跨函数 write 丢弃，剩余 write 均经
+// 精确判定（taint 呼应 / 外键形态），跳数上限已无降噪意义且会误伤
+// 深层字段赋值链（order.id → A.order_id 6 跳）；query/read 保持 4）。
+var DefaultRelationHops = RelationHops{Query: 4, Write: 0, Read: 4}
 
 // ERTable ER 图的一个表节点（/api/er）：表名 + 列清单。
 type ERTable struct {
