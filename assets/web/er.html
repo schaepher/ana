@@ -269,8 +269,10 @@ function renderNested(data) {
     if (n > 0) dx = (n % 2 === 1 ? -1 : 1) * Math.ceil(n / 2) * 12;
     const color = styleColor(r.type);
     // 折线（大规模表适配，避免斜穿）：同行同字段行 → 水平直线；
-    // 其余 → S 型正交（字段矩形边缘水平出 18px → 垂直段 → 水平入）
-    const OUT = 18;
+    // 其余 → S 型正交（字段矩形边缘水平出线 → 垂直段 → 水平入）。
+    // OUT 需 > 反向线偏移(12) + 字段矩形到表边框距离(10)，保证出线穿过
+    // 表边框后仍有可见段——否则线看起来从表边框伸出而非字段矩形
+    const OUT = 30;
     let d, mx, my;
     if (ay === by && ex1 !== ex2) {
       d = `M ${ex1 + dx} ${ay} L ${ex2 + dx} ${ay}`;
