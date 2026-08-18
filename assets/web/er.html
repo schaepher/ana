@@ -54,6 +54,7 @@
     <button id="mode-nested" title="表外框内嵌字段矩形，字段矩形间连线">嵌套画法</button>
   </div>
   <div class="rel-filter" title="关系显示开关（大规模表默认只画高置信键关联）">
+    <label title="直接在全图画全部关系线（无需双击展开）"><input type="checkbox" id="f-alllines">全图画线</label>
     <label><input type="checkbox" id="f-query" checked>键关联</label>
     <label><input type="checkbox" id="f-write">同源写</label>
     <label><input type="checkbox" id="f-read">间接读</label>
@@ -82,6 +83,7 @@ const COL_GAP2 = 320, ROW_GAP2 = 130;
 let DATA = null;   // /api/er 数据缓存（切换画法不重新拉取）
 let MODE = 'tiled'; // tiled 平铺 / nested 嵌套
 let SHOW = { query: true, write: false, read: false }; // 关系显示开关（默认只画高置信键关联）
+let SHOW_ALL_LINES = false; // 全图画线开关（Q204：直接画全部关系，无需双击展开）
 let SELECTED = new Set(); // 双击展开的表集合（空=不画线；展开后只显示相关表与其关系）
 // 每条线独立配色（循环调色板；线型仍表达类型：实线=键关联/虚线=同源写/点线=间接读）
 const PALETTE = ['#1677ff', '#fa8c16', '#52c41a', '#f5222d', '#722ed1', '#13c2c2',
@@ -130,11 +132,13 @@ function visibleRels() {
   let info = (DATA.tables || []).length + ' 表 · ' + out.length + ' 条关联（键 ' + q +
     ' / 写 ' + out.filter(r => r.type === 'write').length +
     ' / 读 ' + out.filter(r => r.type === 'read').length + '）';
-  if (SELECTED.size > 0) {
+  if (SHOW_ALL_LINES) {
+    info += ' · 全图画线 ' + out.length + ' 条';
+  } else if (SELECTED.size > 0) {
     const n = out.filter(r => SELECTED.has(r.from_table) || SELECTED.has(r.to_table)).length;
     info += ' · 展开 ' + [...SELECTED].join(', ') + '（' + n + ' 条线）';
   }
-  info += ' · 双击表展开/收起其关联线';
+  info += SHOW_ALL_LINES ? ' · 关闭全图画线后双击表展开' : ' · 双击表展开/收起其关联线';
   document.getElementById('info').textContent = info;
   return out;
 }
@@ -151,6 +155,20 @@ function bindRelFilter() {
       localStorage.setItem('codeintel.erShow', JSON.stringify(SHOW));
       render();
     });
+  });
+  // 全图画线开关（Q204）：开=全图直接画全部关系线（表不隐藏）；
+  // 关=默认模式（不连线，双击表展开其关联线）
+  const allCb = document.getElementById('f-alllines');
+  allCb.checked = SHOW_ALL_LINES;
+  const savedAll = localStorage.getItem('codeintel.erAllLines');
+  if (savedAll !== null) {
+    SHOW_ALL_LINES = savedAll === '1';
+    allCb.checked = SHOW_ALL_LINES;
+  }
+  allCb.addEventListener('change', () => {
+    SHOW_ALL_LINES = allCb.checked;
+    localStorage.setItem('codeintel.erAllLines', SHOW_ALL_LINES ? '1' : '0');
+    render();
   });
 }
 
@@ -313,7 +331,10 @@ function render() {
   const rels = visibleRels(); // SHOW 过滤后的全量（统计用）
   let tables = DATA.tables || [];
   let draw = [];
-  if (SELECTED.size > 0) {
+  if (SHOW_ALL_LINES) {
+    // Q204 全图画线：直接画全部关系（表不隐藏、SELECTED 忽略）
+    draw = rels;
+  } else if (SELECTED.size > 0) {
     // 画线：只画与任一展开表相关的关系
     draw = rels.filter(r => SELECTED.has(r.from_table) || SELECTED.has(r.to_table));
     // 隐藏无关表：保留展开表 + 有线的表，重新布局渲染
