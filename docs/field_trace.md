@@ -22,6 +22,7 @@
 10. [实现路线图](#10-实现路线图)
 11. [测试策略](#11-测试策略)
 12. [附录：决策记录](#12-附录决策记录)
+13. [与 TD.md 的关系](#13-与-tdmd-的关系)
 14. [实现补充记录（v2.3）](#14-实现补充记录v23)
 
 15. [优化路线图（设计树决策 Q84–Q102，2026-08-14）](#15-优化路线图)
@@ -43,7 +44,7 @@
 31. [动态候选溯源：边级元数据 + value-trace 标注/过滤 + 摘要 origins（Q161，2026-08-16）](#31-动态候选溯源-边级元数据-value-trace-标注-过滤-摘要-origins)
 32. [分析流程清单与内存检查（Q162，2026-08-17）](#32-分析流程清单与内存检查)
 33. [摘要 origins 多字段遗漏 + value-trace 父容器越界修复（Q163，2026-08-17）](#33-摘要-origins-多字段遗漏-value-trace-父容器越界修复)
-34. [构建管线复杂度优化（Q168，2026-08-17）](#34-构建管线复杂度优化)
+34. [构建管线进度日志与复杂度优化（Q164–Q171/Q174，2026-08-16/17）](#34-构建管线进度日志与复杂度优化)
 35. [trace-backward --follow-indirect（Q172，2026-08-17）](#35-trace-backward---follow-indirect)
 36. [XORM 支持（Q175，2026-08-17）](#36-xorm-支持)
 37. [包级分析缓存（Q176，2026-08-17）](#37-包级分析缓存)
@@ -57,6 +58,8 @@
 45. [ER 图前端交互与懒加载（Q203/Q204/Q209/Q210，2026-08-18）](#45-er-图前端交互与懒加载)
 46. [可观测性（Q206/Q207，2026-08-18）](#46-可观测性)
 47. [缓存语义修正与 write 跳数（Q208，2026-08-18）](#47-缓存语义修正与-write-跳数)
+48. [参数节点统一与展示名恢复（Q178–Q180，2026-08-17）](#48-参数节点统一与展示名恢复)
+49. [信息栏展示优化与收尾（Q184–Q193，2026-08-17）](#49-信息栏展示优化与收尾)
 ---
 
 ## 1. 项目背景与目标
@@ -481,6 +484,28 @@ SSA 语义与映射类决策全部保留：Q1（SSA_VALUE 统一建模）、Q2�
 
 - 本设计作为 TD.md §12 实现补充记录的延续（v2.2 能力），Joern 已移除（§12.7），数据流由本适配器接替。
 - 与 TD.md v2.0 正文冲突处，以 TD.md §12 与本文件为准。
+- **文档源流**：本文由用户提供的 go-cpg v1.0 设计文档（2026-08-13 引入
+  仓库，commit 63b8130）整体适配而来——SSA 语义与映射类决策（go-cpg
+  Q1–Q67，§12.1）原样保留，形态重塑为 codeintel 六边形架构的 SSA
+  适配器（§12.2/§12.3 修订与新增决策）。
+- **项目开发时间线**（2026-08-12 起，TD.md 与本文各 § 逐项展开）：
+  - **08-12**：按 TD.md 起步（仓库最初名 ana → codeintel）；AntV G6
+    图探索前端 + roots 顶层入口（TD.md §12.2/§12.3）；Joern 曾接入
+    后因慢/外置依赖弃用
+  - **08-13**：field_trace.md 引入适配（v2.2）；Joern 完全移除；SSA
+    适配器 MVP（Phase 1–4，§14 前段）；action 层抽象
+  - **08-14**：实现补充记录 v2.3（Q74–Q83，§14）；优化路线图设计树
+    （Q84–Q102，§15）；unused/孤立链（§16）；--since/path（§17）；
+    模块间调用（§18）
+  - **08-15**：路线调整（Q135，§19）；增量触发与基准（§20）；P2
+    跨函数客户端/模块图前端（§21）；query table/relations 表分析
+    三件套（§22，Q148–Q153）
+  - **08-16**：Q154–Q161（§23–§31）；go2o 全库验证；构建性能分析
+  - **08-17**：Q162–Q177（§32–§40）——进度日志、DP 优化、workers、
+    包级缓存、XORM、relations 内存 BFS；Q178–Q193（§48–§49）——
+    参数节点统一、展示名恢复、信息栏展示
+  - **08-18**：Q195–Q210（§41–§47）——relations 降噪链、ER 图前端
+    （双画法/绕障/懒加载三级）、可观测性、缓存语义修正
 
 ---
 
@@ -622,8 +647,6 @@ SSA 语义与映射类决策全部保留：Q1（SSA_VALUE 统一建模）、Q2�
   增量更新 7dec073 已实现；MCP serve 已取消——§19）
 
 ---
-
-**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§14 为 2026-08-14 实现阶段需求增补记录。
 
 ## 15. 优化路线图（设计树决策 Q84–Q102，2026-08-14）
 
@@ -1171,6 +1194,22 @@ session.id → chat_message.session_id [查询关联 4 跳]（ListSessions
 （验证仓库 216 个 gorm 节点）——早前"验证仓库 无虚拟节点"结论是查询时用
 kind 过滤排除了 field_access 的误判，非功能缺失。
 
+**列名呼应收敛（Q153，2026-08-16 3714c98）**：用户对 radar 表关系图的
+预期是"只有一条边，就是 session id 那条。其他边会干扰判断"——当时
+title/created_at 也连到 filter。两个收敛手段叠加后 query 归 1：
+
+1. **桥接精确化**：range 循环读出桥原为"同函数同类型字段读"全部桥接
+   （session.title/created_at 也被桥），收敛为只桥**下游 2 跳可达
+   filter 节点的字段读取**（字段节点 → 值 → filter，只有真正进 Where
+   的字段）
+2. **列名呼应规则**：title/created_at 经对象值共享（EnsureSession 写链）
+   仍可达 filter——query 终点判定加列名呼应：外键列名须含主键列名
+   （session_id 含 id ✓，title ✗）
+
+结果：query=1，只剩 session.id → chat_message.session_id 一条查询关联。
+已知权衡（勿当 bug 修）：列名不呼应的真键关联会被降级为 read（滤噪音
+vs 漏真关联的取舍）。测试 fixture 同步改呼应列名（x→y 不呼应会误伤）。
+
 ---
 
 ## 23. 动态派发补 indirect_write 摘要（Q154，2026-08-16）
@@ -1546,9 +1585,23 @@ e2e 27 项。
 默认剪枝/显式开启）；ssa 单测 TestDispatchOriginsMultiField（三字段
 origins 全保留）。
 
-## 34. 构建管线复杂度优化（Q168，2026-08-17）
+## 34. 构建管线进度日志与复杂度优化（Q164–Q171/Q174，2026-08-16/17）
 
-**动态规划/增量传播思想的三处优化 + 一个关键写库 bug 修复**：
+**Q164–Q167 阶段进度日志**（背景：用户在大仓库 reindex 实测 **14G 内存 +
+20 分钟未结束**——定位需要先能看到执行到哪一步）：
+
+- **Q164/Q165（e3d8bdc/2a34f75）**：构建阶段打点（begin/end，每阶段
+  耗时 + 内存），写入 `.codeintel/codeintel.log`（stdout/stderr 保持
+  干净，用户明确"不用输出到 stderr，写到日志文件就够了"）。教训：
+  begin 日志必须**在调用前**打印（初版放调用后，"→ X..." 打出时 X
+  已完成，进度误导）
+- **Q166 细粒度（c1d6804）**：黑盒阶段拆细——emitFunction 按包打点、
+  emitSummaries 按迭代轮次、computeAliases 按函数计数（AllFunctions
+  只接受 Program，需全量遍历后按包分组）
+- **Q167 总量进度（752fef4）**：build progress done/total/percent——
+  一开始就输出总函数数，逐包百分比
+
+**Q168 动态规划/增量传播思想的三处优化 + 一个关键写库 bug 修复**：
 
 1. **emitSummaries worklist 化**（O(D×V×E) → O(E×W)）：原"迭代至稳定"
    每轮全图遍历（D=传播深度，调用图深/环多时轮数爆炸）；改为反向
@@ -1571,6 +1624,24 @@ GOMAXPROCS=1 可退串行）——包间无共享可变状态：a.fd 由互斥�
 （读写 funcData）、fallbackTotal 改 atomic、emit 走 channel 并发安全、
 dispatchRegs/idents/specs 只读共享。自建 20 包 × 1000 函数 fixture：
 并发 187ms vs 串行 322ms（1.7 倍），符号数一致。
+
+**Q170 --workers 并发参数（5aabff3）**：并发度命令行可配（默认 1 =
+串行）。CLI `--workers N` → orchestrator SetWorkers → ssa.Adapter 字段，
+统一走 sem 并发路径（workers=1 即串行效果）。go2o 实测 **workers 4
+最优**（2.65 倍），8 在低内存机器（3.5G）反慢——内存压力。
+
+**Q171 写库双缓冲（1e53bbe）**：用户问 orchestrator:348（写库消费循环）
+能否并发——答：**SQLite 单连接写锁串行，写端并发无收益**（多写协程
+只会互斥排队）；改为**双缓冲解耦**（flush 独立协程，消费不阻塞主流程）
++ BatchSize 1000 → 10000。
+
+**Q174 按函数分块 worker pool（922bb5a）**：背景：用户 `--workers 10`
+实测"跑不了"——复现结论是 **/tmp 磁盘满**（`Disk quota exceeded` 写
+丢弃）导致的符号数不一致，非并发 bug；但暴露单慢包长尾（68 函数
+2m53s = 2.5s/函数）与 Amdahl 串行段。实施：按函数分块（**每块 200 不
+跨包**）+ **大包倒序**（慢包先调度）+ **backpressure 采集**（producer
+阻塞时间）。go2o 实测 emitFunction 5m19s → 2m0s（workers 4），总
+5m25s → 2m5s。
 
 ## 35. trace-backward --follow-indirect（Q172，2026-08-17）
 
@@ -1892,3 +1963,81 @@ dedup）。TestRelationCacheHopsWiden 覆盖。
 把无值流 taint 的跨函数 write 丢弃，剩余 write 均精确（go2o 全库 write
 仅 1 条 4 跳）——跳数上限会误伤深层字段赋值链（order.id → A.order_id
 6 跳）；w_hops 显式设置仍生效。
+
+---
+
+## 48. 参数节点统一与展示名恢复（Q178–Q180，2026-08-17）
+
+**Q178 参数值节点统一（109f8a5）**：用户最小复现仓库指出 filter 的
+summary_io 入边来自**临时节点**（`...Find#orderID`）而非实际参数
+orderID。根因：emitValue 对 `*ssa.Parameter` 生成临时值节点（`#orderID`），
+与前端签名参数节点（`#param.orderID`）分裂。修复：
+
+- emitValue Parameter 特判：返回签名参数节点 ID（`#param.<name>`，
+  receiver `#param.recv.<name>`），不发射新节点
+- 查询层同步三处：TraceForward 递归 CTE 起点 2 的 kind 条件
+  （`ssa_value` → 含 parameter）、Expand 移除参数桥边转换（旧双节点
+  设计 `#param.x` → `#x`，现数据边直接挂参数节点）、aliasPass
+  valueNodeID 对 Parameter 同样走签名参数节点（Q178 遗漏点，e2e 暴露）
+- 语义提升：argument 边此前与参数符号节点脱节，value-trace 无法回连
+  ——统一后 `← orderID:12` 显示签名行号
+
+**Q179 SSA 临时寄存器（tN）恢复为源码变量名（5f3c1c7/4c95fa6）**：
+用户问"SSA 的临时节点 txx 的作用是什么？能否恢复为原来的变量名或者
+参数名？"。实现：
+
+- **recoverVarName**：`u := f()` 的 t0 按 assignTargets（表达式区间 →
+  目标变量）反查恢复为 `u`；`&T{}` 字面量无变量名保持 t0（合理）
+- **instancePath 叶子恢复**：字段访问节点 `t0.A` 的 base 寄存器一并
+  恢复（`t.A`）——emitValue/field_extractor 双路径统一调用
+- ID 保持稳定（slot 仍为 SSA 名，展示名存 name 字段）——CLI trace、
+  前端 flows 面板、Expand 全用展示名
+
+**Q180 字段数据流面板可读性（289c4d1）**：用户"字段数据流的展示，
+可读性不好"。两块：
+
+- **值节点补行号**：ssa_value 节点发射时未填 LineStart（只 ID/Kind/
+  Name/Properties）——emitValue 三处节点构造补 lineOf（SSA 指令 Pos）
+- **前端读/写合并**：renderFlowsGroup 合并同行读改写（`[读/写]` 标记）
+  + 值节点行号 + 统一缩进
+
+e2e 教训（触发 Q181）：**clean 保留 `.codeintel/cache`（包级分析缓存）
+而缓存键只看源码 hash**——Q178/Q179 改了分析逻辑但源码未变，验证仓库
+命中旧逻辑缓存（receiver 边 1 → 清缓存后 8 条）——分析器版本纳入失效
+键即 Q181。
+
+---
+
+## 49. 信息栏展示优化与收尾（Q184–Q193，2026-08-17）
+
+用户对信息栏（节点详情侧边栏）的展示迭代，全部前端 panel.js + 后端
+metadata 配合，截图逐轮验证：
+
+| Q | Commit | 内容 |
+|---|---|---|
+| Q184 | `9a97018` | **接收者分组合并**：两个"接收者"分组（has_method 入边 = 类型 Manager、has_param receiver = 变量 m）语义不同但同名——合并为一行 `→m · Manager`（has_method 先渲染暂存类型，receiver 分组时合并） |
+| Q185 | `0933e90` | **实参来源标注具体实参**：passes_result（"接收者持有返回参数"，A(B(C)) 嵌套调用的 AST 发射）补 metadata `arg_index`/`arg_name`（外层实参下标 + 接收者参数名）；server expand 透传 |
+| Q186 | `a0b267b` | **参数/返回显示"名称 · 类型"**：result 节点 name 改为签名参数名（匿名 fallback 类型）；前端 byKind 带 type + shortType（包路径短化）；receiver 移除 Q184 的手工拼接改统一 typeHtml |
+| Q187 | `c15db6b` | **实参来源箭头化**：条目改 `来源 → 实参`（来源在左、箭头指向实参） |
+| Q188 | `41d5e6c` | **参数/返回分组表格化**（复用 fields 表格样式，名称/类型两列） |
+| Q189 | `540b845` | **实参来源条目带来源函数签名**（去 `func ` 前缀，签名已含函数名防重复） |
+| Q190 | `f19c1c1` | **箭头两侧留白 + 实参加粗**（指向明确） |
+| Q191 | `7ebf8c3` | **长签名挤出可视区修复**：.rel flex nowrap 溢出（箭头 left=1440 超信息栏右边界 1440）——签名独占一行可折行 + 箭头实参下一行缩进（right=1420 回可视区） |
+| Q192 | `b2fd80e` | **实参来源表格化**：实参在左、来源在右；来源签名包路径短化（`llm.ChatMessage` 保留最后一段）+ title 悬浮完整路径；清理 Q191 CSS |
+
+**Q193 嵌套赋值表达式误配外层变量名（bf0fd5a）**：用户发现 t63 名称是
+err。根因：`if err := agent.EnsureSchema(db.DB()); err != nil`——t63
+（`db.DB()` 调用结果）的 Pos **落在整个 RHS 区间内**（`EnsureSchema(
+db.DB())`），assignTargets 区间匹配误配到外层变量 err。修复 **topCallPos
+方案**：assignTarget 记录 RHS **直接调用的 `(` 位置**（== SSA Call.Pos
+语义，`u := f()` 时 t0.Pos 是 `(` 而非函数名起点——初版 Pos 严格相等
+失败，再改 AST 精确方案）；嵌套子表达式不再误配。发现独立问题：aliasPass
+双发射 `#t1|err` + `#t1|t1`（hasTemp 污染断言）——记入待办。
+
+**收尾（98df6a7/a417eaa）**：新增 `make serve`（构建 + 前台启动 Web
+服务）；**去除对私有验证仓库的引用**（E2E_REPO 默认改当前目录、e2e
+符号 ID 环境变量化、文档注释中性化——仓库内 grep=0）。
+
+---
+
+**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q210，逐 Q 编号 + 日期）。
