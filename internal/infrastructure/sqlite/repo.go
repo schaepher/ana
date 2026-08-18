@@ -15,6 +15,13 @@ var _ domain.BuildMetadataRepository = (*Repo)(nil)
 // Repo 实现 CodeRepository / BuildMetadataRepository。
 type Repo struct {
 	*DB
+	includeLongQuery bool // Q196：--include-long-query 时 query 长链（>4 跳）保留
+}
+
+// SetIncludeLongQuery 开启 query 长链展示（--include-long-query）：
+// 默认 query 与 write/read 同样受 MaxRelationHops 限制。
+func (r *Repo) SetIncludeLongQuery(v bool) {
+	r.includeLongQuery = v
 }
 
 // NewRepo 基于已打开的数据库创建仓储。

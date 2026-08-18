@@ -195,6 +195,8 @@ func parseQueryFlags(args []string) queryFlags {
 			i++
 		case strings.HasPrefix(a, "--max-results="):
 			f.maxResults, _ = strconv.Atoi(strings.TrimPrefix(a, "--max-results="))
+		case a == "--include-long-query":
+			f.includeLongQuery = true
 		case a == "--memory" && i+1 < len(args):
 			f.memory = args[i+1]
 			i++

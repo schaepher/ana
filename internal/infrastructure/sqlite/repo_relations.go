@@ -23,7 +23,7 @@ func (r *Repo) GetTableRelations(table, mode string) ([]*domain.TableRelation, e
 	defer logger.Debug("exit (Repo).GetTableRelations")
 
 	if rels, ok := r.loadRelationCandidates(table); ok {
-		return dedupRelationNoise(rels), nil
+		return dedupRelationNoise(rels, r.includeLongQuery), nil
 	}
 	var rels []*domain.TableRelation
 	var err error
@@ -38,7 +38,7 @@ func (r *Repo) GetTableRelations(table, mode string) ([]*domain.TableRelation, e
 	if err != nil {
 		return nil, err
 	}
-	rels = dedupRelationNoise(rels)
+	rels = dedupRelationNoise(rels, r.includeLongQuery)
 	r.saveRelationCandidates(table, rels)
 	return rels, nil
 }
@@ -86,7 +86,7 @@ func (r *Repo) GetAllTableRelations(mode string) ([]*domain.TableRelation, error
 	if buildID := r.currentBuildID(); buildID != "" {
 		if rels, ok := r.loadAllRelationCandidates(buildID); ok {
 			logger.Debug("relations --all 命中缓存", zap.String("build_id", buildID))
-			return dedupRelationNoise(rels), nil
+			return dedupRelationNoise(rels, r.includeLongQuery), nil
 		}
 	}
 	if !r.useMemoryGraph(mode) {
@@ -94,7 +94,7 @@ func (r *Repo) GetAllTableRelations(mode string) ([]*domain.TableRelation, error
 		if err != nil {
 			return nil, err
 		}
-		return dedupRelationNoise(rels), nil
+		return dedupRelationNoise(rels, r.includeLongQuery), nil
 	}
 	g, err := loadRelationGraph(r)
 	if err != nil {
@@ -128,7 +128,7 @@ func (r *Repo) GetAllTableRelations(mode string) ([]*domain.TableRelation, error
 		}
 		return a.ToCol < b.ToCol
 	})
-	out = dedupRelationNoise(out)
+	out = dedupRelationNoise(out, r.includeLongQuery)
 	r.rebuildRelationCandidates(out, tables)
 	return out, nil
 }
@@ -145,28 +145,34 @@ func relTypeRank(t string) int {
 	}
 }
 
-// MaxRelationHops write/read 跳数上限（Q195：6-10 跳长链为噪音失真；
-// query 键关联不受限——精筛的高置信链即使长仍真实，如 10 跳的
-// chat_messages.session_id → session.id）。
+// MaxRelationHops 关系跳数上限（Q195/Q196：6-10 跳长链为噪音失真；
+// query 键关联同样受限——长链经 --include-long-query 查看）。
 const MaxRelationHops = 4
 
-// dedupRelationNoise 关系降噪（Q195，全部 relations 出口统一应用——
+// dedupRelationNoise 关系降噪（Q195/Q196，全部 relations 出口统一应用——
 // 缓存命中路径也过一遍，保证旧缓存同样被降噪）：
-// ① 跳数上限：write/read > MaxRelationHops 丢弃（长链扩散失真）
+// ① 跳数上限：所有类型 > MaxRelationHops 丢弃（query 长链同样失真，
+//    includeLongQuery=true 时 query 长链保留供 --include-long-query 查看）
 // ② 同源写/间接读按 from字段→to表 聚合：同一 from 字段流入同一 to 表
 //    的多列（全列 INSERT/UPDATE 的列爆炸，如 atoms.aliases →
 //    knowledge_graphs 的 13 列各一条）只保留 hops 最小一条；
 //    query 保持列级（键关联每列独立有意义）。
 // 输出保持输入顺序（第一条位次，后续 hops 更小者替换值）。
-func dedupRelationNoise(rels []*domain.TableRelation) []*domain.TableRelation {
+func dedupRelationNoise(rels []*domain.TableRelation, includeLongQuery bool) []*domain.TableRelation {
 	if len(rels) < 2 {
 		return rels
 	}
 	seen := map[string]*domain.TableRelation{}
 	var order []string
 	for _, r := range rels {
-		if r.Type != domain.RelationQuery && r.Hops > MaxRelationHops {
-			continue
+		if r.Hops > MaxRelationHops {
+			if r.Type == domain.RelationQuery {
+				if !includeLongQuery {
+					continue
+				}
+			} else {
+				continue
+			}
 		}
 		var key string
 		if r.Type == domain.RelationQuery {

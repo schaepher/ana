@@ -48,6 +48,7 @@ func relationsFilter(f *queryFlags) func([]*domain.TableRelation) []*domain.Tabl
 // --type/--max-hops/--max-results 过滤输出；--memory full|sql 选择实现
 // 路径（默认 auto 按规模）。
 func queryRelations(acts *action.Actions, table, format string, opts outputOpts, f *queryFlags) int {
+	acts.IncludeLongQuery(f.includeLongQuery)
 	rels, err := acts.Relations(table, f.memory)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -102,6 +103,7 @@ func queryRelations(acts *action.Actions, table, format string, opts outputOpts,
 // 一次遍历全部表返回所有表对关联（合并去重），AGENT 单次调用拿全库。
 // --json 输出数组（与单表同构）；文本模式按表分组展示。
 func queryRelationsAll(acts *action.Actions, format string, opts outputOpts, f *queryFlags) int {
+	acts.IncludeLongQuery(f.includeLongQuery)
 	rels, err := acts.RelationsAll(f.memory)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

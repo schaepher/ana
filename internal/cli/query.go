@@ -26,6 +26,7 @@ type queryFlags struct {
 	relTypes         []string // relations --type：关联类型过滤（query/write/read，可多次/逗号分隔；空=默认 query+write，P0④）
 	maxHops          int      // relations --max-hops：跳数上限（0=不限）
 	maxResults       int      // relations --max-results：条数上限（0=不限）
+	includeLongQuery bool     // relations --include-long-query：展示 >4 跳的 query 长链（Q196）
 	memory           string   // relations --memory：full/sql（默认 auto 按规模，P0④）
 }
 

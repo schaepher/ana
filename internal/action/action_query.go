@@ -65,6 +65,15 @@ func (a *Actions) RelationsAll(memoryMode string) ([]*domain.TableRelation, erro
 	return a.repo.GetAllTableRelations(memoryMode)
 }
 
+// IncludeLongQuery 开启 query 长链展示（--include-long-query，Q196）：
+// 透传给 repo 的 relations 降噪——默认 query 同样受 MaxRelationHops 限制。
+func (a *Actions) IncludeLongQuery(v bool) {
+	type setter interface{ SetIncludeLongQuery(bool) }
+	if s, ok := a.repo.(setter); ok {
+		s.SetIncludeLongQuery(v)
+	}
+}
+
 // ER 数据库 ER 图数据（/api/er）：全库外部表 + 各表列清单 + 表间关联。
 // 列按表名聚合（列名 "users.name" → 表 users）；关系三级置信度
 // （query 键关联高置信 / write 同源中置信 / read 间接低置信）。
