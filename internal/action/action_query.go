@@ -1,6 +1,10 @@
 package action
 
-import "github.com/schaepher/codeintel/internal/domain"
+import (
+	"strings"
+
+	"github.com/schaepher/codeintel/internal/domain"
+)
 
 // Callers 返回调用 id 的边（深度 ≤ depth，置信度 ≥ MinConfidence）。
 func (a *Actions) Callers(id domain.CanonicalID, depth int) ([]*domain.Fact, error) {
@@ -59,6 +63,37 @@ func (a *Actions) Relations(table, memoryMode string) ([]*domain.TableRelation, 
 // 一次遍历全部表返回所有表对关联（合并去重）。memoryMode 同 Relations。
 func (a *Actions) RelationsAll(memoryMode string) ([]*domain.TableRelation, error) {
 	return a.repo.GetAllTableRelations(memoryMode)
+}
+
+// ER 数据库 ER 图数据（/api/er）：全库外部表 + 各表列清单 + 表间关联。
+// 列按表名聚合（列名 "users.name" → 表 users）；关系三级置信度
+// （query 键关联高置信 / write 同源中置信 / read 间接低置信）。
+func (a *Actions) ER() (*domain.ERData, error) {
+	rels, err := a.repo.GetAllTableRelations("")
+	if err != nil {
+		return nil, err
+	}
+	cols, err := a.repo.GetAllTableColumns()
+	if err != nil {
+		return nil, err
+	}
+	byTable := map[string][]domain.TableColumn{}
+	var tableOrder []string
+	for _, c := range cols {
+		t := c.Name
+		if i := strings.Index(c.Name, "."); i > 0 {
+			t = c.Name[:i]
+		}
+		if _, ok := byTable[t]; !ok {
+			tableOrder = append(tableOrder, t)
+		}
+		byTable[t] = append(byTable[t], *c)
+	}
+	tables := make([]domain.ERTable, 0, len(tableOrder))
+	for _, t := range tableOrder {
+		tables = append(tables, domain.ERTable{Name: t, Columns: byTable[t]})
+	}
+	return &domain.ERData{Tables: tables, Relations: rels}, nil
 }
 
 // Counts 返回节点数与边数（构建健康检查，serve 启动校验用）。

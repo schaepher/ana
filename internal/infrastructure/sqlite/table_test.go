@@ -85,3 +85,49 @@ func TestGetTableColumns(t *testing.T) {
 		t.Fatalf("empty table = %v, %v", empty, err)
 	}
 }
+
+// TestGetAllTableColumns：ER 图数据源——一次查询全部外部表列
+// （Name/Access/LineStart，不含 writers/readers 明细），按表名聚合。
+func TestGetAllTableColumns(t *testing.T) {
+	r := newTestRepo(t)
+	funcID := "symbol:go:example.com/m:save"
+	nodes := []*domain.CodeEntity{
+		{ID: domain.CanonicalID(funcID), Kind: domain.KindFunction, Name: "save", FilePath: "a.go"},
+		// 两表列虚拟节点（Q97 持久化映射形态）
+		{ID: domain.CanonicalID(funcID + "#ext.sql.users.name.write@5"), Kind: domain.KindFieldAccess,
+			Name: "users.name", FilePath: "a.go", LineStart: 5,
+			Properties: map[string]any{"full_path": "users.name", "instance_path": "users.name",
+				"access_kind": "write", "type_string": "sql", "is_external": "true", "func_id": funcID}},
+		{ID: domain.CanonicalID(funcID + "#ext.sql.users.age.read@10"), Kind: domain.KindFieldAccess,
+			Name: "users.age", FilePath: "a.go", LineStart: 10,
+			Properties: map[string]any{"full_path": "users.age", "instance_path": "users.age",
+				"access_kind": "read", "type_string": "sql", "is_external": "true", "func_id": funcID}},
+		{ID: domain.CanonicalID(funcID + "#ext.sql.orders.user_id.filter@9"), Kind: domain.KindFieldAccess,
+			Name: "orders.user_id", FilePath: "a.go", LineStart: 9,
+			Properties: map[string]any{"full_path": "orders.user_id", "instance_path": "orders.user_id",
+				"access_kind": "filter", "type_string": "sql", "is_external": "true", "func_id": funcID}},
+		// 干扰：非外部 field_access + 无表名节点（Name=表 整表行）
+		{ID: domain.CanonicalID(funcID + "#u.Name.write@8"), Kind: domain.KindFieldAccess,
+			Name: "u.Name", FilePath: "a.go", LineStart: 8,
+			Properties: map[string]any{"full_path": "example.com/m.User.Name", "access_kind": "write"}},
+	}
+	save(t, r, nodes, nil)
+
+	cols, err := r.GetAllTableColumns()
+	if err != nil {
+		t.Fatalf("GetAllTableColumns: %v", err)
+	}
+	if len(cols) != 3 {
+		t.Fatalf("cols = %d, want 3（非外部字段应过滤）", len(cols))
+	}
+	// 按 Name 排序：orders.user_id / users.age / users.name
+	if cols[0].Name != "orders.user_id" || cols[0].Access != "filter" || cols[0].LineStart != 9 {
+		t.Errorf("cols[0] = %+v", cols[0])
+	}
+	if cols[1].Name != "users.age" || cols[1].Access != "read" || cols[1].LineStart != 10 {
+		t.Errorf("cols[1] = %+v", cols[1])
+	}
+	if cols[2].Name != "users.name" || cols[2].Access != "write" || cols[2].LineStart != 5 {
+		t.Errorf("cols[2] = %+v", cols[2])
+	}
+}

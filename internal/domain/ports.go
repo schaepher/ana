@@ -110,11 +110,11 @@ type TableEndpoint struct {
 
 // TableColumn 表的一列虚拟节点及数据流（query table）。
 type TableColumn struct {
-	Name      string // 表.列（无列时为表名）
-	Access    string // read / write
-	LineStart int
-	Writers   []TableEndpoint // summary_io 入边（值 → 虚拟节点）：谁写入该列
-	Readers   []TableEndpoint // 虚拟节点出边（消费）；SELECT 读路径未解析时为空
+	Name      string          `json:"name"`      // 表.列（无列时为表名）
+	Access    string          `json:"access"`    // read / write / filter
+	LineStart int             `json:"line_start"` // 定义行号
+	Writers   []TableEndpoint `json:"writers,omitempty"` // summary_io 入边（值 → 虚拟节点）：谁写入该列
+	Readers   []TableEndpoint `json:"readers,omitempty"` // 虚拟节点出边（消费）；SELECT 读路径未解析时为空
 }
 
 // 表关联类型（关联终点虚拟节点的 access_kind 判定）：
@@ -133,6 +133,19 @@ type TableRelation struct {
 	ToCol     string `json:"to_col"`     // 关联表列
 	Hops      int    `json:"hops"`       // 数据流链长度（边数）
 	Type      string `json:"type"`       // query（键关联）/ write（同源）/ read（间接）
+}
+
+// ERTable ER 图的一个表节点（/api/er）：表名 + 列清单。
+type ERTable struct {
+	Name    string        `json:"name"`    // 表名
+	Columns []TableColumn `json:"columns"` // 列（Name/Access/LineStart，无 writers/readers 明细）
+}
+
+// ERData 数据库 ER 图数据（/api/er）：全库外部表 + 表间关联
+// （关系三级置信度：query 键关联高置信 / write 同源中置信 / read 间接低置信）。
+type ERData struct {
+	Tables    []ERTable        `json:"tables"`
+	Relations []*TableRelation `json:"relations"`
 }
 
 // SinceInfo --since <ref> 的 diff 解析结果（field_trace.md §16.5）。

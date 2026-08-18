@@ -257,3 +257,46 @@ func (r *Repo) GetTableColumns(table string) ([]*domain.TableColumn, error) {
 	}
 	return out, nil
 }
+
+// GetAllTableColumns ER 图列数据源（/api/er）：一次查询全库外部表列
+// （表.列 形态，过滤与 GetTables 一致：is_external + gorm/sql/xorm），
+// 按列名排序去重（同名列多节点首个保留）。不带 writers/readers 明细
+// （ER 图不需要，避免逐表 N+1 查询）。
+func (r *Repo) GetAllTableColumns() ([]*domain.TableColumn, error) {
+	logger := zap.L()
+	logger.Debug("enter (Repo).GetAllTableColumns")
+	defer logger.Debug("exit (Repo).GetAllTableColumns")
+	rows, err := r.Query(`SELECT name, line_start, properties FROM nodes
+		WHERE kind = 'field_access'
+		  AND json_extract(properties, '$.is_external') = 'true'
+		  AND json_extract(properties, '$.type_string') IN ('gorm', 'sql', 'xorm')
+		  AND name LIKE '%.%' AND name NOT LIKE '%.%.%'
+		ORDER BY name, id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	seen := map[string]bool{}
+	var out []*domain.TableColumn
+	for rows.Next() {
+		var name, props string
+		var line int
+		if err := rows.Scan(&name, &line, &props); err != nil {
+			return nil, err
+		}
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		var m map[string]any
+		if err := json.Unmarshal([]byte(props), &m); err != nil {
+			return nil, err
+		}
+		access := ""
+		if a, ok := m["access_kind"].(string); ok {
+			access = a
+		}
+		out = append(out, &domain.TableColumn{Name: name, Access: access, LineStart: line})
+	}
+	return out, rows.Err()
+}

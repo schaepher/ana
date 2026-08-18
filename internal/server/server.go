@@ -56,6 +56,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/source", s.handleSource)
 	mux.HandleFunc("/incremental", s.handleIncremental)
 	mux.HandleFunc("/api/module-calls", s.handleModuleCalls)
+	mux.HandleFunc("/api/er", s.handleER)
 	mux.Handle("/", http.FileServer(http.FS(s.web)))
 	return mux
 }

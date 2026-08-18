@@ -33,6 +33,7 @@ type Reader interface {
 	GetDispatchTargets() (map[domain.CanonicalID]domain.DispatchMeta, error) // Q157 P1
 	FindFieldReads(fullPath string) ([]*domain.CodeEntity, error)
 	GetTableColumns(table string) ([]*domain.TableColumn, error)
+	GetAllTableColumns() ([]*domain.TableColumn, error) // ER 图：全库外部列（无 writers/readers 明细）
 	GetTableRelations(table, memoryMode string) ([]*domain.TableRelation, error)
 	GetAllTableRelations(memoryMode string) ([]*domain.TableRelation, error) // Q160 全库聚合
 	GetUncalledFunctions() ([]*domain.UnusedFunc, error)

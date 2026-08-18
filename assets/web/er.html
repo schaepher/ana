@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>codeintel 数据库 ER 图</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; background: #fafafa; color: #333; }
+  header { padding: 12px 20px; background: #fff; border-bottom: 1px solid #e8e8e8; display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+  header a { color: #1677ff; text-decoration: none; }
+  header .legend { display: flex; gap: 14px; font-size: 12px; color: #666; margin-left: auto; }
+  header .legend .li { display: flex; align-items: center; gap: 5px; }
+  #svg-wrap { padding: 20px; overflow: auto; }
+  svg { background: #fff; border: 1px solid #e8e8e8; display: block; }
+  .tbl { fill: #fff; stroke: #c8c8c8; stroke-width: 1; }
+  .tbl-head { fill: #2f54eb; }
+  .tbl-title { fill: #fff; font-size: 13px; font-weight: 600; }
+  .tbl-row { font-size: 12px; fill: #333; }
+  .tbl-row-alt { fill: #f6f8fa; }
+  .tbl-row text.col { font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .acc { font-size: 10px; }
+  .acc-write { fill: #d46b08; }
+  .acc-read { fill: #1677ff; }
+  .acc-filter { fill: #a8071a; }
+  .edge-label { font-size: 10px; fill: #666; font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .edge-label strong { font-weight: 600; }
+</style>
+</head>
+<body>
+<header>
+  <a href="/">← 图探索</a>
+  <strong>数据库 ER 图</strong>
+  <span id="info" style="color:#999"></span>
+  <div class="legend">
+    <span class="li"><svg width="30" height="10"><line x1="1" y1="5" x2="29" y2="5" stroke="#1677ff" stroke-width="2.2"/></svg>键关联（高置信）</span>
+    <span class="li"><svg width="30" height="10"><line x1="1" y1="5" x2="29" y2="5" stroke="#fa8c16" stroke-width="1.6" stroke-dasharray="6,3"/></svg>同源写（中置信）</span>
+    <span class="li"><svg width="30" height="10"><line x1="1" y1="5" x2="29" y2="5" stroke="#b0b0b0" stroke-width="1" stroke-dasharray="2,3"/></svg>间接读（低置信）</span>
+  </div>
+</header>
+<div id="svg-wrap"></div>
+<script>
+const W = 240, HEAD_H = 32, ROW_H = 22, PAD = 8;
+const COL_GAP = 300, ROW_GAP = 90;
+
+async function load() {
+  const res = await fetch('/api/er');
+  const data = await res.json();
+  const tables = data.tables || [], rels = data.relations || [];
+  const q = rels.filter(r => r.type === 'query').length;
+  document.getElementById('info').textContent =
+    tables.length + ' 表 · ' + rels.length + ' 条关联（键 ' + q + ' / 写 ' + (rels.length - q - rels.filter(r=>r.type==='read').length) + ' / 读 ' + rels.filter(r=>r.type==='read').length + '）';
+  render(tables, rels);
+}
+
+// 同对表（无向）关系合并：query > write > read 取主样式，列对标注叠加
+function groupRels(rels) {
+  const g = new Map();
+  for (const r of rels) {
+    const key = [r.from_table, r.to_table].sort().join('|');
+    let e = g.get(key);
+    if (!e) { e = { a: r.from_table, b: r.to_table, type: r.type, items: [] }; g.set(key, e); }
+    if (rank(r.type) > rank(e.type)) e.type = r.type;
+    e.items.push(r);
+  }
+  // 标签排序：高置信 query 优先在前（read 反向垫底）
+  for (const e of g.values()) e.items.sort((x, y) => rank(y.type) - rank(x.type));
+  return [...g.values()];
+  function rank(t) { return t === 'query' ? 2 : t === 'write' ? 1 : 0; }
+}
+
+function cardH(tbl) { return HEAD_H + tbl.columns.length * ROW_H + PAD * 2; }
+
+function render(tables, rels) {
+  const byName = new Map(tables.map(t => [t.name, t]));
+  const edges = groupRels(rels);
+  const N = tables.length;
+  const perRow = Math.max(1, Math.ceil(Math.sqrt(N)));
+  // 网格布局：行高取该行最大卡片高
+  const rows = [];
+  tables.forEach((t, i) => {
+    const r = Math.floor(i / perRow);
+    if (!rows[r]) rows[r] = { maxH: 0, cards: [] };
+    rows[r].cards.push(t);
+    rows[r].maxH = Math.max(rows[r].maxH, cardH(t));
+  });
+  const pos = new Map(); // 表名 → {x, y, w, h}
+  let x = 20, y = 20;
+  tables.forEach((t, i) => {
+    const r = Math.floor(i / perRow), c = i % perRow;
+    x = 20 + c * (W + COL_GAP);
+    y = 20 + rows.slice(0, r).reduce((s, rr) => s + rr.maxH + ROW_GAP, 0);
+    pos.set(t.name, { x, y, w: W, h: cardH(t) });
+  });
+  const Wpx = perRow * (W + COL_GAP) - COL_GAP + 40;
+  const Hpx = rows.reduce((s, rr) => s + rr.maxH + ROW_GAP, 0) - ROW_GAP + 40;
+
+  let svg = `<svg width="${Wpx}" height="${Hpx}" xmlns="http://www.w3.org/2000/svg">`;
+  svg += `<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#1677ff"/></marker></defs>`;
+  // 边（先画，垫在卡片下）
+  for (const e of edges) {
+    const pa = pos.get(e.a), pb = pos.get(e.b);
+    if (!pa || !pb) continue;
+    const ax = pa.x + pa.w / 2, ay = pa.y + pa.h / 2;
+    const bx = pb.x + pb.w / 2, by = pb.y + pb.h / 2;
+    const style = e.type === 'query'
+      ? 'stroke:#1677ff;stroke-width:2.2;marker-end:url(#arr)'
+      : e.type === 'write'
+        ? 'stroke:#fa8c16;stroke-width:1.6;stroke-dasharray:6,3;marker-end:url(#arr)'
+        : 'stroke:#b0b0b0;stroke-width:1;stroke-dasharray:2,3';
+    svg += `<line x1="${ax}" y1="${ay}" x2="${bx}" y2="${by}" style="${style}"/>`;
+    // 标签：线中点上方，同组多列对垂直堆叠
+    const mx = (ax + bx) / 2, my = (ay + by) / 2 - 6;
+    e.items.forEach((r, i) => {
+      const colA = r.from_table + '.' + r.from_col, colB = r.to_table + '.' + r.to_col;
+      svg += `<text x="${mx}" y="${my - i * 13}" class="edge-label" text-anchor="middle">
+        <tspan fill="${e.type === 'query' ? '#1677ff' : e.type === 'write' ? '#d46b08' : '#999'}" font-weight="600">${r.from_col}</tspan> → ${r.to_col}
+      </text>`;
+    });
+  }
+  // 卡片
+  for (const t of tables) {
+    const p = pos.get(t.name);
+    const h = cardH(t);
+    svg += `<rect class="tbl" x="${p.x}" y="${p.y}" width="${W}" height="${h}" rx="6"/>`;
+    svg += `<rect class="tbl-head" x="${p.x}" y="${p.y}" width="${W}" height="${HEAD_H}" rx="6"/>`;
+    svg += `<rect x="${p.x}" y="${p.y + HEAD_H - 6}" width="${W}" height="6" fill="#2f54eb"/>`;
+    svg += `<text class="tbl-title" x="${p.x + 12}" y="${p.y + 21}">${t.name}</text>`;
+    t.columns.forEach((c, i) => {
+      const cy = p.y + HEAD_H + i * ROW_H + ROW_H - 6;
+      if (i % 2 === 1) svg += `<rect class="tbl-row-alt" x="${p.x + 1}" y="${p.y + HEAD_H + i * ROW_H}" width="${W - 2}" height="${ROW_H}"/>`;
+      const colName = c.name.includes('.') ? c.name.slice(c.name.indexOf('.') + 1) : c.name;
+      const acc = c.access === 'write' ? '写' : c.access === 'filter' ? '过滤' : c.access === 'read' ? '读' : c.access;
+      const accClass = c.access === 'write' ? 'acc-write' : c.access === 'filter' ? 'acc-filter' : 'acc-read';
+      const accText = acc ? `<tspan class="acc ${accClass}" dx="4">[${acc}]</tspan>` : '';
+      svg += `<text class="tbl-row" x="${p.x + 12}" y="${cy}"><tspan class="col" title="${c.name}">${colName}</tspan>${accText}</text>`;
+    });
+  }
+  svg += '</svg>';
+  document.getElementById('svg-wrap').innerHTML = svg;
+}
+load();
+</script>
+</body>
+</html>

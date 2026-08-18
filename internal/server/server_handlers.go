@@ -45,6 +45,24 @@ func (s *Server) handleModuleCalls(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"calls": calls})
 }
 
+// handleER 数据库 ER 图（/api/er）：全库外部表 + 各表列清单 + 表间关联
+// （query 键关联高置信 / write 同源中置信 / read 间接低置信）——
+// 前端 er.html 数据源。
+func (s *Server) handleER(w http.ResponseWriter, r *http.Request) {
+	data, err := s.acts.ER()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if data.Tables == nil {
+		data.Tables = []domain.ERTable{}
+	}
+	if data.Relations == nil {
+		data.Relations = []*domain.TableRelation{}
+	}
+	writeJSON(w, data)
+}
+
 // handleIncremental 增量构建自动触发（field_trace.md §20.1）：
 // POST /incremental（无负载，serve 已绑定 repo）→ 202 + 异步执行；
 // 执行中再请求 → 409（单写者）；未配置 buildFn → 404（提示先 init）。
