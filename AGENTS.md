@@ -242,6 +242,16 @@ defer logger.Debug("exit <name>")
   适配器改动后须跑它验证（CLI 全管道回归）。
 - **schema 与语义变更需重建验证**：适配器改动后验证仓库必须 `init` 全量重建
   （增量 update 只更新变更文件，可能残留旧形态数据）。
+- **relations 推断变更必须递增 relationsAlgoVersion**（rg_cache.go，当前 q208）：
+  缓存键 = build_id + 版本，改 rg_*.go/relationsFor* 不递增会残留旧缓存
+  （Q199 教训；Q205/Q208 各复发一次）。快速验证手段：
+  `sqlite3 <repo>/.codeintel/codeintel.db "DELETE FROM relation_candidates"`
+  强制重算；缓存存**未过滤全量**（Q208），hops 过滤是读取期行为——窄参数
+  查询不会污染缓存，放宽参数始终可见长链。
+- **前端截图验证**（2026-08-18 ER 图教训）：playwright 视口宽度必须 ≥ SVG
+  宽度（默认 1440 会横向截断——用 2600 或元素级截图）；截图后必须用 PIL
+  像素解析验证内容范围与线色（本环境 Read 工具读不了图片）；fullPage 只
+  截视口宽；SVG 高度要预留行间隙（绕障线垂直段超出会被裁剪）。
 
 ## 已知限制
 

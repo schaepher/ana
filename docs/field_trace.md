@@ -24,6 +24,39 @@
 12. [附录：决策记录](#12-附录决策记录)
 14. [实现补充记录（v2.3）](#14-实现补充记录v23)
 
+15. [优化路线图（设计树决策 Q84–Q102，2026-08-14）](#15-优化路线图)
+16. [未调用函数与孤立链分析（Q104–Q113，2026-08-14）](#16-未调用函数与孤立链分析)
+17. [--since 标注推广与节点间路径查询（Q115–Q120，2026-08-14）](#17-since-标注推广与节点间路径查询)
+18. [大仓模块间调用关系分析（Q121–Q128，2026-08-14）](#18-大仓模块间调用关系分析)
+19. [路线调整（Q135，2026-08-15）](#19-路线调整)
+20. [增量自动触发与性能基准（Q136–Q137，2026-08-15）](#20-增量自动触发与性能基准)
+21. [P2：跨函数客户端、ServiceDesc、模块图前端（Q144–Q147，2026-08-15）](#21-p2-跨函数客户端-servicedesc-模块图前端)
+22. [query table 表级数据流聚合（Q148，2026-08-15）](#22-query-table-表级数据流聚合)
+23. [动态派发补 indirect_write 摘要（Q154，2026-08-16）](#23-动态派发补-indirect_write-摘要)
+24. [value-trace 递归 CTE 按 (id, dir) 去重（Q155，2026-08-16）](#24-value-trace-递归-cte-按-去重)
+25. [unused 大仓库性能：EXISTS 子查询 → 预聚合（go2o 实测，2026-08-16）](#25-unused-大仓库性能-exists-子查询-预聚合)
+26. [通用接口摘要：动态 invoke 外部框架 ORM 映射（Q156，2026-08-16）](#26-通用接口摘要-动态-invoke-外部框架-orm-映射)
+27. [间接写嵌套传播 + 调用点粒度 + value-trace 候选标注（Q157，2026-08-16）](#27-间接写嵌套传播-调用点粒度-value-trace-候选标注)
+28. [gof 原生 SQL/ORM 映射 + pay_order 键关联贯通（Q158，2026-08-16）](#28-gof-原生-sql-orm-映射-pay_order-键关联贯通)
+29. [ER 图外键语义过滤：丢弃主键互查噪音（Q159，2026-08-16）](#29-er-图外键语义过滤-丢弃主键互查噪音)
+30. [全库关联单次查询：query relations --all + export relations（Q160，2026-08-16）](#30-全库关联单次查询-query-relations---all-export-relations)
+31. [动态候选溯源：边级元数据 + value-trace 标注/过滤 + 摘要 origins（Q161，2026-08-16）](#31-动态候选溯源-边级元数据-value-trace-标注-过滤-摘要-origins)
+32. [分析流程清单与内存检查（Q162，2026-08-17）](#32-分析流程清单与内存检查)
+33. [摘要 origins 多字段遗漏 + value-trace 父容器越界修复（Q163，2026-08-17）](#33-摘要-origins-多字段遗漏-value-trace-父容器越界修复)
+34. [构建管线复杂度优化（Q168，2026-08-17）](#34-构建管线复杂度优化)
+35. [trace-backward --follow-indirect（Q172，2026-08-17）](#35-trace-backward---follow-indirect)
+36. [XORM 支持（Q175，2026-08-17）](#36-xorm-支持)
+37. [包级分析缓存（Q176，2026-08-17）](#37-包级分析缓存)
+38. [relations 性能优化：内存图 BFS + 结果缓存 + CLI 过滤（Q177，2026-08-17）](#38-relations-性能优化-内存图-bfs-结果缓存-cli-过滤)
+39. [go2o ER 键关联 21 条全量源码验证（2026-08-17）](#39-go2o-er-键关联-21-条全量源码验证)
+40. [SelfContained 集成测试迁移为单元测试（2026-08-17）](#40-selfcontained-集成测试迁移为单元测试)
+41. [relations 降噪体系（Q195–Q198，2026-08-18）](#41-relations-降噪体系)
+42. [跨函数 write 精度链与缓存键版本化（Q199/Q200/Q202 系列，2026-08-18）](#42-跨函数-write-精度链与缓存键版本化)
+43. [Query 回调闭包形态（Q201，2026-08-18）](#43-query-回调闭包形态)
+44. [gof orm 字符串 where 形态（Q205 系列，2026-08-18）](#44-gof-orm-字符串-where-形态)
+45. [ER 图前端交互与懒加载（Q203/Q204/Q209/Q210，2026-08-18）](#45-er-图前端交互与懒加载)
+46. [可观测性（Q206/Q207，2026-08-18）](#46-可观测性)
+47. [缓存语义修正与 write 跳数（Q208，2026-08-18）](#47-缓存语义修正与-write-跳数)
 ---
 
 ## 1. 项目背景与目标
@@ -1734,3 +1767,128 @@ integration tag（make test 不覆盖）。按"单元测试与实现同目录"�
 **结果**：20 个迁移测试全绿；文件全部 ≤300 行（trace_object 216/trace_chain
 224/vt_trace 160/vt_dispatch 296/orm_chain 222/migrated 114）；integration
 剩余为真集成测试（CLI 全流程 + scip），TestCLIFullFlow 拆 Part1/Part2。
+
+## 41. relations 降噪体系（Q195–Q198，2026-08-18）
+
+**背景**：全量 relations（go2o 41142 条）噪音大——全列 INSERT/UPDATE 的
+列爆炸、6-10 跳长链失真。Q195 起按"跳数上限 + 聚合"两级降噪，全部
+relations 出口统一应用。
+
+**Q195 降噪（dedupRelationNoise，全部出口统一）**：
+- ① 跳数上限：query/write/read 各 4 跳（0=不限制）
+- ② 聚合：同 from 字段 → 同 to 表的多列（全列 INSERT/UPDATE 列爆炸）
+  只留 hops 最小一条；**query 列级保留**（键关联每列独立有意义）
+- Q196：query 也套跳数上限（此前保留长链）；`--include-long-query` 查看
+- Q197：三类跳数可配置 `--query-max-hops/--write-max-hops/--read-max-hops`
+  （0=不限制；-1=未传用默认 4）；网页版 `/api/er?q_hops/w_hops/r_hops`
+- Q198：自关联（from==to）兜底丢弃（主机制 BFS 已排除，防回归）
+
+**聚合细则（Q202b 补充）**：write 且目标列以 `id` 结尾（外键列
+res_id/role_id）**不聚合**——每个外键列独立真实关联；非外键列（列爆炸）
+按 字段→表 聚合。
+
+## 42. 跨函数 write 精度链与缓存键版本化（Q199/Q200/Q202 系列，2026-08-18）
+
+**Q199**：跨函数 write 丢弃——对象整体传递 ≠ 字段值流入（argument/returns
+经过的链上 write 终点无字段级证据）。同时引入 **relationsAlgoVersion**：
+relation_candidates 缓存键 = build_id + 版本，**改 rg_*.go/relationsFor*
+必须递增**，否则旧缓存残留（Q205/Q208 各递增一次，当前 q208）。
+
+**Q200**：前端同字段双向链合并为一条线（严格反向同字段对，标注 ↔）。
+
+**Q202 值级 taint**（跨函数 write 精确保留）：
+- BFS 传播起点列字段名集合：字段读节点 → 解引用值时与字段名求交
+  （role.Id.read 只取 id 的 taint——create_time 不流入 id 值）
+- 对象（指针/结构体）→ 字段写节点不延续 taint（基地址只是取址）
+- 终点判定：跨函数 write 保留条件 = 列名呼应（id ⊆ order_id）或外键
+  列回退（fkColMatches + pkColMatches）
+- **Q202c**：跨函数 write 目标列须外键形态（呼应起点表名）——
+  role.id → res_id 虽 taint 呼应但 res_id 非角色外键（同函数上下文
+  连通假关联），不展示；role_id/order_id 呼应保留
+
+**工具函数**：colNameOf/intersectTaint/taintMatches（HasSuffix 双向）/
+fkColMatches（列去 _id/id 后缀 base 呼应表名）/pkColMatches（id 或表名单数）。
+
+## 43. Query 回调闭包形态（Q201，2026-08-18）
+
+`Query(sql, func(rows){...})` 形态：读出值进入回调闭包形参（rows）——
+read 节点边指向闭包形参（归属父函数）而非调用返回值（静态无连接链断）。
+闭包内 rows.Scan(&i) 后 i 参与后续值流，跨函数链贯通（go2o
+settleRiseData 的 pf_riseinfo.person_id 因此断链修复）。
+
+## 44. gof orm 字符串 where 形态（Q205 系列，2026-08-18）
+
+**背景**：go2o 的 `p.o.Select(&list, "attr_id = $1", pk)` 等封装调用此前
+无 spec——where 字符串列名不产 filter 节点（attr.id → attr_item.attr_id
+键关联漏报根因）。
+
+**① 内置 spec**：`orm.Orm` 接口补 Select/GetBy（read + where）/Delete
+（write + where）/SelectByQuery/GetByQuery（sql）/Save（方法形态）——
+直调常量 where 的 Select 全部识别（go2o 新增 297 个 filter 节点）。
+
+**② 接口兜底 inferInterfaceFilter**：无 spec 的业务接口方法（SelectAttr/
+SelectAttrItem 等包裹查询——内部 p.o.Select 的 where 是形参、常量在调用
+点不跨函数传播），按 where 常量串（含 = 与 $）+ 返回 slice 元素类型启发
+式发射 filter 节点 + 绑定值边。**vtype 不写死 gorm**：where 串是完整
+SQL（SELECT/UPDATE/DELETE 前缀）标注 sql 且列名走 parseSQLStmt（whereColsOf
+对 SQL 全文会解析出整串）。
+
+**③ 双发射修复**：slice 变量返回（`return list`）的 load 节点（#list）与
+Alloc 节点（#t0）是两个节点——统一为变量名 ID（applyScanOut/load 分支
+同规则；emitValue 的 UnOp MUL of Alloc 与 Alloc 通用分支都走 instancePath）。
+跨函数 values 缓存按函数新建，直接按规则生成不依赖缓存命中。
+
+**④ filterFKNoise 修正**：同目标列多起点时 FromCol="id" 的起点此前一律
+滤（Q159 主键起点=桥接噪音假设）——**query 类型不参与**（attr.id 读出 →
+查 attr_item.attr_id 是真实键关联）；read/write 保持原语义。
+
+**⑤ 前端修正（Q205c/Q205d/Q205e）**：SVG 高度预留行间隙（绕障线垂直段
+被裁剪）；http_call method 按调用形态提取（Get→GET；NewRequest→Args[0]；
+NewRequestWithContext→Args[1]；Do→复用 reqMethods——此前 http.Get 字面量
+URL 被误当 method）；模块间调用页线在节点矩形上层。
+
+## 45. ER 图前端交互与懒加载（Q203/Q204/Q209/Q210，2026-08-18）
+
+**Q203**：双击表标题/字段文字也能展开——文字补 data-tbl（此前 dblclick
+的 closest('[data-tbl]') 沿祖先链找不到表）。
+
+**Q204**：全图画线开关（页顶勾选直接画全部关系线，localStorage
+codeintel.erAllLines）——不勾选维持默认（不连线，双击展开）。
+
+**Q209/Q210 关系加载按需三级**：
+- 首次加载：`/api/er?skip_relations=1` 只返回表清单（单查询毫秒级，
+  不触发全库 BFS——无缓存时 5.4s）
+- 双击某表：`/api/er?table=X` 只返回该表相关 relations（单表 BFS +
+  单表缓存，GetTableRelations）；多表展开前端累积合并（mergeRels 去重）
+- 全图画线开关/跳数变更：才请求全量（GetAllTableRelations，一次后缓存命中）
+
+**前端交互汇总**（er.html，go:embed）：双画法（平铺/嵌套）、双击展开
+多选、正交绕障布线（列/行间隙通道 + 端点微弯分叉 + 全局线序号偏移防
+重合）、每条线独立配色（12 色调色板）、同字段双向合并、跳数配置
+（localStorage codeintel.erHops）、滚动重置（滚动容器是 window）。
+
+## 46. 可观测性（Q206/Q207，2026-08-18）
+
+**Q206**：全部 `(Actions)` 导出方法（31 个）入口 info 日志——
+`enter (Actions).Xxx` + 入参（zap.String/Int/Float64/Bool/Any 按参数
+类型）+ `defer exit`。静态 AST 检查测试 TestActionsEntryLogs 防回归。
+
+**Q207**：慢操作耗时日志——loadRelationGraph/GetAllTableRelations
+enter/exit Info + elapsed 字段（go2o 实测：图加载 530ms、无缓存全流程
+5.4s、缓存命中 62ms）。
+
+## 47. 缓存语义修正与 write 跳数（Q208，2026-08-18）
+
+**① 缓存存未过滤全量**：relation_candidates 此前存 dedup（hops 过滤）后
+的行——首次窄参数查询后放宽 q_hops 无法展示长链（长链行没进缓存）。
+修复：缓存写未过滤全量（单表 saveRelationCandidates / 全库
+rebuildRelationCandidates），hops 过滤只在读取期（缓存命中路径也过
+dedup）。TestRelationCacheHopsWiden 覆盖。
+
+**② dedup 快速路径删除**：`len(rels) < 2` 直接返回曾跳过跳数过滤（单条
+长链不受上限约束）。
+
+**③ write 默认不限制跳数**（DefaultRelationHops.Write=0）：Q199/Q202 已
+把无值流 taint 的跨函数 write 丢弃，剩余 write 均精确（go2o 全库 write
+仅 1 条 4 跳）——跳数上限会误伤深层字段赋值链（order.id → A.order_id
+6 跳）；w_hops 显式设置仍生效。
