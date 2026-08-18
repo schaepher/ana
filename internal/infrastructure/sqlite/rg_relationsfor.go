@@ -133,6 +133,14 @@ func (g *relationGraph) relationsFor(table string) []*domain.TableRelation {
 				if _, ok := visited[other]; ok {
 					continue
 				}
+				// Q220b：error 类型值不进入 BFS——多返回值元组 (T, error)
+				// 共享节点，err 元素与业务值元素（如 (int, error) 的 int）
+				// 被无向边连在一起，err 跨函数传播链会把无关函数串入
+				// （go2o 实测假链：approval_log.id → err → ... → 支付单
+				// id → pay_divide.pay_id [12跳 fk]）。error 不携带业务列值。
+				if n := g.nodes[other]; n != nil && n.typeString == "error" {
+					continue
+				}
 				visited[other] = depth + 1
 				crossed[other] = cur.crossed || g.crossEdges[cur.id][other]
 				// Q202 值级 taint 传播：字段读节点 → 解引用值 时 taint 与

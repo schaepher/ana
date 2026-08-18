@@ -120,6 +120,23 @@ CREATE TABLE IF NOT EXISTS relation_candidates (
 CREATE INDEX IF NOT EXISTS idx_relcand_build_from ON relation_candidates(build_id, from_table);
 `
 
+// configSchema 配置表（Q220c）：独立于 schema 版本演进——幂等补建
+// （CREATE TABLE IF NOT EXISTS，打开时始终执行，旧库自动获得配置表，
+// 不要求 clean 重建）；ResetGraphTables 不 DROP（clean/reindex 保留）。
+// 用户连线规则：外键形态列（merchant_id 等）值来自参数、无值流验证时，
+// 由用户声明规则连线。from_table='' 为模式规则（所有含 from_col 列的
+// 表 → to_table.to_col）；否则为显式列对。生效时校验目标表/列存在。
+const configSchema = `
+CREATE TABLE IF NOT EXISTS relation_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_table TEXT NOT NULL DEFAULT '',
+    from_col TEXT NOT NULL,
+    to_table TEXT NOT NULL,
+    to_col TEXT NOT NULL DEFAULT 'id',
+    created_at INTEGER NOT NULL DEFAULT 0
+);
+`
+
 // Open 打开（或创建）仓库根目录下的 .codeintel/codeintel.db，并校验 schema 版本。
 func Open(repoPath string) (*DB, error) {
 	logger := zap.L()
@@ -174,6 +191,10 @@ func (db *DB) init() error {
 		if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", SchemaVersion)); err != nil {
 			return fmt.Errorf("set user_version: %w", err)
 		}
+	}
+	// Q220c：配置表幂等补建（旧库自动获得 relation_rules，不要求 clean）
+	if _, err := db.Exec(configSchema); err != nil {
+		return fmt.Errorf("create config schema: %w", err)
 	}
 	return nil
 }

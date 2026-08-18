@@ -93,10 +93,17 @@ func (r *Repo) relationsForSQL(table string) ([]*domain.TableRelation, error) {
 				}
 				// cur/other 元数据（src==cur 时 cur=ns 行、other=nt 行）
 				curKind, curAccess, curType, curName := sk, sa.String, st.String, sn
-				oKind, oAccess := tk, ta.String
+				oKind, oAccess, oType := tk, ta.String, tt.String
 				if tgt == cur {
 					curKind, curAccess, curType, curName = tk, ta.String, tt.String, tn
-					oKind, oAccess = sk, sa.String
+					oKind, oAccess, oType = sk, sa.String, st.String
+				}
+				// Q220b：error 类型值不进入 BFS（与内存路径一致）——
+				// 多返回值元组 (T, error) 共享节点，err 跨函数传播链把
+				// 无关函数串入（approval_log.id → err → 支付单 id →
+				// pay_divide.pay_id 假 fk 链）。error 不携带业务列值。
+				if oType == "error" {
+					continue
 				}
 				t := curNode.taint
 				if curKind == string(domain.KindFieldAccess) && curAccess == "read" && src == cur {

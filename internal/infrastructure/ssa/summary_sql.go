@@ -251,28 +251,47 @@ func callbackClosureParam(cc *ssa.CallCommon) ssa.Value {
 
 func whereColsOf(where string) []string {
 	var cols []string
-	re := regexp.MustCompile(`\s+(AND|OR)\s+`)
-
-	if i := regexp.MustCompile(`\s+ORDER\s+BY\s+`).FindStringIndex(where); i != nil {
-		where = where[:i[0]]
+	up := strings.ToUpper(where)
+	// 尾部子句清理（LIMIT/OFFSET/ORDER BY/GROUP BY/HAVING）——此前残留
+	// 进列名（"alias = $1 LIMIT 1" → 整串当列名）
+	for _, stop := range []string{" ORDER BY ", " GROUP BY ", " LIMIT ", " OFFSET ", " HAVING "} {
+		if j := strings.Index(up, stop); j >= 0 {
+			where = where[:j]
+			up = strings.ToUpper(where)
+		}
 	}
-	for _, part := range re.Split(where, -1) {
-		if i := strings.Index(part, " IN ("); i >= 0 {
-			part = part[:i]
-		} else if strings.HasSuffix(strings.ToLower(part), " is null") {
-			part = part[:len(part)-len(" is null")]
-		} else if i := strings.LastIndex(part, "?"); i >= 0 {
-			part = part[:i]
-		}
-
-		if m := regexp.MustCompile(`\s*[=<>!]+\s*\S+$`).FindStringIndex(part); m != nil {
-			part = part[:m[0]]
-		}
-		part = strings.TrimRight(part, " =<>!()")
+	// Q220：AND/OR 拆分大小写不敏感（此前区分大小写——go2o 的 lowercase
+	// " and " 整串未拆分 → 列名含 " = ? and ..." 垃圾：pay_merchant.user_type
+	// = ? and user_id、ad_data.ad_id=$1 and id 等）
+	for _, part := range whereCondRe.Split(where, -1) {
 		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if m := whereColLeadRe.FindStringSubmatch(part); m != nil {
+			cols = append(cols, m[1])
+			continue
+		}
+		// 无操作符裸列名形态（In("amount")/NotIn("status")）；占位符/
+		// 字面量残留（BETWEEN $1 and $2 的 $2）跳过
+		if part[0] < 'A' || (part[0] > 'Z' && part[0] < 'a') || part[0] > 'z' {
+			continue
+		}
+		if i := strings.IndexAny(part, " \t\n"); i >= 0 {
+			part = part[:i]
+		}
+		part = strings.Trim(part, "`\"[]()")
 		if part != "" {
 			cols = append(cols, part)
 		}
 	}
 	return cols
 }
+
+// whereCondRe AND/OR 条件拆分（大小写不敏感，\s 覆盖换行/制表符）。
+var whereCondRe = regexp.MustCompile(`(?i)\s+(AND|OR)\s+`)
+
+// whereColLeadRe 条件串首列名提取：列名 + 操作符（= / <> / < / > /
+// LIKE / BETWEEN / IS / IN），操作符后须接空白或占位符/数字（兼容
+// "ad_id=$1" 无空格、"? " 与 "0" 字面量）。列名支持表前缀（b.id）。
+var whereColLeadRe = regexp.MustCompile(`(?i)^([A-Za-z_][A-Za-z0-9_.]*)\s*(?:=|<>|<=|>=|<|>|LIKE|BETWEEN|IS|IN)(?:\s|[$\?0-9])`)

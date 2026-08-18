@@ -24,7 +24,9 @@ func (r *Repo) GetTableRelations(table, mode string) ([]*domain.TableRelation, e
 	defer logger.Debug("exit (Repo).GetTableRelations")
 
 	if rels, ok := r.loadRelationCandidates(table); ok {
-		return dedupRelationNoise(rels, r.relationHops), nil
+		// Q220c：缓存命中路径同样合并用户连线规则（规则独立于 build_id）
+		out := dedupRelationNoise(rels, r.relationHops)
+		return r.mergeRuleRelations(out)
 	}
 	var rels []*domain.TableRelation
 	var err error
@@ -45,7 +47,9 @@ func (r *Repo) GetTableRelations(table, mode string) ([]*domain.TableRelation, e
 	// 也过 dedup）。此前存 dedup 后行：首次窄参数查询后放宽 q_hops
 	// 无法展示长链（长链行没进缓存）。
 	r.saveRelationCandidates(table, rels)
-	return dedupRelationNoise(rels, r.relationHops), nil
+	out := dedupRelationNoise(rels, r.relationHops)
+	// Q220c：合并用户连线规则（规则生成 fk，同 key 覆盖低 rank）
+	return r.mergeRuleRelations(out)
 }
 
 // GetTables 枚举全库外部表名（gorm/sql 虚拟节点表名去重，Q160）。
@@ -94,7 +98,8 @@ func (r *Repo) GetAllTableRelations(mode string) ([]*domain.TableRelation, error
 	if buildID := r.cacheKey(); buildID != "" {
 		if rels, ok := r.loadAllRelationCandidates(buildID); ok {
 			logger.Debug("relations --all 命中缓存", zap.String("build_id", buildID))
-			return dedupRelationNoise(rels, r.relationHops), nil
+			out := dedupRelationNoise(rels, r.relationHops)
+			return r.mergeRuleRelations(out)
 		}
 	}
 	if !r.useMemoryGraph(mode) {
@@ -102,7 +107,8 @@ func (r *Repo) GetAllTableRelations(mode string) ([]*domain.TableRelation, error
 		if err != nil {
 			return nil, err
 		}
-		return dedupRelationNoise(rels, r.relationHops), nil
+		out := dedupRelationNoise(rels, r.relationHops)
+		return r.mergeRuleRelations(out)
 	}
 	g, err := r.cachedRelationGraph() // 任务 #165：进程内图缓存（按 build_id 失效）
 	if err != nil {
@@ -138,7 +144,9 @@ func (r *Repo) GetAllTableRelations(mode string) ([]*domain.TableRelation, error
 	})
 	// Q208：缓存存未过滤全量（rebuild 写全量；返回仍按当前 hops 过滤）
 	r.rebuildRelationCandidates(out, tables)
-	return dedupRelationNoise(out, r.relationHops), nil
+	final := dedupRelationNoise(out, r.relationHops)
+	// Q220c：合并用户连线规则（规则生成 fk，同 key 覆盖低 rank）
+	return r.mergeRuleRelations(final)
 }
 
 // relTypeRank 关联类型优先级（聚合去重用）：fk > query > write > read。

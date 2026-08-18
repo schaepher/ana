@@ -511,6 +511,9 @@ SSA 语义与映射类决策全部保留：Q1（SSA_VALUE 统一建模）、Q2�
     （§50–§51）——orm.Mapping 表名映射、包级缓存失效、SQL 路径 taint
     同步、e2e 自包含、fk 类型（值流验证）；Q219（§45）——ER 双向合并
     relRank 补 fk
+  - **08-19**：Q220（§52）——where 条件串解析（大小写/尾部子句/多
+    操作符）、BFS 阻断 error 值链（元组假链）、用户连线规则
+    （relation_rules，clean 保留）
 
 ---
 
@@ -2201,4 +2204,53 @@ ER 图 78 条 fk 线渲染。
 
 ---
 
-**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q218，逐 Q 编号 + 日期）。
+## 52. where 串解析、error 链阻断、用户连线规则（Q220，2026-08-19）
+
+用户实测 ER 图三问题，全部修复/实现：
+
+**Q220a where 条件串解析垃圾列名**。三处根因：
+- `whereColsOf` 的 AND/OR 拆分正则大小写敏感——go2o 的 lowercase
+  " and " 整串未拆分 → 列名含 " = ? and ..." 垃圾（pay_merchant.
+  user_type = ? and user_id、ad_data.ad_id=$1 and id、sys_district.
+  parent = 0 and code）。修复：`(?i)` 拆分 + 尾部子句清理（LIMIT/
+  OFFSET/ORDER BY/GROUP BY/HAVING）+ 操作符正则（= / <> / < / > /
+  LIKE / BETWEEN / IS / IN，兼容 "ad_id=$1" 无空格与字面量 "parent =
+  0"）+ 裸列名形态（In("amount")）保留 + 占位符/字面量残留跳过
+- GORM Where 字符串列名只截 " = "（summary_orm.go）——"b.id is
+  null" / "name LIKE ?" 整串当列名。修复：改用 whereColsOf 取首列
+- 修复后 pay_merchant 拆出 user_type/user_id 两个正常 filter 节点，
+  值实参按 ? 顺序正确映射
+
+**Q220b error 值链误串表关联**。根因：多返回值元组 (T, error) 共享
+节点，err 元素与业务值元素（如 (int, error) 的 int）被无向边连在
+一起——approval_log.id → (*ApprovalLog, error) → err → 跨函数 err 传播
+（errorV2 → DivideSuccess）→ (int, error) → 支付单 id → pay_divide.
+pay_id [12跳 fk] 假链（实际 pay_divide.pay_id 的值来自 pay_order.Id）。
+修复：BFS（内存 rg_relationsfor.go / SQL rg_sql.go 双路径）跳过
+type_string="error" 的节点——error 不携带业务列值。合法链不受影响
+（fixture 对照链仍 fk）。relationsAlgoVersion q209 → q210。
+
+**Q220c 用户连线规则（设计树确认）**。merchant_id 等外键形态列值来自
+函数参数、无值流验证 → ER 图无线（8 张表实测均无）。用户决策：不做
+自动外键回退，改为**用户添加规则声明连线**：
+- `codeintel rule add "merchant_id → mch_merchant.id"`——模式规则（
+  所有含 merchant_id 列的表 → mch_merchant.id，一条覆盖 8 张表）；
+  `"pt_member_level.merchant_id → mch_merchant.id"`——显式列对；
+  目标列省略默认 id；→ 或 -> 均可
+- `codeintel rule list [--json]` / `rule remove <id>`
+- 存 relation_rules 表（数据库），**clean/reindex 保留**（ResetGraphTables
+  不 DROP 配置表，schema IF NOT EXISTS）
+- 生效约束：目标表/列必须真实存在（幽灵线防护）；来源列（显式规则）
+  存在；自关联跳过。生成关系 type=fk（用户声明可信，ER 默认显示）、
+  hops=1；读取期合并（GetTableRelations/GetAllTableRelations 缓存命中
+  与计算路径统一），同 key 时 rank 覆盖，不进 relation_candidates
+  （规则独立于 build_id，加规则无需重算）
+
+**验证**：whereColsOf 单测 16 例 + GORM Where fixture + error 阻断
+BFS fixture + 规则 4 测（模式/显式+校验/clean 保留/rank 覆盖）+ CLI
+3 测 + 12 包 + e2e-fixture 28 项全绿；go2o 实测垃圾节点消失、
+approval_log → pay_divide 假链消失（新旧 build 缓存并存无害）。
+
+---
+
+**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q220，逐 Q 编号 + 日期）。

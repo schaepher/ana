@@ -124,9 +124,14 @@ func (ext *fieldExtractor) applyORMWrite(cc *ssa.CallCommon, calleeID domain.Can
 				table = snakeCase(scope.Obj().Name())
 			}
 			col := constant.StringVal(c.Value)
-
-			if i := strings.Index(col, " = "); i >= 0 {
-				col = col[:i]
+			// Q220：列名用 whereColsOf 提取（原实现只截 " = "——"b.id is
+			// null" / "name LIKE ?" 等形态整串当列名，go2o 实测
+			// merchant.b.id is null 垃圾节点）。取首个条件列（多条件
+			// Where 与旧行为一致只取首列；条件提取失败则跳过发射）
+			if cols := whereColsOf(col); len(cols) > 0 {
+				col = cols[0]
+			} else {
+				return nil
 			}
 
 			access := "write"

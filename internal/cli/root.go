@@ -32,6 +32,8 @@ func Main(ctx context.Context, args []string) int {
 		return cmdServe(ctx, args[1:])
 	case "clean":
 		return cmdClean(args[1:])
+	case "rule":
+		return cmdRule(args[1:])
 	case "version", "--version", "-v":
 		return cmdVersion(args[1:])
 	case "help", "-h", "--help":
