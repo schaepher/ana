@@ -1940,6 +1940,14 @@ codeintel.erAllLines）——不勾选维持默认（不连线，双击展开）
 重合）、每条线独立配色（12 色调色板）、同字段双向合并、跳数配置
 （localStorage codeintel.erHops）、滚动重置（滚动容器是 window）。
 
+**Q217（2026-08-18）**：全图画线开关刷新后不生效——SHOW_ALL_LINES 从
+localStorage 恢复为 true 时初始化只加载表清单（Q209 skip_relations），
+未触发 ensureFullRels（线必须手动点击开关才出现）。修复：绑定逻辑
+末尾补 `if (SHOW_ALL_LINES) ensureFullRels().then(render)`——恢复开启
+状态时自动全量加载。实测刷新后 linePaths 0 → 8。
+
+---
+
 ## 46. 可观测性（Q206/Q207，2026-08-18）
 
 **Q206**：全部 `(Actions)` 导出方法（31 个）入口 info 日志——

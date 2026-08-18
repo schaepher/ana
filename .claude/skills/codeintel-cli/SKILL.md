@@ -22,14 +22,14 @@ make install
 ```bash
 codeintel init --repo <path> [--workers N] # 全量构建索引（--workers N：SSA 按包并发数，默认 1=串行；内存充足可调 4/8——须有 go.mod；go.work 根目录会提示进模块目录）
 codeintel update --repo <path> [--workers N] # 增量更新（git 检测变更文件，全量分析+增量写入；--workers 同 init）
-codeintel serve --repo <path> --addr :8096 # 启动图探索 Web 服务（前端 AntV G6，端口默认 :8090）
+codeintel serve --repo <path> --addr :8096 # 启动图探索 Web 服务（前端 AntV G6，端口默认 :8090；另含数据库 ER 图页 /er.html：表卡片/嵌套双画法、双击表展开其关联线（全图画线开关刷新后自动恢复，Q217）、每条线独立配色、Q218 fk 类型默认线）
 codeintel query <sub> ... --repo <path>    # 查询（见下；默认加 --json 取结构化输出）
 codeintel export --repo <path> [--out x.json]  # 导出字段双层索引 JSON（字段→产生者/消费者）
 codeintel export relations --repo <path> [--out x.json]  # 导出全库表间关联 JSON（Q160：{"relations": [...]}，与 query relations --all 同源）
 codeintel export graph --type value-trace|callees|lifecycle --target <节点> [--format mermaid|dot] [--out file]
                                            # 图导出：value-trace 默认 mermaid（函数分组）、callees 默认 dot、
                                            # lifecycle 生命周期图（[存储]/[观测]/[读]/[写]+条件标注）
-codeintel clean --repo <path> --force      # 删除索引（schema 变更后必须 clean + init 重建；默认保留 .codeintel/cache 包级分析缓存——pkg hash 自校验，重建时未变包直接跳过；磁盘清理加 --purge-cache）
+codeintel clean --repo <path> --force      # 删除索引（schema 变更后必须 clean + init 重建；默认保留 .codeintel/cache 包级分析缓存——pkg hash + analyzer 分析源码 hash 自校验（Q181/Q183，仅分析逻辑变化失效，CLI/前端等无关改动不触发），分析逻辑/包源码变化自动失效重算；磁盘清理加 --purge-cache）
 codeintel reindex --repo <path> [--workers N] # 一步重建索引（FullBuild 清空图数据表 DROP+CREATE 重建，不删库文件；--workers 同 init）
 codeintel version
 ```
@@ -49,8 +49,8 @@ codeintel version
 | `unused` | 未调用函数与孤立链分析（死代码/流程衔接检查） | `--since <ref>`、`--fail-on unused\|isolated` |
 | `path <from> <to>` | 节点间最短路径（数据流/调用断言） | `--kind data\|calls`、`--max-depth N` 默认 50 |
 | `table <表名>` | 表级数据流聚合：列虚拟节点 + 写入方函数与行号（Q97 字符串 SQL + GORM 结构体写路径） | 从数据库表反推数据流；`--json` 结构化 |
-| `relations <表名>` | 表间关联推断：本表列的值沿数据流链流入其他表列（A.x 读出 → B.y 过滤，无外键依赖）；类型分级 query（键关联）/write（同源）/read（间接） | `--json`、`--format mermaid`（列级图，query 粗线）；P0④：`--type query\|write\|read`（默认 query+write，read 需显式展开）、`--max-hops N`、`--max-results N`、`--memory full\|sql`（auto 按规模，>50 万节点自动逐节点 SQL 防爆内存） |
-| `relations --all` | 全库关联单次聚合（Q160）：一次加载内存图 BFS 全部表合并去重（同列对取 hops 最小 + type 最高），AGENT 一次调用拿全库键关联 | 无需表名；`--json` 数组；过滤参数同单表；结果按 build_id 缓存（relation_candidates，增量 update 后自动失效）；go2o 实测 4.8s |
+| `relations <表名>` | 表间关联推断：本表列的值沿数据流链流入其他表列（A.x 读出 → B.y 过滤，无外键依赖）；类型分级 fk（值流验证的外键键关联，ER 图默认线）/query（键关联）/write（同源）/read（间接） | `--json`、`--format mermaid`（列级图，query 粗线）；P0④：`--type fk\|query\|write\|read`（Q218：默认 fk+query+write，read 需显式展开；fk 独立类型，--type=query,write 不含 fk）、`--max-hops N`（输出过滤）、`--max-results N`、`--memory full\|sql`（auto 按规模，>50 万节点自动逐节点 SQL 防爆内存）；Q195/Q196/Q197 降噪参数：`--include-long-query`（query 不限跳数）、`--query-max-hops/--write-max-hops/--read-max-hops N`（三类各自跳数上限，0=不限制，默认 4） |
+| `relations --all` | 全库关联单次聚合（Q160）：一次加载内存图 BFS 全部表合并去重（同列对取 hops 最小 + type 最高），AGENT 一次调用拿全库键关联 | 无需表名；`--json` 数组；过滤/降噪参数同单表；结果按 build_id 缓存（relation_candidates，增量 update 后自动失效）；go2o 实测 4.8s |
 
 - **执行约定：查询命令默认加 `--json`**——所有 query 子命令默认附加 `--json` 取结构化输出（AGENT 可直接解析字段/断言 reachable）；仅当结果要直接展示给人看（表格/树形）时才省略。`--compact` 去缩进可与 `--json` 叠加
 - **`--since <ref>`**（unused/symbol/fields/callers/callees/impact）：基于 `git diff <ref>` 对本次新增/修改的函数标注 `[new]`/`[mod]`——需求写完检查"本次改动的函数是否接线"
@@ -94,6 +94,13 @@ codeintel query path <起点节点ID> <终点节点ID> --json --repo <目标仓�
 
 # 7. 全量冗余检查（死代码）：无 --since 时报告全部未调用函数
 codeintel query unused --json --repo <目标仓库>
+
+# 8. 表间关联（键关联优先）：全库聚合，默认滤 write/read 噪音与 >4 跳长链
+codeintel query relations --all --json --repo <目标仓库>
+#   查看 query 长链（如 10 跳的真实键关联）：
+codeintel query relations --all --include-long-query --json --repo <目标仓库>
+#   自定义三类跳数上限（0=不限制）：
+codeintel query relations --all --query-max-hops 10 --write-max-hops 0 --json --repo <目标仓库>
 ```
 
 ## 输出解读
@@ -104,6 +111,8 @@ codeintel query unused --json --repo <目标仓库>
 - **路径条件**：追溯行可带 `[条件: ...]`（if/类型分支/env，查询期计算）
 - **动态派发**：symbol 接口类型展示候选实现（`[register 0.9]`/`[enum 0.7]` + 注册点）——接口视角的候选集不受剪枝影响；value-trace 默认剪枝候选边（Q163：从字段锚点追踪不进入其他接口候选实现，需显式 `--min-conf 0` 才展开并标注 `[动态候选]`）
 - **持久化**：SQL 写映射为 `users.name` 虚拟节点（字段→表.列，经 value-trace 可见）
+- **relations 降噪**（Q195/Q196/Q197，全部出口统一应用）：① write/read 按 from字段→to表 聚合（全列 INSERT 的列爆炸收敛为字段级，query 保持列级）；② 跳数上限默认 4（三类可分别配置，0=不限制；query 长链默认滤，--include-long-query 查看）；③ Q218 fk 类型默认不限跳（值流已验证——11 跳真实链 item_info.id→item_image.item_id 直接可见，对象字段换名噪声链保持 query）。实测：radar 592→3 条、go2o 41142→54 条
+- **ER 图页**（serve 后 `/er.html`，数据源 `/api/er`）：表卡片/嵌套（表外框内嵌字段矩形）双画法切换；默认不连线，**双击表**展开其关联线（隐藏无关表重排，支持多表叠加展开，再双击收起）；线走正交绕障通道不压表矩形、每条线独立配色；页头勾选框按类型过滤（外键关联 fk 默认勾选/键关联/同源写/间接读——Q218 默认只画 fk 真实链，query 噪声需手动开启）；线型：fk 粗实线 / query 长虚线 / write 虚线 / read 点线；信息栏显示统计与展开状态
 - **全局溯源**：全局变量跨函数共享节点（`var.<name>`），value-trace 可达初始化表达式
 - **跨层摘要**：`query summary <节点>` 输出生命周期主链（entry/compute/write/consume）
 - **unused 两档**：`无调用`（calls/passes_result 入边空——流程衔接检查）与 `[无引用]`（+passes_to/dispatch_to/initializes/var 初始化引用也空——真死代码）；main/init 永不报告；exported 标 `[exported]`（可能被外部调用）；孤立链 = 链头无 caller、链内 caller ⊆ 链、有链外 caller 断开、互调环整环孤立；盲区：函数值赋值/外部实参嵌套调用/嵌入提升方法（如 `(DB).Exec`）可能误报
