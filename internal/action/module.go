@@ -8,6 +8,7 @@ import (
 
 	"github.com/schaepher/codeintel/internal/domain"
 	"gopkg.in/yaml.v3"
+	"go.uber.org/zap"
 )
 
 // moduleConfig modules.yaml（field_trace.md §18.1）：包路径前缀 → 模块名。
@@ -22,6 +23,9 @@ type moduleConfig struct {
 // 配置前缀为 module 相对路径——先去掉所在 go.mod 的 module 前缀
 // （P2-3 多 go.mod：任一 module 前缀匹配即剥离）；未匹配归 _root）。
 func (a *Actions) ModuleOf(pkgPath string) string {
+	logger := zap.L()
+	logger.Info("enter (Actions).ModuleOf", zap.String("pkg_path", pkgPath))
+	defer logger.Info("exit (Actions).ModuleOf")
 	rel := pkgPath
 	for _, m := range a.modules() {
 		if m == "" {
@@ -137,6 +141,9 @@ type ModuleCall struct {
 // 调用方函数所属模块；经 grpc_impl 边 → 服务实现类型所属模块。
 // filter 非空时只返回该模块作为调用方的调用。
 func (a *Actions) ModuleCalls(filter string) ([]ModuleCall, error) {
+	logger := zap.L()
+	logger.Info("enter (Actions).ModuleCalls", zap.String("filter", filter))
+	defer logger.Info("exit (Actions).ModuleCalls")
 	rows, err := a.repo.GetGrpcCalls()
 	if err != nil {
 		return nil, err

@@ -6,11 +6,15 @@ import (
 	"strings"
 
 	"github.com/schaepher/codeintel/internal/domain"
+	"go.uber.org/zap"
 )
 
 // ResolveSymbol 将用户输入解析为符号：canonical ID 直接命中，否则按名称查找；
 // 多匹配时返回错误并列出候选 ID（原 CLI 语义，供符号类 action 复用）。
 func (a *Actions) ResolveSymbol(input string) (*domain.CodeEntity, error) {
+	logger := zap.L()
+	logger.Info("enter (Actions).ResolveSymbol", zap.String("input", input))
+	defer logger.Info("exit (Actions).ResolveSymbol")
 	if strings.HasPrefix(input, "symbol:") || strings.HasPrefix(input, "file:") || strings.HasPrefix(input, "commit:") {
 		n, err := a.repo.GetSymbol(domain.CanonicalID(input))
 		if err == nil {
@@ -47,6 +51,9 @@ func joinIDs(nodes []*domain.CodeEntity) string {
 // 名称解析，类型限定字段路径（example.com/m.T.A）回退到同字段读节点
 // （FindFieldReads 首个）——此前字段路径被误报"不存在的符号"。
 func (a *Actions) ResolveAnchor(input string) (domain.CanonicalID, error) {
+	logger := zap.L()
+	logger.Info("enter (Actions).ResolveAnchor", zap.String("input", input))
+	defer logger.Info("exit (Actions).ResolveAnchor")
 	if strings.HasPrefix(input, "symbol:") || strings.HasPrefix(input, "file:") || strings.HasPrefix(input, "commit:") {
 		if _, err := a.repo.GetSymbol(domain.CanonicalID(input)); err == nil {
 			return domain.CanonicalID(input), nil
@@ -63,6 +70,9 @@ func (a *Actions) ResolveAnchor(input string) (domain.CanonicalID, error) {
 
 // Symbol 按 canonical ID 查询符号（HTTP expand 的存在性检查用）。
 func (a *Actions) Symbol(id domain.CanonicalID) (*domain.CodeEntity, error) {
+	logger := zap.L()
+	logger.Info("enter (Actions).Symbol", zap.String("id", string(id)))
+	defer logger.Info("exit (Actions).Symbol")
 	return a.repo.GetSymbol(id)
 }
 
@@ -75,6 +85,9 @@ type SymbolDetail struct {
 
 // SymbolDetail 解析符号并返回其详情（调用者/被调用者深度 1）。
 func (a *Actions) SymbolDetail(input string) (*SymbolDetail, error) {
+	logger := zap.L()
+	logger.Info("enter (Actions).SymbolDetail", zap.String("input", input))
+	defer logger.Info("exit (Actions).SymbolDetail")
 	n, err := a.ResolveSymbol(input)
 	if err != nil {
 		return nil, err

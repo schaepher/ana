@@ -5,6 +5,7 @@ package action
 
 import (
 	"github.com/schaepher/codeintel/internal/domain"
+	"go.uber.org/zap"
 )
 
 // MinConfidence 调用关系查询默认置信度阈值（业务规则，TD.md 5.1：
@@ -143,16 +144,25 @@ func (a *Actions) markDispatchCandidates(rows []*domain.TraceRow) ([]*domain.Tra
 
 // Roots 返回顶层入口节点（前端初始视图）。
 func (a *Actions) Roots() ([]*domain.CodeEntity, error) {
+	logger := zap.L()
+	logger.Info("enter (Actions).Roots")
+	defer logger.Info("exit (Actions).Roots")
 	return a.repo.GetRoots()
 }
 
 // Search 全库符号搜索（名称/ID 模糊匹配，上限由仓储实现决定）。
 func (a *Actions) Search(q string) ([]*domain.CodeEntity, error) {
+	logger := zap.L()
+	logger.Info("enter (Actions).Search", zap.String("q", q))
+	defer logger.Info("exit (Actions).Search")
 	return a.repo.GetSymbolByName(q)
 }
 
 // Expand 返回节点的直接邻居（facts + 邻居节点）；返回当前节点供存在性检查。
 func (a *Actions) Expand(id domain.CanonicalID) (cur *domain.CodeEntity, facts []*domain.Fact, nodes []*domain.CodeEntity, err error) {
+	logger := zap.L()
+	logger.Info("enter (Actions).Expand", zap.String("id", string(id)))
+	defer logger.Info("exit (Actions).Expand")
 	cur, err = a.repo.GetSymbol(id)
 	if err != nil {
 		return nil, nil, nil, err

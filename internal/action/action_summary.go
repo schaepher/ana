@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/schaepher/codeintel/internal/domain"
+	"go.uber.org/zap"
 )
 
 // ExportField 双层索引中的一个字段条目（S4，field_trace.md §2）。
@@ -25,6 +26,9 @@ type ExportEntry struct {
 // ExportIndex 生成 字段 → 产生者/消费者 的双层索引（S4）。
 // direct_read 为消费者；direct_write / indirect_write 均为产生者。
 func (a *Actions) ExportIndex() (map[string]*ExportField, error) {
+	logger := zap.L()
+	logger.Info("enter (Actions).ExportIndex")
+	defer logger.Info("exit (Actions).ExportIndex")
 	rows, err := a.repo.AllSummaries()
 	if err != nil {
 		return nil, err
@@ -69,6 +73,9 @@ type SummaryStep struct {
 // 写锚点的下游（③）：写节点无出边——经"同 full_path 的读节点"跳板
 // 接入读的使用链（字段级关联：写入 → 后续读取消费）。
 func (a *Actions) SummaryChain(anchor domain.CanonicalID) ([]SummaryStep, error) {
+	logger := zap.L()
+	logger.Info("enter (Actions).SummaryChain", zap.String("anchor", string(anchor)))
+	defer logger.Info("exit (Actions).SummaryChain")
 	rows, err := a.repo.GetValueTrace(anchor, 8, 0, false)
 	if err != nil {
 		return nil, err
@@ -166,6 +173,9 @@ type UnusedReport struct {
 //   - --since：标注 [new]（声明行在新增行）/ [mod]（行号区间命中新增行）
 //     并只保留标注过的函数（流程衔接检查）；since 为 nil 时全量报告
 func (a *Actions) Unused(since *domain.SinceInfo) (*UnusedReport, error) {
+	logger := zap.L()
+	logger.Info("enter (Actions).Unused", zap.Any("since", since))
+	defer logger.Info("exit (Actions).Unused")
 	all, err := a.repo.GetUncalledFunctions()
 	if err != nil {
 		return nil, err

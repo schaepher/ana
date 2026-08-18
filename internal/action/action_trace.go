@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/schaepher/codeintel/internal/domain"
+	"go.uber.org/zap"
 )
 
 // downstreamTrampoline 写锚点下游跳板（③⑤⑧）：写节点无出边——经同
@@ -52,6 +53,9 @@ func (a *Actions) downstreamTrampoline(anchor domain.CanonicalID) ([]*domain.Tra
 // （同字段读节点的使用链），行按 ID 去重（首个保留）。供
 // export graph --type lifecycle 与前端展示使用。
 func (a *Actions) Lifecycle(id domain.CanonicalID) ([]*domain.TraceRow, error) {
+	logger := zap.L()
+	logger.Info("enter (Actions).Lifecycle", zap.String("id", string(id)))
+	defer logger.Info("exit (Actions).Lifecycle")
 	rows, err := a.repo.GetValueTrace(id, 8, 0, false)
 	if err != nil {
 		return nil, err
@@ -75,6 +79,9 @@ func (a *Actions) Lifecycle(id domain.CanonicalID) ([]*domain.TraceRow, error) {
 // Trace 字段产生点反向追溯 / 后续使用正向追踪；返回解析后的函数符号
 // 与追溯路径（符号供展示层输出函数名）。
 func (a *Actions) Trace(p TraceParams) (*domain.CodeEntity, []*domain.TraceRow, error) {
+	logger := zap.L()
+	logger.Info("enter (Actions).Trace", zap.Any("params", p))
+	defer logger.Info("exit (Actions).Trace")
 	n, err := a.ResolveSymbol(p.Func)
 	if err != nil {
 		return nil, nil, err
@@ -91,6 +98,9 @@ func (a *Actions) Trace(p TraceParams) (*domain.CodeEntity, []*domain.TraceRow, 
 	return n, rows, err
 }
 func (a *Actions) ValueTrace(nodeID domain.CanonicalID, maxDepth int, minConf float64, includeContainer bool) ([]*domain.TraceRow, error) {
+	logger := zap.L()
+	logger.Info("enter (Actions).ValueTrace", zap.String("node_id", string(nodeID)), zap.Int("max_depth", maxDepth), zap.Float64("min_conf", minConf), zap.Bool("include_container", includeContainer))
+	defer logger.Info("exit (Actions).ValueTrace")
 	rows, err := a.repo.GetValueTrace(nodeID, maxDepth, minConf, includeContainer)
 	if err != nil {
 		return nil, err
@@ -100,6 +110,9 @@ func (a *Actions) ValueTrace(nodeID domain.CanonicalID, maxDepth int, minConf fl
 
 // Flows 返回函数内完整字段数据流（前端 /api/flows 用）。
 func (a *Actions) Flows(funcID domain.CanonicalID, maxDepth int) ([]*domain.TraceRow, error) {
+	logger := zap.L()
+	logger.Info("enter (Actions).Flows", zap.String("func_id", string(funcID)), zap.Int("max_depth", maxDepth))
+	defer logger.Info("exit (Actions).Flows")
 	return a.repo.GetFunctionFlows(funcID, maxDepth)
 }
 
@@ -115,6 +128,9 @@ func shortFuncNameX(id string) string {
 // 解析（canonical ID / 符号名 / 字段路径）；viaCalls=true 用函数调用
 // 边集，否则数据流边集。不可达返回空切片。
 func (a *Actions) Path(from, to string, maxDepth int, viaCalls bool) ([]*domain.TraceRow, error) {
+	logger := zap.L()
+	logger.Info("enter (Actions).Path", zap.String("from", from), zap.String("to", to), zap.Int("max_depth", maxDepth), zap.Bool("via_calls", viaCalls))
+	defer logger.Info("exit (Actions).Path")
 	fID, err := a.ResolveAnchor(from)
 	if err != nil {
 		return nil, err

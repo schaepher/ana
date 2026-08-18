@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/schaepher/codeintel/internal/domain"
+	"go.uber.org/zap"
 )
 
 // ExtractCondition 提取源码文件第 line 行所在分支的条件表达式文本
@@ -95,6 +96,9 @@ func exprText(fset *token.FileSet, e ast.Expr) string {
 // 每行的节点位置（DB 查 file_path + 行号）→ ExtractCondition。
 // 返回新切片（不修改入参）；源码文件按路径缓存解析。
 func (a *Actions) TraceConditions(rows []*domain.TraceRow) ([]*domain.TraceRow, error) {
+	logger := zap.L()
+	logger.Info("enter (Actions).TraceConditions", zap.Int("rows", len(rows)))
+	defer logger.Info("exit (Actions).TraceConditions")
 	if len(rows) == 0 {
 		return rows, nil
 	}
