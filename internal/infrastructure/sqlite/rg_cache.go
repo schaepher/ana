@@ -1,6 +1,11 @@
 package sqlite
 
-import "github.com/schaepher/codeintel/internal/domain"
+import (
+	"time"
+
+	"github.com/schaepher/codeintel/internal/domain"
+	"go.uber.org/zap"
+)
 
 // relationsAlgoVersion relations 推断逻辑版本（Q199：跨函数 write 丢弃；
 // Q200：缓存键版本化后 query 恢复验证；Q205：filterFKNoise 的 id 起点
@@ -18,6 +23,71 @@ func (r *Repo) cacheKey() string {
 		return ""
 	}
 	return bid + ":" + relationsAlgoVersion
+}
+
+// cachedRelationGraph 进程内关系图缓存（任务 #165）：serve 进程内
+// 单表展开/全量查询复用内存图（loadRelationGraph 每次 500ms+）。
+// 语义：
+//   - 键 = cacheKey（build_id + 分析逻辑版本）——增量构建写新 build_id
+//     或 rg_*.go 逻辑变更都自动失效重载；无 build_metadata 时不缓存
+//     （与 relation_candidates 同语义）
+//   - 图对象只读共享：relationsFor/BFS 纯读（Go map 并发读安全），
+//     RWMutex 只保护缓存槽本身
+//   - 大图不缓存（shouldCacheGraph 阈值，防 ~100MB 常驻膨胀）——
+//     超限图每次请求重载；auto 模式下超限图本就走 SQL 路径（不加载
+//     内存图），此分支仅 --memory full 强制时可达
+func (r *Repo) cachedRelationGraph() (*relationGraph, error) {
+	logger := zap.L()
+	key := r.cacheKey()
+	r.graphMu.RLock()
+	if key != "" && r.graphCacheKey == key && r.graphCache != nil {
+		g := r.graphCache
+		r.graphMu.RUnlock()
+		logger.Info("relations graph cache hit", zap.String("key", key))
+		return g, nil
+	}
+	r.graphMu.RUnlock()
+
+	if key == "" {
+		// 无 build_metadata：不缓存，每次现场加载（与 relation_candidates 同语义）
+		return loadRelationGraph(r)
+	}
+	// double-checked locking：并发首请求在写锁内串行化加载——等待者
+	// 二次检查命中后直接复用，避免 N 个请求各加载一次全图
+	r.graphMu.Lock()
+	defer r.graphMu.Unlock()
+	if r.graphCacheKey == key && r.graphCache != nil {
+		logger.Info("relations graph cache hit", zap.String("key", key))
+		return r.graphCache, nil
+	}
+	start := time.Now()
+	g, err := loadRelationGraph(r)
+	if err != nil {
+		return nil, err
+	}
+	logger.Info("relations graph loaded",
+		zap.String("key", key), zap.Duration("elapsed", time.Since(start)))
+	// 大图（超安全阈值）不缓存：本次调用返回新图，槽位留空——
+	// 后续请求每次重载（auto 模式超限图本就走 SQL 路径，仅
+	// --memory full 强制可达此分支）
+	if shouldCacheGraph(g, relationGraphMaxNodes, relationGraphMaxEdges) {
+		r.graphCacheKey = key
+		r.graphCache = g
+	}
+	return g, nil
+}
+
+// shouldCacheGraph 进程内图缓存阈值判定：节点数或边数超过上限则不缓存
+// （每次请求重载）。独立纯函数便于单测。
+func shouldCacheGraph(g *relationGraph, maxNodes, maxEdges int) bool {
+	if len(g.nodes) > maxNodes {
+		return false
+	}
+	edgeCount := 0
+	for _, out := range g.allOut {
+		edgeCount += len(out)
+	}
+	return edgeCount <= maxEdges
 }
 
 // currentBuildID 最新构建 id；无构建元数据（fixture/手动建库）返回空串——

@@ -3,6 +3,7 @@ package sqlite
 import (
 	"database/sql"
 	"errors"
+	"sync"
 
 	"github.com/schaepher/codeintel/internal/domain"
 	"go.uber.org/zap"
@@ -16,6 +17,15 @@ var _ domain.BuildMetadataRepository = (*Repo)(nil)
 type Repo struct {
 	*DB
 	relationHops domain.RelationHops // Q197：三类关系跳数上限（0=不限制），默认 4
+
+	// 任务 #165：serve 进程内关系图缓存（cachedRelationGraph）——
+	// 单表展开/全量查询复用内存图，避免每次 loadRelationGraph（go2o
+	// 530ms）。图对象只读共享（BFS 纯读，Go map 并发读安全），锁只
+	// 保护缓存槽本身；键 = build_id + 分析逻辑版本，构建/逻辑变化
+	// 自动失效重载。
+	graphMu       sync.RWMutex
+	graphCacheKey string // 缓存键；空串 = 不缓存（无 build_metadata）
+	graphCache    *relationGraph
 }
 
 // SetRelationHops 配置三类关系的跳数上限（--query-max-hops 等，Q197）：

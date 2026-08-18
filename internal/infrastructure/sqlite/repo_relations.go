@@ -30,7 +30,9 @@ func (r *Repo) GetTableRelations(table, mode string) ([]*domain.TableRelation, e
 	var err error
 	if r.useMemoryGraph(mode) {
 		var g *relationGraph
-		if g, err = loadRelationGraph(r); err == nil {
+		// 任务 #165：进程内图缓存（按 build_id 失效）——serve 单表展开
+		// 每次请求复用内存图，不再重复 loadRelationGraph
+		if g, err = r.cachedRelationGraph(); err == nil {
 			rels = g.relationsFor(table)
 		}
 	} else {
@@ -102,7 +104,7 @@ func (r *Repo) GetAllTableRelations(mode string) ([]*domain.TableRelation, error
 		}
 		return dedupRelationNoise(rels, r.relationHops), nil
 	}
-	g, err := loadRelationGraph(r)
+	g, err := r.cachedRelationGraph() // 任务 #165：进程内图缓存（按 build_id 失效）
 	if err != nil {
 		return nil, err
 	}
