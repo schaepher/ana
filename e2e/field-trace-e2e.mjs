@@ -383,6 +383,22 @@ check('ER 规则面板可关闭',
     return document.getElementById('rules-panel').classList.contains('hidden');
   })),
   'panelHidden=' + erRules.panelHidden);
+// 17. 刷新页面后「全图画线」开关重置为关（Q227：全图画线不持久化——
+//     全量 relations 加载重，刷新后默认关，需用户手动开启）
+await page.evaluate(() => {
+  const cb = document.getElementById('f-alllines');
+  if (!cb.checked) cb.click(); // 打开开关
+});
+await page.waitForTimeout(1000);
+await page.reload({ waitUntil: 'networkidle' });
+await page.waitForTimeout(1200);
+const allLinesState = await page.evaluate(() => ({
+  checked: document.getElementById('f-alllines').checked,
+  saved: localStorage.getItem('codeintel.erAllLines'),
+}));
+check('ER 刷新后全图画线开关重置为关（不持久化）',
+  allLinesState.checked === false && allLinesState.saved === null,
+  JSON.stringify(allLinesState));
 
 console.log('\n===== 字段追溯 e2e: ' + passed + ' passed, ' + failed + ' failed =====');
 await browser.close();

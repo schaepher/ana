@@ -271,24 +271,16 @@ function bindRelFilter() {
   });
   // 全图画线开关（Q204）：开=全图直接画全部关系线（表不隐藏）；
   // 关=默认模式（不连线，双击表展开其关联线）
+  // Q227：不持久化——每次刷新页面重置为关（全量 relations 加载重，
+  // 误留开启态会在刷新后仍触发全量拉取；改为默认关，需用户手动开启；
+  // 原先的 localStorage 恢复逻辑（Q217）随之移除）
   const allCb = document.getElementById('f-alllines');
   allCb.checked = SHOW_ALL_LINES;
-  const savedAll = localStorage.getItem('codeintel.erAllLines');
-  if (savedAll !== null) {
-    SHOW_ALL_LINES = savedAll === '1';
-    allCb.checked = SHOW_ALL_LINES;
-  }
   allCb.addEventListener('change', () => {
     SHOW_ALL_LINES = allCb.checked;
-    localStorage.setItem('codeintel.erAllLines', SHOW_ALL_LINES ? '1' : '0');
     // Q210：全图画线开关才触发全量加载
     ensureFullRels().then(render);
   });
-  // Q217：localStorage 恢复 SHOW_ALL_LINES=true 时初始化只加载了
-  // 表清单（skip_relations）——须自动触发全量加载，否则刷新后无线
-  if (SHOW_ALL_LINES) {
-    ensureFullRels().then(render);
-  }
 }
 
 // 关系优先布局（两种画法共用）：BFS 连通分量 + 中心对称排列
