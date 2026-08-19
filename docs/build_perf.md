@@ -1,0 +1,104 @@
+# 构建期性能优化记录（Q221，2026-08-19）
+
+**目标**：降低大项目（go2o，135 包 / 12875 函数）全量构建的时间与内存占用。
+**结果**：冷启动 **5m16s → 39.9s（7.9 倍加速）**；CPU 总量 660s → 227s；
+峰值 RSS 2.73G（workers=8 + GOGC=40，8 核 7.4G 机器）。缓存命中构建 15s。
+
+---
+
+## 1. 测量：耗时分布
+
+构建管线阶段计时（orchestrator stage + build stage 日志）：
+
+| 阶段 | 耗时（基线 workers=1） | 占比 |
+|---|---|---|
+| loadPackages（go/packages 加载） | 1.9s | <1% |
+| **emitFunction 循环**（SSA 提取） | **5m11s** | **98%** |
+| flush（SQLite 分批写库） | <1s | <1% |
+| computeAliases / emitDispatches 等 | ~10s | ~2% |
+
+首轮实验：`--workers 8` 冷启动仅 3m27s（1.56 倍加速）——CPU 利用率
+User/Wall = 594s/207s ≈ **2.9 核**，暴露并行度不足。
+
+## 2. 优化 1：包间并行（全库函数块池）
+
+**根因**：原实现包循环**串行** + 包内 200 函数分块并行。go2o 135 包
+平均 95 函数/包 < 200 分块阈值 → 每包只有 1 块 → 同一时刻仅 1 个
+goroutine 在跑（8 核只用了 1 核）。
+
+**改造**（adapter_index.go）：未命中缓存的包全部拆块（块内单包，200
+函数/块）进**全局 worker 池**并行；块产物按包收集（pkgCollect），全部
+完成后按包保存缓存。阶段划分：A 串行缓存检查 → B 并行块池 → C 串行
+保存缓存。
+
+**结果**：3m27s → 2m20s（workers=8）。
+
+## 3. 优化 2：dispatchRegs 初始化 bug（pprof 46% 热点）
+
+**定位**：`CODEINTEL_CPU_PROFILE` 采样一次冷构建，pprof top：
+
+| 函数 | flat | cum | 说明 |
+|---|---|---|---|
+| collectDispatchRegistrations | 25.5s | **305.5s（46%）** | 动态派发注册收集 |
+| ssautil.AllFunctions.func1 | 38.8s | 123.7s | 全程序函数遍历 |
+| typesinternal.ForEachElement | 6.5s | 101.0s | 类型遍历 |
+| runtime.*（GC 系列） | — | ~250s（38%） | spanClass/scanSpan/scanObject |
+
+**根因**：`Adapter.dispatchRegs` 从未初始化（零值 nil map）→
+fieldExtractor 创建时 `dispatchRegs: *dispatchRegs` 解引用复制后
+`ext.dispatchRegs == nil` **永远成立** → cf_call.go 懒初始化兜底
+`if ext.dispatchRegs == nil { collectDispatchRegistrations(prog, ...) }`
+→ **每个函数都触发一次全程序 AllFunctions 扫描**（12875 次 × 全图
+遍历 ≈ 305s CPU）。
+
+**修复**：Adapter.Index 级初始化一次（须在 sp.Build() 之后——SSA 指令
+已构建，MakeInterface 才存在），各 extractor 共享只读 map。
+
+**结果**：2m20s → **40s**（总加速 7.9 倍）；CPU 637s → 227s（分配
+减少连带 GC 开销下降）。
+
+## 4. 优化 3：GOGC 实验
+
+pprof 显示 GC 相关 ~38% CPU（GOGC=40 并行下扫描开销）。实测
+（workers=8 冷启动）：
+
+| 配置 | Wall | User CPU | 峰值 RSS |
+|---|---|---|---|
+| GOGC=40（原默认） | 39.9s | 227s | **2.73G** |
+| GOGC=100（实验） | 36.4s（+9%） | 184s | **4.44G（+54%）** |
+
+结论：GOGC=100 时间收益小、内存代价大——**40 是时间/内存平衡点**。
+默认保持 40；新增 `CODEINTEL_GOGC` 环境变量可调（内存充足可调高）。
+
+## 5. 默认 workers = min(NumCPU, 8)
+
+原默认 1（串行）。8 核实测冷启动 5m16s → 40s、峰值 RSS ~2.9G 可接受。
+上限 8 防大机器内存翻倍；小内存机器可 `--workers 1` 调小。
+init / reindex / update 三处默认值统一（defaultBuildWorkers）。
+
+## 6. 最终对比
+
+| 指标 | 基线（workers=1） | 优化后（默认 workers=8） |
+|---|---|---|
+| 冷启动 Wall | 5m16s | **39.9s（7.9×）** |
+| CPU 总量 | ~660s | 227s |
+| 峰值 RSS | 2.33G | 2.73G |
+| 缓存命中构建 | — | 15s |
+
+## 7. 诊断工具
+
+- `CODEINTEL_CPU_PROFILE=<file>`：构建类命令输出 CPU profile
+  （main 内 Start/Stop，os.Exit 前落盘；`go tool pprof <bin> <file>` 分析）
+- `CODEINTEL_GOGC=<n>`：覆盖构建期 GOGC（默认 40）
+- 构建阶段计时日志：`orchestrator stage` / `build stage`（含 heap_mb）
+
+## 8. 经验教训
+
+1. **懒初始化兜底掩盖初始化遗漏**：`ext.dispatchRegs == nil` 检查本意
+   是防 nil，但因上层从未初始化而变成"每个函数都全图扫描"的隐形
+   性能黑洞——pprof 是唯一能定位的手段（45 分钟构建期优化中该修复
+   贡献 80% 收益）。
+2. **并行度要先于算法优化**：8 核机器 CPU 利用率 2.9 核时，任何
+   单线程算法优化都封顶于 ~1 核收益；先让核数满起来。
+3. **测量数据驱动决策**：GOGC=100 "看起来更快"的直觉被 RSS +54%
+   数据否决；默认 workers 从 1 到 8 由冷启动实测（5m16s→40s）支撑。
