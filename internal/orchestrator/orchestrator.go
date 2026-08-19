@@ -23,7 +23,7 @@ import (
 // 常量
 const (
 	AdapterTimeout = 10 * time.Minute // 适配器级超时（TD.md 9.1）
-	BatchSize      = 10000            // 分批事务大小（TD.md 5.2；Q171/Q174 双缓冲+加大摊薄事务——大仓库 36 万 item 时减少 flush 次数）
+	BatchSize      = 20000            // 分批事务大小（TD.md 5.2；Q171/Q174 双缓冲+加大摊薄事务——大仓库 36 万 item 时减少 flush 次数；Q221：10000→20000 减半 cgocall——pprof 16% 在 SQLite C 调用）
 )
 
 // AdapterResult 记录单个适配器的执行结果。

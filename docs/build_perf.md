@@ -68,6 +68,19 @@ candidateKey 7%——复查发现**同模式第二处**：`ext.regHits`（Q168
 **结果**：adapters 34.9s → 12.0s；CPU 227s → 48s（regHits 重建
 贡献 ~180s CPU）。
 
+## 3.6 尝试：对象池（收益不足，已回滚）
+
+pprof 显示 GC 系列 ~40% CPU → 尝试 CodeEntity/Fact sync.Pool：flush
+写库后统一 Release 回收（失败边跳过——o.failedEdges 持有同指针待重试；
+缓存保存改为浅拷贝收集——原对象被 flush 回收后阶段 C 不得读脏对象），
+33 个创建点脚本化转 NewEntity/NewFact（内嵌 IIFE）。
+
+**实测**：12.0s → 10.7s（-1.3s），但 CPU 48.6s vs 48.4s **几乎不变**——
+收益全部来自同期 BatchSize 改动（单独验证 10.7s 一致），对象池本身
+零贡献（regHits 修复后 GC 已不是瓶颈；浅拷贝收集抵消部分收益）。
+**回滚**：生命周期约定（use-after-reuse 风险）+ IIFE 可读性代价不值
+8% 且不可复现的收益。保留 BatchSize（10000→20000，cgocall 减半）。
+
 ## 4. 优化 3：GOGC 实验
 
 pprof 显示 GC 相关 ~38% CPU（GOGC=40 并行下扫描开销）。实测
@@ -91,9 +104,9 @@ init / reindex / update 三处默认值统一（defaultBuildWorkers）。
 
 | 指标 | 基线（workers=1） | 优化后（默认 workers=8） |
 |---|---|---|
-| 冷启动 Wall | 5m16s | **16.8s（18.8×）** |
+| 冷启动 Wall | 5m16s | **15.6s（20.2×）** |
 | CPU 总量 | ~660s | 48s |
-| 峰值 RSS | 2.33G | 2.71G |
+| 峰值 RSS | 2.33G | 2.93G |
 | 缓存命中构建 | — | 15s |
 
 ## 7. 诊断工具
