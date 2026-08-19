@@ -62,6 +62,10 @@
 49. [信息栏展示优化与收尾（Q184–Q193，2026-08-17）](#49-信息栏展示优化与收尾)
 50. [待办事项与设计决策（Q211–Q216，2026-08-18）](#50-待办事项与设计决策)
 51. [fk 类型：值流验证的真实键关联（Q218，2026-08-18）](#51-fk-类型值流验证的真实键关联)
+52. [where 串解析、error 链阻断、用户连线规则（Q220，2026-08-19）](#52-where-串解析error-链阻断用户连线规则q2202026-08-19)
+53. [构建期性能优化（Q221，2026-08-19）](#53-构建期性能优化q2212026-08-19)
+54. [ORM 读路径 read→对象边缺失（Q222，2026-08-19）](#54-orm-读路径-read对象边缺失q2222026-08-19)
+55. [闭包参数未落库与嵌套闭包丢失（Q223，2026-08-19）](#55-闭包参数未落库与嵌套闭包丢失q2232026-08-19)
 ---
 
 ## 1. 项目背景与目标
@@ -516,6 +520,8 @@ SSA 语义与映射类决策全部保留：Q1（SSA_VALUE 统一建模）、Q2�
     （relation_rules，clean 保留）；Q221（§53）——构建期性能优化
     （包间并行、dispatchRegs 每函数全图扫描修复、默认 workers 自动）；
     Q222（§54）——ORM 读路径 read→对象边缺失（Q205 提前 return）
+    Q223（§55）——闭包参数未落库（Parameter 分支假设签名节点已发射）
+    + 嵌套闭包整块丢失（emitFunction 跳过）
 
 ---
 
@@ -2326,5 +2332,54 @@ accountBooks（未被 range 消费，无 UnOp）正常落库。
   值流（README 已注明当前索引不再发射 row-read 边）
 
 ---
+## 55. 闭包参数未落库与嵌套闭包丢失（Q223，2026-08-19）
 
-**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q222，逐 Q 编号 + 日期）。
+**触发**：举一反三（Q222 修复后）——排查 emitValue 全部「只设缓存不发射
+节点」的分支，对照形态矩阵（起点 × 传递 × 写入变体）补未覆盖用例，测试
+先行确认 3 个真实 bug：
+
+| 形态 | 代码 | 后果 |
+|---|---|---|
+| 闭包参数作 Find 对象实参 | `func(tx *Session, target *[]Order) { tx.Find(target) }` | `#param.target` 未落库 → read→对象边端点缺失 → 真实键关联漏报（**Q222 同款**） |
+| 闭包参数作 Where 条件值 | `func(tx *Session, lastID uint64) { tx.Where("id > ?", lastID) }` | filter 值节点缺失 → 值链断（value-trace 断链） |
+| 嵌套闭包内 ORM 读 | `withTx(s, func(tx){ withTx(tx, func(tx2){ tx2.Find(&bs) }) })` | emitFunction 直接跳过 → 字段访问/ORM 调用**整块丢失** |
+
+**根因**（两条独立缺陷，均围绕闭包）：
+
+1. **Parameter 分支假设签名节点已发射**（fe_value.go Q178）：emitValue 对
+   Parameter 直接返回 `funcID#param.<name>` 且**不发射**——前置条件是
+   emitSignatureNodes 已建节点。但该发射只对**顶层函数**（FuncDecl）执行
+   （adapter_emit.go）；闭包（FuncLit）由 emitFunction 闭包分支归外层函数
+   处理（Q14），**不发射签名节点** → 闭包参数返回未落库 ID → 下游
+   summary_io/argument 边端点缺失（FK 失败静默跳过）。
+2. **嵌套闭包被 emitFunction 跳过**（adapter_emit.go 闭包分支）：
+   `parent.Object().(*types.Func)` 失败（parent 也是闭包，无 Object）即
+   return——内层闭包的字段访问与 ORM 调用全部不发射。
+
+**修复**：
+
+1. fieldExtractor 加 `sigEmitted` 标记（顶层函数 true / 闭包 false）；
+   emitValue(Parameter) 在 `!sigEmitted` 时**自行发射** ssa_value 节点
+   （ID 与签名节点规则一致 `#param.<name>`；外层函数恰好有同名参数时
+   共享签名节点，与 shadowing 合并语义一致）。
+2. emitFunction 闭包分支对嵌套闭包**向上找最外层具名函数**（不再跳过），
+   字段/ORM 归最外层函数（与 funcIDOf 向上归并规则一致）。
+
+**验证**：
+
+- 3 个新回归测试（TestClosureParamFindTarget / TestClosureParamWhereValue
+  / TestNestedClosureORMRead，indexFixtureFull 自建 xorm mock）
+- make test 12 包（含 -race）+ e2e-fixture 28 项全绿（注：首次 e2e 失败
+  系 8096 被验证仓库 serve 占用，非代码回归）
+- go2o reindex（后台+轮询）：1431 个闭包参数节点全部落库且**全部接入
+  数据流图**（edges 连接数 = 节点数）；relations 9 条（fk 5 + write 4，
+  无假 fk，Q218 taint 验证仍生效）；gRPC Handler 闭包 `#param.ctx`
+  跨函数 argument 链恢复（→ rbacServiceImpl.CheckRBACToken#param._）
+
+**教训**：Q178 的「节点已发射」前置只对顶层函数成立——任何「缓存 ID 不
+发射」的分支都要复查其前置条件是否覆盖全部函数形态（闭包/嵌套闭包/合成
+函数）；AllFunctions 遍历到 ≠ 已发射。
+
+---
+
+**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q223，逐 Q 编号 + 日期）。

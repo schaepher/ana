@@ -59,21 +59,35 @@ func emitFunction(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
 	logger.Debug("enter emitFunction")
 	defer logger.Debug("exit emitFunction")
 	if _, ok := fn.Syntax().(*ast.FuncDecl); !ok {
-
+		// 闭包/合成函数：字段访问与 ORM 调用归外层函数（field_trace.md Q14）。
+		// Q223：嵌套闭包（parent 也是闭包，Object 非 types.Func）此前直接
+		// 跳过——内层闭包的字段访问/ORM 调用整块丢失；现向上找最外层具名
+		// 函数。闭包参数无签名节点（emitSignatureNodes 只对顶层函数发射），
+		// emitFunctionFields 传 sigEmitted=false，emitValue(Parameter) 自行
+		// 发射（Q223 修复，Q222 同款漏报的闭包形态）。
 		parent := fn.Parent()
 		if parent == nil {
 			return "", nil, nil
 		}
 		obj, ok := parent.Object().(*types.Func)
 		if !ok || obj == nil {
-			return "", nil, nil
+			for p := parent.Parent(); p != nil; p = p.Parent() {
+				if o, ok2 := p.Object().(*types.Func); ok2 && o != nil {
+					obj = o
+					ok = true
+					break
+				}
+			}
+			if !ok {
+				return "", nil, nil
+			}
 		}
 		pid, _, _ := funcIdentity(obj)
 		if pid == "" {
 			return "", nil, nil
 		}
 		fd := &funcData{}
-		err := emitFunctionFields(repo, prog, fn, pid, idents, assignTargets, fd, specs, fallbackTotal, emit, pkgs, dispatchRegs, regHits, typeMapping)
+		err := emitFunctionFields(repo, prog, fn, pid, idents, assignTargets, fd, specs, fallbackTotal, emit, pkgs, dispatchRegs, regHits, typeMapping, false)
 		return pid, fd, err
 	}
 	obj, ok := fn.Object().(*types.Func)
@@ -109,7 +123,7 @@ func emitFunction(repo *domain.Repository, prog *ssa.Program, fn *ssa.Function,
 		return "", nil, err
 	}
 	fd := &funcData{}
-	err := emitFunctionFields(repo, prog, fn, id, idents, assignTargets, fd, specs, fallbackTotal, emit, pkgs, dispatchRegs, regHits, typeMapping)
+	err := emitFunctionFields(repo, prog, fn, id, idents, assignTargets, fd, specs, fallbackTotal, emit, pkgs, dispatchRegs, regHits, typeMapping, true)
 	return id, fd, err
 }
 

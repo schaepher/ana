@@ -94,15 +94,16 @@ func (ext *fieldExtractor) emitValue(v ssa.Value) (domain.CanonicalID, error) {
 			return "", nil
 		}
 		var id domain.CanonicalID
+		var paramName string
 		if recv := fn.Signature.Recv(); recv != nil && len(fn.Params) > 0 && fn.Params[0] == p {
-			name := recv.Name()
-			if name == "" {
-				name = "recv"
+			paramName = recv.Name()
+			if paramName == "" {
+				paramName = "recv"
 			}
-			id = domain.CanonicalID(string(funcID) + "#param.recv." + name)
+			id = domain.CanonicalID(string(funcID) + "#param.recv." + paramName)
 		} else {
-			name := p.Object().Name()
-			if name == "" {
+			paramName = p.Object().Name()
+			if paramName == "" {
 				idx := 0
 				for i := 0; i < fn.Signature.Params().Len(); i++ {
 					if fn.Signature.Params().At(i) == p.Object() {
@@ -110,11 +111,32 @@ func (ext *fieldExtractor) emitValue(v ssa.Value) (domain.CanonicalID, error) {
 						break
 					}
 				}
-				name = fmt.Sprintf("arg%d", idx)
+				paramName = fmt.Sprintf("arg%d", idx)
 			}
-			id = domain.CanonicalID(string(funcID) + "#param." + name)
+			id = domain.CanonicalID(string(funcID) + "#param." + paramName)
 		}
 		ext.values[v] = id
+		// Q223：闭包参数（FuncLit 形参）无签名节点（emitSignatureNodes 只对
+		// 顶层函数发射，闭包归外层函数处理）——返回未落库 ID 会使
+		// summary_io/argument 等边端点缺失（Q222 同款漏报：read→对象边 FK
+		// 失败、filter 值链断）。此处自行发射 ssa_value 节点（ID 与签名节点
+		// 规则一致；外层函数恰好有同名参数时共享签名节点，与 shadowing 合并
+		// 语义一致）。
+		if !ext.sigEmitted {
+			n := &domain.CodeEntity{
+				ID:        id,
+				Kind:      domain.KindSSAValue,
+				Name:      paramName,
+				LineStart: lineOf(ext, v),
+				Properties: map[string]any{
+					"origin_kind": "param",
+					"ssa_op":      "parameter",
+					"type_string": p.Type().String(),
+					"func_id":     string(funcID),
+				},
+			}
+			return id, ext.emit(domain.Item{Node: n})
+		}
 		return id, nil
 	}
 	if g, ok := v.(*ssa.Global); ok && g.Pkg != nil && g.Pkg.Pkg != nil {

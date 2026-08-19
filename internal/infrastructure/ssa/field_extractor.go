@@ -180,6 +180,12 @@ type fieldExtractor struct {
 	idents        map[token.Pos]string // 源码标识符索引（Alloc 反查变量名）
 	assignTargets []assignTarget       // 赋值表达式区间（按 start 排序）→ 目标变量名（MakeMap/MakeSlice 恢复）
 	emit          domain.EmitFunc
+	// Q223：本次处理的函数签名节点是否已发射（仅顶层函数 FuncDecl 调
+	// emitSignatureNodes）。闭包（FuncLit）不发射签名节点——emitValue
+	// 的 Parameter 分支据此前置「节点已发射」直接返回缓存 ID；闭包参数
+	// 无对应签名节点，须自行发射，否则返回未落库 ID → 边端点缺失
+	// （Q222 同款漏报）
+	sigEmitted bool
 
 	fields        map[*ssa.FieldAddr]*fieldAccess        // FieldAddr → write 节点（Store 解析目标）
 	reads         map[*ssa.FieldAddr]*fieldAccess        // FieldAddr → read 节点（UnOp 解引用）
