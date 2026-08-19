@@ -20,8 +20,8 @@ make install
 ## 命令速查
 
 ```bash
-codeintel init --repo <path> [--workers N] # 全量构建索引（--workers N：SSA 按包并发数，默认 1=串行；内存充足可调 4/8——须有 go.mod；go.work 根目录会提示进模块目录）
-codeintel update --repo <path> [--workers N] # 增量更新（git 检测变更文件，全量分析+增量写入；--workers 同 init）
+codeintel init --repo <path> [--workers N] # 全量构建索引（Q221：--workers 默认 min(NumCPU,8)——8 核实测冷启动 5m16s→15.6s；小内存机器可 --workers 1；CODEINTEL_GOGC 覆盖 GOGC 默认 40；CODEINTEL_CPU_PROFILE 输出构建期 CPU profile——须有 go.mod；go.work 根目录会提示进模块目录）
+codeintel update --repo <path> [--workers N] # 增量更新（git 检测变更文件，全量分析+增量写入；--workers 默认同 init）
 codeintel serve --repo <path> --addr :8096 # 启动图探索 Web 服务（前端 AntV G6，端口默认 :8090；另含数据库 ER 图页 /er.html：表卡片/嵌套双画法、双击表展开其关联线（全图画线开关刷新后自动恢复，Q217）、每条线独立配色、Q218 fk 类型默认线）
 codeintel query <sub> ... --repo <path>    # 查询（见下；默认加 --json 取结构化输出）
 codeintel export --repo <path> [--out x.json]  # 导出字段双层索引 JSON（字段→产生者/消费者）
@@ -30,7 +30,7 @@ codeintel export graph --type value-trace|callees|lifecycle --target <节点> [-
                                            # 图导出：value-trace 默认 mermaid（函数分组）、callees 默认 dot、
                                            # lifecycle 生命周期图（[存储]/[观测]/[读]/[写]+条件标注）
 codeintel clean --repo <path> --force      # 删除索引（schema 变更后必须 clean + init 重建；默认保留 .codeintel/cache 包级分析缓存——pkg hash + analyzer 分析源码 hash 自校验（Q181/Q183，仅分析逻辑变化失效，CLI/前端等无关改动不触发），分析逻辑/包源码变化自动失效重算；磁盘清理加 --purge-cache）
-codeintel reindex --repo <path> [--workers N] # 一步重建索引（FullBuild 清空图数据表 DROP+CREATE 重建，不删库文件；--workers 同 init）
+codeintel reindex --repo <path> [--workers N] # 一步重建索引（FullBuild 清空图数据表 DROP+CREATE 重建，不删库文件；--workers 默认同 init）
 codeintel rule add <from> <to> --repo <path>  # 用户连线规则（Q220c/d）：值流验证不了的外键列手动声明连线
                                            #   rule add merchant_id mch_merchant.id   模式规则（所有含 merchant_id 列的表 → mch_merchant.id）
                                            #   rule add table_a.merchant_id mch_merchant.id  显式列对（单对）

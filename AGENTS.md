@@ -283,3 +283,17 @@ defer logger.Debug("exit <name>")
 ### 验证环境教训
 
 - **WAL 模式 SQLite 构建中强杀会损坏 DB**：reindex/init 跑大仓库（go2o 3 分钟）时用 timeout 强杀 → WAL 未 checkpoint → `database disk image is malformed`（下次操作报错）。验证用**后台运行 + 轮询**（run_in_background），或 timeout 给足余量；损坏后删 db/-wal/-shm 重建。serve 与 reindex 并发操作同一 DB 也要避免。
+
+## Q221 构建期性能教训
+
+- **懒初始化兜底掩盖初始化遗漏**（同模式两次）：`ext.dispatchRegs == nil` /
+  `ext.regHits == nil` 本意防 nil，因上层从未初始化变成"每函数全量预处理"
+  ——dispatchRegs（每函数全图扫描 305s CPU）与 regHits（每函数遍历注册点
+  ~180s）修复后 go2o 构建 5m16s → 15.6s。**每函数新建的 extractor 里
+  出现"全量预处理 + nil 兜底"组合时，检查是否该提到 Index 级一次**
+- **对象池收益要实测**：GC ~40% CPU 时对象池看似合理，实测零贡献（CPU
+  不变）——regHits 修复后 GC 已非瓶颈。收益不足且有 use-after-free
+  生命周期风险，回滚。**性能优化以 CPU profile 重采样为准，不靠直觉**
+- **SQLite 驱动切换实测否决**：mattn（cgo）vs modernc（纯 Go）批量写
+  基准——modernc 慢 38%（cgocall 边界开销 < 纯 Go 翻译引擎执行劣势）。
+  性能判断用基准数据，不假设"无 cgo 更快"
