@@ -514,7 +514,8 @@ SSA 语义与映射类决策全部保留：Q1（SSA_VALUE 统一建模）、Q2�
   - **08-19**：Q220（§52）——where 条件串解析（大小写/尾部子句/多
     操作符）、BFS 阻断 error 值链（元组假链）、用户连线规则
     （relation_rules，clean 保留）；Q221（§53）——构建期性能优化
-    （包间并行、dispatchRegs 每函数全图扫描修复、默认 workers 自动）
+    （包间并行、dispatchRegs 每函数全图扫描修复、默认 workers 自动）；
+    Q222（§54）——ORM 读路径 read→对象边缺失（Q205 提前 return）
 
 ---
 
@@ -2297,4 +2298,33 @@ AllFunctions 扫描**（12875 次 × 全图遍历）。修复后重采 pprof 又
 
 ---
 
-**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q221，逐 Q 编号 + 日期）。
+## 54. ORM 读路径 read→对象边缺失（Q222，2026-08-19）
+
+**复现**（examples/repro-clearing-order-id-fk）：`Table("t").Where("id >
+?").Find(&orders)` 后 `for _, o := range orders` 消费——ORM 读的 read
+节点（t.merchant_id.read）**无 summary_io 出边** → 真实键关联
+（merchant_id → account_book_tab.merchant_id）**漏报**。
+
+**根因链**（probe 逐层定位）：变量 `orders` 被 range 消费 → SSA 产生
+`*orders`（UnOp(MUL, Alloc)）→ emitValue(UnOp) 的 **Q205 双发射分支
+第一个 if（isAlloc）设 `values[Alloc]=#orders` 后提前 return**（节点
+未发射）→ 后续 ORM 读分支 emitValue(Alloc) **命中缓存返回未落库的
+ID** → read → #orders 边 **FK 失败 skip** → read 节点孤立。对比：
+accountBooks（未被 range 消费，无 UnOp）正常落库。
+
+**修复**（fe_value.go）：Q205 的 isAlloc 分支**不提前 return**——落入
+下方统一发射分支（节点落库；values 缓存保持双发射语义）。
+
+**验证**：
+- 真实 repro：read 节点出边恢复；`clearing_order_tab.merchant_id →
+  account_book_tab.merchant_id [query]` 出现（README 预期真实关系）；
+  **0 条 fk**（id → merchant_id 保持 query——字段换名 taint 求交空，
+  Q218 验证挡住 seed 的 5 条假 fk）
+- 回归测试 TestORMReadRangeUnOpEdge（#orders 落库 + read 出边 + 字段
+  读链）+ 12 包 + e2e-fixture 28 项全绿
+- seed（伪造历史图）仍复现 5 条假 fk——属构造图，真实分析不产生该
+  值流（README 已注明当前索引不再发射 row-read 边）
+
+---
+
+**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q222，逐 Q 编号 + 日期）。

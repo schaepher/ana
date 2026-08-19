@@ -176,7 +176,11 @@ func (ext *fieldExtractor) emitValue(v ssa.Value) (domain.CanonicalID, error) {
 					id := domain.CanonicalID(string(fid) + "#" + name)
 					ext.values[uo.X] = id
 					ext.values[v] = id
-					return id, nil
+					// Q221：不能提前 return——节点发射在下方统一分支。
+					// 此前提前 return：变量被 range 解引用（*orders）时
+					// 只设缓存不发射节点，后续 ORM 读分支（Find(&orders)
+					// 的 emitValue(Alloc)）命中缓存返回未落库的 ID →
+					// read → 对象边 FK 失败 → 真实键关联漏报
 				}
 			}
 		}

@@ -6,3 +6,4 @@ e2e/node_modules
 /tmp
 # 临时脚本（一次性分析/修补用，落盘可复用）
 integration/fixtureapp/.codeintel/
+.cc-connect/
