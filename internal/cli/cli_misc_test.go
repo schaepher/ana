@@ -196,3 +196,11 @@ func TestInitNoGoMod(t *testing.T) {
 		t.Error("init 无 go.mod 应失败")
 	}
 }
+
+// TestDefaultBuildWorkers Q221：默认并发 = min(NumCPU, 8)（1..8 区间）。
+func TestDefaultBuildWorkers(t *testing.T) {
+	n := defaultBuildWorkers()
+	if n < 1 || n > 8 {
+		t.Fatalf("defaultBuildWorkers = %d, want 1..8", n)
+	}
+}

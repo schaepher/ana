@@ -513,7 +513,8 @@ SSA 语义与映射类决策全部保留：Q1（SSA_VALUE 统一建模）、Q2�
     relRank 补 fk
   - **08-19**：Q220（§52）——where 条件串解析（大小写/尾部子句/多
     操作符）、BFS 阻断 error 值链（元组假链）、用户连线规则
-    （relation_rules，clean 保留）
+    （relation_rules，clean 保留）；Q221（§53）——构建期性能优化
+    （包间并行、dispatchRegs 每函数全图扫描修复、默认 workers 自动）
 
 ---
 
@@ -2253,4 +2254,42 @@ approval_log → pay_divide 假链消失（新旧 build 缓存并存无害）。
 
 ---
 
-**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q220，逐 Q 编号 + 日期）。
+## 53. 构建期性能优化（Q221，2026-08-19）
+
+目标：降低大项目构建期时间与内存。go2o 全量构建基线 **5m16s**（workers=1
+默认串行）。测量 → pprof 定位 → 逐项优化：
+
+**耗时分布（基线）**：emitFunction 循环 5m11s（98%）、loadPackages 1.9s、
+flush <1s。workers=8 冷启动仅 1.56 倍加速（3m27s）——CPU 利用率 2.9 核，
+暴露并行度不足。
+
+**优化 1：包间并行（全库函数块池）**。原实现包循环串行 + 包内 200 函数
+分块——135 包平均 95 函数/包 < 分块阈值 → 每包只有 1 块 → 同一时刻仅
+1 个 goroutine。改为：未命中缓存包全部拆块进全局 worker 池并行（块内
+单包，产物按包收集写缓存）。3m27s → 2m20s。
+
+**优化 2：dispatchRegs Index 级初始化（pprof 46% 热点）**。CPU profile
+定位 collectDispatchRegistrations cum 305s：a.dispatchRegs 从未初始化
+（零值 nil map）→ extractor 解引用复制后 `ext.dispatchRegs == nil`
+永远成立 → cf_call.go 懒初始化兜底导致**每个函数都全程序 AllFunctions
+扫描**（12875 次 × 全图遍历）。修复：Index 级（sp.Build 后）初始化一次，
+各 extractor 共享只读 map。2m20s → **40s**（总加速 7.9 倍）；CPU 660s →
+227s（分配减少连带 GC 降）。
+
+**优化 3：GOGC 可调（CODEINTEL_GOGC）**。pprof 显示 GC 占 ~38% CPU
+（GOGC=40 并行扫描开销）。GOGC=100 实测：wall 40s→36s（+9%）但 RSS
+2.88G→4.44G（+54%）——40 是时间/内存平衡点，保持默认；环境变量可调。
+
+**默认 workers = min(NumCPU, 8)**（原默认 1 串行）：8 核实测冷启动
+5m16s → 40s、峰值 RSS ~2.9G；上限 8 防大机器内存翻倍；小内存机器可
+--workers 1。
+
+**诊断工具**：`CODEINTEL_CPU_PROFILE=<file>` 输出构建期 CPU profile
+（main 构建类命令内 Start/Stop，os.Exit 前落盘）。
+
+**最终指标（go2o 冷启动）**：5m16s → 39.9s（7.9 倍）；CPU 660s → 227s；
+峰值 RSS 2.73G（workers=8 + GOGC=40）。缓存命中构建 15s。
+
+---
+
+**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q221，逐 Q 编号 + 日期）。

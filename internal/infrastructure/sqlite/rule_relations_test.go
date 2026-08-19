@@ -82,6 +82,14 @@ func TestRuleRelationModePattern(t *testing.T) {
 	if !foundB {
 		t.Fatalf("模式规则应覆盖 table_b.merchant_id，rels=%+v", relsB)
 	}
+	// 单表查询不得混入其他表的规则线（Q220c 回归：mergeRuleRelations
+	// 曾把全库规则线合并进单表结果——mm_relation 查询返回无关表线）
+	for _, rel := range rels {
+		if rel.FromTable != "table_a" {
+			t.Fatalf("table_a 单表查询不得含其他表规则线，got %s.%s → %s.%s",
+				rel.FromTable, rel.FromCol, rel.ToTable, rel.ToCol)
+		}
+	}
 }
 
 // TestRuleRelationExplicitAndValidation：显式规则只生成单对；目标表/

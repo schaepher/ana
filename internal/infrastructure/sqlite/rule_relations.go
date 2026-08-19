@@ -141,10 +141,24 @@ func (r *Repo) ruleRelations() ([]*domain.TableRelation, error) {
 // mergeRuleRelations 合并规则生成的关系（Q220c）：同 key 时类型 rank 高
 // 者胜（规则 fk 覆盖低 rank 的 read/query），新 key 追加。规则关系不进
 // relation_candidates 缓存（用户配置独立于 build_id，加规则无需重算）。
-func (r *Repo) mergeRuleRelations(rels []*domain.TableRelation) ([]*domain.TableRelation, error) {
+// table 非空（单表查询）时只合并 FromTable == table 的规则线——模式
+// 规则对全库生效，但单表结果不得混入其他表的规则线（Q220c 回归）。
+func (r *Repo) mergeRuleRelations(rels []*domain.TableRelation, table string) ([]*domain.TableRelation, error) {
 	rules, err := r.ruleRelations()
 	if err != nil || len(rules) == 0 {
 		return rels, err
+	}
+	if table != "" {
+		filtered := rules[:0]
+		for _, rr := range rules {
+			if rr.FromTable == table {
+				filtered = append(filtered, rr)
+			}
+		}
+		rules = filtered
+	}
+	if len(rules) == 0 {
+		return rels, nil
 	}
 	seen := map[string]int{}
 	for i, rel := range rels {

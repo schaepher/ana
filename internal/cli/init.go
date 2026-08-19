@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -24,7 +25,7 @@ func cmdInit(ctx context.Context, args []string) int {
 	defer logger.Debug("exit cmdInit")
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
 	repoPath := fs.String("repo", "", "仓库根目录（含 go.mod）")
-	workers := fs.Int("workers", 1, "SSA 分析按包并发数（默认 1=串行；内存充足可调大，如 4/8）")
+	workers := fs.Int("workers", defaultBuildWorkers(), "SSA 分析按包并发数（Q221：默认 min(NumCPU, 8)——8 核冷启动 5m16s→40s，峰值 RSS ~2.9G；小内存机器可调小，如 1）")
 	fs.Parse(args)
 
 	if *repoPath == "" {
@@ -192,4 +193,18 @@ func findGoWork(dir string) string {
 		dir = parent
 	}
 	return ""
+}
+
+// defaultBuildWorkers Q221：构建默认并发数 = min(NumCPU, 8)（1..8）——
+// 8 核实测冷启动 5m16s → 40s（峰值 RSS ~2.9G）；上限 8 防大机器内存
+// 翻倍。小内存机器可 --workers 1 调小。
+func defaultBuildWorkers() int {
+	n := runtime.NumCPU()
+	if n > 8 {
+		n = 8
+	}
+	if n < 1 {
+		n = 1
+	}
+	return n
 }
