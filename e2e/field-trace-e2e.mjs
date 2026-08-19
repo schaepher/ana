@@ -399,6 +399,33 @@ const allLinesState = await page.evaluate(() => ({
 check('ER 刷新后全图画线开关重置为关（不持久化）',
   allLinesState.checked === false && allLinesState.saved === null,
   JSON.stringify(allLinesState));
+// 18. 点击线聚焦（Q229）：点击一条线只显示该线；点击空白恢复全部
+await page.evaluate(() => {
+  // 打开全部类型开关 + 全图画线（默认只画 fk——fixture 仅 1 条 fk 线）
+  for (const id of ['f-fk', 'f-query', 'f-write', 'f-read', 'f-alllines']) {
+    const cb = document.getElementById(id);
+    if (!cb.checked) cb.click();
+  }
+});
+await page.waitForTimeout(1500);
+const lineTotal = await page.evaluate(() => document.querySelectorAll('path.edge').length);
+await page.evaluate(() => {
+  const first = document.querySelector('path.edge');
+  first.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+});
+await page.waitForTimeout(400);
+const lineFocused = await page.evaluate(() => document.querySelectorAll('path.edge').length);
+await page.evaluate(() => {
+  document.getElementById('svg-wrap').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+});
+await page.waitForTimeout(400);
+const lineRestored = await page.evaluate(() => document.querySelectorAll('path.edge').length);
+check('ER 点击线聚焦只显示该线',
+  lineTotal > 1 && lineFocused === 1,
+  'total=' + lineTotal + ' focused=' + lineFocused);
+check('ER 点击空白恢复全部线',
+  lineRestored === lineTotal,
+  'restored=' + lineRestored + ' total=' + lineTotal);
 
 console.log('\n===== 字段追溯 e2e: ' + passed + ' passed, ' + failed + ' failed =====');
 await browser.close();

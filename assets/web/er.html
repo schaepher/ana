@@ -136,6 +136,7 @@ let MODE = 'tiled'; // tiled 平铺 / nested 嵌套
 let SHOW = { fk: true, query: false, write: false, read: false }; // Q218：默认只画 fk（值流验证的真实键关联）；query 噪声需手动展开
 let SHOW_ALL_LINES = false; // 全图画线开关（Q204：直接画全部关系，无需双击展开）
 let SELECTED = new Set(); // 双击展开的表集合（空=不画线；展开后只显示相关表与其关系）
+let FOCUS_LINE = null; // Q229：点击线聚焦——只显示该线；点击空白恢复全部
 // 每条线独立配色（循环调色板；线型仍表达类型：实线=键关联/虚线=同源写/点线=间接读）
 const PALETTE = ['#1677ff', '#fa8c16', '#52c41a', '#f5222d', '#722ed1', '#13c2c2',
   '#eb2f96', '#a0d911', '#2f54eb', '#faad14', '#08979c', '#d4380d'];
@@ -476,6 +477,10 @@ function render() {
     SELECTED.forEach(s => keep.add(s));
     tables = tables.filter(t => keep.has(t.name));
   }
+  // Q229：焦点线——只显示选中的线（隐藏其他线）
+  if (FOCUS_LINE) {
+    draw = draw.filter(r => edgeKey(r) === FOCUS_LINE);
+  }
   draw = mergeBidirectional(draw);
   const data = { tables, relations: rels };
   if (MODE === 'nested') renderNested(data, rels, draw);
@@ -484,6 +489,11 @@ function render() {
   // 后续内容不在可视区（双击展开表数量多时尤其明显）。
   // 滚动容器是 window（#svg-wrap 高度由内容撑开，页面整体滚动）
   window.scrollTo(0, 0);
+}
+
+// edgeKey 线的唯一标识（Q229 点击聚焦用——from/to 列对）
+function edgeKey(r) {
+  return r.from_table + '|' + r.from_col + '|' + r.to_table + '|' + r.to_col;
 }
 
 // 同字段双向合并（Q200）：A.x → B.y 与 B.y → A.x 完全反向同字段对
@@ -522,6 +532,19 @@ function bindDblClick() {
       if (SELECTED.has(name)) SELECTED.delete(name); else SELECTED.add(name);
       render();
     });
+  });
+}
+
+// Q229：点击线聚焦（只显示该线）；点击空白（非线）恢复全部线。
+// 与 dblclick 共存：双击表会先触发两次 click（各自恢复聚焦）——
+// 恢复无副作用，随后 dblclick 正常展开。
+function bindLineFocus() {
+  document.getElementById('svg-wrap').addEventListener('click', evt => {
+    const line = evt.target.closest('path.edge, text.edge-label');
+    const key = line ? line.getAttribute('data-key') : null;
+    if (key === FOCUS_LINE) return; // 同一线重复点击/已恢复
+    FOCUS_LINE = key;
+    render();
   });
 }
 
@@ -572,7 +595,7 @@ function renderTiled(data, rels, draw) {
     const p = orthPath(ex1, ay, ex2, by,
       L.rowOf.get(r.from_table), L.colOf.get(r.from_table),
       L.rowOf.get(r.to_table), L.colOf.get(r.to_table), L, n, outN, inN, lineIdx);
-    svg += `<path d="${p.d}" fill="none" style="${edgeStyle(r.type, lineColor)}"/>`;
+    svg += `<path class="edge" data-key="${edgeKey(r)}" d="${p.d}" fill="none" style="${edgeStyle(r.type, lineColor)}"/>`;
     svg += edgeLabel(p.mx, p.my, r, lineColor);
   }
   // 卡片
@@ -660,7 +683,7 @@ function renderNested(data, rels, draw) {
     const p = orthPath(ex1, ay, ex2, by,
       L.rowOf.get(r.from_table), L.colOf.get(r.from_table),
       L.rowOf.get(r.to_table), L.colOf.get(r.to_table), L, n, outN, inN, lineIdx);
-    svg += `<path d="${p.d}" fill="none" style="${edgeStyle(r.type, color)}"/>`;
+    svg += `<path class="edge" data-key="${edgeKey(r)}" d="${p.d}" fill="none" style="${edgeStyle(r.type, color)}"/>`;
     // 锚点圆点（线端，精确落在字段矩形边缘）
     svg += `<circle class="nest-anchor" cx="${ex1}" cy="${ay}" r="3" fill="${color}"/>`;
     svg += `<circle class="nest-anchor" cx="${ex2}" cy="${by}" r="3" fill="${color}"/>`;
@@ -688,7 +711,7 @@ function edgeStyle(type, color) {
 }
 function edgeLabel(x, y, r, color) {
   const sep = r.bi ? ' ↔ ' : ' → ';
-  return `<text x="${x}" y="${y}" class="edge-label" text-anchor="middle">
+  return `<text x="${x}" y="${y}" class="edge-label" data-key="${edgeKey(r)}" text-anchor="middle">
     <tspan fill="${color}" font-weight="600">${r.from_col}</tspan>${sep}${r.to_col}
   </text>`;
 }
@@ -810,6 +833,7 @@ function bindRulesPanel() {
 bindRelFilter();
 bindModeSwitch();
 bindDblClick();
+bindLineFocus();
 bindHopsConfig();
 bindRulesPanel();
 load();
