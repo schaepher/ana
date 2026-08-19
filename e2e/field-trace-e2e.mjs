@@ -426,6 +426,49 @@ check('ER 点击线聚焦只显示该线',
 check('ER 点击空白恢复全部线',
   lineRestored === lineTotal,
   'restored=' + lineRestored + ' total=' + lineTotal);
+// 19. 字段/表级 checkbox（Q230）：取消勾选字段隐藏该字段的线；
+//     表级 checkbox 一键开关表内所有字段连线；恢复勾选线全部回来
+await page.evaluate(() => {
+  // 全类型 + 全图画线（fixture 已预计算，done 直接返回）
+  for (const id of ['f-fk', 'f-query', 'f-write', 'f-read', 'f-alllines']) {
+    const cb = document.getElementById(id);
+    if (!cb.checked) cb.click();
+  }
+});
+await page.waitForTimeout(1500);
+const chkBase = await page.evaluate(() => document.querySelectorAll('path.edge').length);
+// 表级 checkbox（初始全勾）→ 点击 = 一键隐藏表内全部字段连线
+await page.evaluate(() => {
+  document.querySelector('[data-table-chk][data-key="orders"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+});
+await page.waitForTimeout(400);
+const chkAfterTable = await page.evaluate(() => document.querySelectorAll('path.edge').length);
+// 表级再点 → 恢复全部（orders 相关线回来）
+await page.evaluate(() => {
+  document.querySelector('[data-table-chk][data-key="orders"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+});
+await page.waitForTimeout(400);
+// 字段级取消勾选 orders.id（该字段有 fk 线）
+await page.evaluate(() => {
+  document.querySelector('[data-field-chk][data-key="orders.id"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+});
+await page.waitForTimeout(400);
+const chkAfterField = await page.evaluate(() => document.querySelectorAll('path.edge').length);
+// 字段级再点 → 恢复
+await page.evaluate(() => {
+  document.querySelector('[data-field-chk][data-key="orders.id"]').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+});
+await page.waitForTimeout(400);
+const chkRestored = await page.evaluate(() => document.querySelectorAll('path.edge').length);
+check('ER 表级 checkbox 一键隐藏表内字段线',
+  chkBase > 1 && chkAfterTable < chkBase,
+  'base=' + chkBase + ' afterTable=' + chkAfterTable);
+check('ER 取消字段勾选隐藏该字段的线',
+  chkAfterField < chkBase,
+  'base=' + chkBase + ' afterField=' + chkAfterField);
+check('ER 恢复勾选后线全部回来',
+  chkRestored === chkBase,
+  'restored=' + chkRestored + ' base=' + chkBase);
 
 console.log('\n===== 字段追溯 e2e: ' + passed + ' passed, ' + failed + ' failed =====');
 await browser.close();

@@ -1,0 +1,52 @@
+{
+	"Name": "codeintel.main",
+	"SpanContext": {
+		"TraceID": "822d906f4f08845f11ba031af14decdf",
+		"SpanID": "548084723ba15676",
+		"TraceFlags": "01",
+		"TraceState": "",
+		"Remote": false
+	},
+	"Parent": {
+		"TraceID": "00000000000000000000000000000000",
+		"SpanID": "0000000000000000",
+		"TraceFlags": "00",
+		"TraceState": "",
+		"Remote": false
+	},
+	"SpanKind": 1,
+	"StartTime": "2026-08-19T20:12:33.711635317+08:00",
+	"EndTime": "2026-08-19T20:12:33.711677245+08:00",
+	"Attributes": null,
+	"Events": null,
+	"Links": null,
+	"Status": {
+		"Code": "Unset",
+		"Description": ""
+	},
+	"DroppedAttributes": 0,
+	"DroppedEvents": 0,
+	"DroppedLinks": 0,
+	"ChildSpanCount": 0,
+	"Resource": [
+		{
+			"Key": "service.name",
+			"Value": {
+				"Type": "STRING",
+				"Value": "codeintel"
+			}
+		}
+	],
+	"InstrumentationScope": {
+		"Name": "codeintel",
+		"Version": "",
+		"SchemaURL": "",
+		"Attributes": null
+	},
+	"InstrumentationLibrary": {
+		"Name": "codeintel",
+		"Version": "",
+		"SchemaURL": "",
+		"Attributes": null
+	}
+}

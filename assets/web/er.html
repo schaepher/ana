@@ -137,6 +137,7 @@ let SHOW = { fk: true, query: false, write: false, read: false }; // Q218：默�
 let SHOW_ALL_LINES = false; // 全图画线开关（Q204：直接画全部关系，无需双击展开）
 let SELECTED = new Set(); // 双击展开的表集合（空=不画线；展开后只显示相关表与其关系）
 let FOCUS_LINE = null; // Q229：点击线聚焦——只显示该线；点击空白恢复全部
+let FIELD_HIDDEN = new Set(); // Q230：取消勾选的字段（表.列）——隐藏连接到该字段的线；默认全勾选
 // 每条线独立配色（循环调色板；线型仍表达类型：实线=键关联/虚线=同源写/点线=间接读）
 const PALETTE = ['#1677ff', '#fa8c16', '#52c41a', '#f5222d', '#722ed1', '#13c2c2',
   '#eb2f96', '#a0d911', '#2f54eb', '#faad14', '#08979c', '#d4380d'];
@@ -477,6 +478,11 @@ function render() {
     SELECTED.forEach(s => keep.add(s));
     tables = tables.filter(t => keep.has(t.name));
   }
+  // Q230：字段勾选过滤——线连接任一端字段被取消勾选则隐藏
+  if (FIELD_HIDDEN.size > 0) {
+    draw = draw.filter(r => !FIELD_HIDDEN.has(r.from_table + '.' + r.from_col) &&
+      !FIELD_HIDDEN.has(r.to_table + '.' + r.to_col));
+  }
   // Q229：焦点线——只显示选中的线（隐藏其他线）
   if (FOCUS_LINE) {
     draw = draw.filter(r => edgeKey(r) === FOCUS_LINE);
@@ -489,6 +495,41 @@ function render() {
   // 后续内容不在可视区（双击展开表数量多时尤其明显）。
   // 滚动容器是 window（#svg-wrap 高度由内容撑开，页面整体滚动）
   window.scrollTo(0, 0);
+}
+
+// chkBox SVG 自绘 checkbox（Q230）：rect + 勾，热区放大防误触。
+// cls = data-field-chk（字段）/ data-table-chk（表）；key = 表.列 / 表名。
+function chkBox(x, y, checked, key, cls) {
+  const box = `<rect x="${x}" y="${y}" width="11" height="11" rx="2" fill="${checked ? '#2f54eb' : '#fff'}" stroke="${checked ? '#2f54eb' : '#bbb'}" stroke-width="1"/>`;
+  const mark = checked ? `<path d="M${x + 3} ${y + 6} l2 2 l4 -5" stroke="#fff" stroke-width="1.5" fill="none"/>` : '';
+  // cls 为属性名（data-field-chk / data-table-chk）——属性选择器匹配
+  const hit = `<rect x="${x - 2}" y="${y - 2}" width="15" height="15" fill="transparent" class="chk-hit" ${cls} data-key="${key}" style="cursor:pointer"/>`;
+  return box + mark + hit;
+}
+
+// 字段显示名（c.name 可能已含表前缀）
+function colDisplayName(c) {
+  return c.name.includes('.') ? c.name.slice(c.name.indexOf('.') + 1) : c.name;
+}
+
+// 表内全部字段 key（表.列）
+function tableFieldKeys(t) {
+  return (t.columns || []).map(c => t.name + '.' + colDisplayName(c));
+}
+
+// 表级 checkbox 状态：表内字段全部勾选才显示勾选
+function tableChecked(t) {
+  return tableFieldKeys(t).every(k => !FIELD_HIDDEN.has(k));
+}
+
+// 表级 checkbox 点击：全勾 → 隐藏表内全部字段线；否则全部恢复
+function toggleTableFields(t) {
+  const tbl = (DATA.tables || []).find(x => x.name === t);
+  if (!tbl) return;
+  const keys = tableFieldKeys(tbl);
+  const allChecked = keys.every(k => !FIELD_HIDDEN.has(k));
+  if (allChecked) keys.forEach(k => FIELD_HIDDEN.add(k));
+  else keys.forEach(k => FIELD_HIDDEN.delete(k));
 }
 
 // edgeKey 线的唯一标识（Q229 点击聚焦用——from/to 列对）
@@ -540,6 +581,20 @@ function bindDblClick() {
 // 恢复无副作用，随后 dblclick 正常展开。
 function bindLineFocus() {
   document.getElementById('svg-wrap').addEventListener('click', evt => {
+    // Q230：字段/表级 checkbox 优先——切换隐藏字段集合后重渲染
+    const fchk = evt.target.closest('[data-field-chk]');
+    if (fchk) {
+      const key = fchk.getAttribute('data-key');
+      if (FIELD_HIDDEN.has(key)) FIELD_HIDDEN.delete(key); else FIELD_HIDDEN.add(key);
+      render();
+      return;
+    }
+    const tchk = evt.target.closest('[data-table-chk]');
+    if (tchk) {
+      toggleTableFields(tchk.getAttribute('data-key'));
+      render();
+      return;
+    }
     const line = evt.target.closest('path.edge, text.edge-label');
     const key = line ? line.getAttribute('data-key') : null;
     if (key === FOCUS_LINE) return; // 同一线重复点击/已恢复
@@ -605,11 +660,16 @@ function renderTiled(data, rels, draw) {
     svg += `<rect class="tbl${sel}" data-tbl="${t.name}" x="${p.x}" y="${p.y}" width="${W}" height="${h}" rx="6"/>`;
     svg += `<rect class="tbl-head${sel}" data-tbl="${t.name}" x="${p.x}" y="${p.y}" width="${W}" height="${HEAD_H}" rx="6"/>`;
     svg += `<rect x="${p.x}" y="${p.y + HEAD_H - 6}" width="${W}" height="6" fill="#2f54eb"/>`;
-    svg += `<text class="tbl-title" data-tbl="${t.name}" x="${p.x + 12}" y="${p.y + 21}">${t.name}</text>`;
+    // Q230：表级 checkbox（一键开关表内所有字段连线）
+    svg += chkBox(p.x + 8, p.y + 10, tableChecked(t), t.name, 'data-table-chk');
+    svg += `<text class="tbl-title" data-tbl="${t.name}" x="${p.x + 26}" y="${p.y + 21}">${t.name}</text>`;
     t.columns.forEach((c, i) => {
       const cy = p.y + HEAD_H + i * ROW_H + ROW_H - 6;
       if (i % 2 === 1) svg += `<rect class="tbl-row-alt" x="${p.x + 1}" y="${p.y + HEAD_H + i * ROW_H}" width="${W - 2}" height="${ROW_H}"/>`;
-      svg += fieldText(p.x + 12, cy, c);
+      // Q230：字段级 checkbox（取消勾选隐藏该字段的线）
+      svg += chkBox(p.x + 4, cy - 5.5, !FIELD_HIDDEN.has(t.name + '.' + colDisplayName(c)),
+        t.name + '.' + colDisplayName(c), 'data-field-chk');
+      svg += fieldText(p.x + 22, cy, c);
     });
   }
   svg += '</svg>';
@@ -644,12 +704,17 @@ function renderNested(data, rels, draw) {
     svg += `<rect class="nest-tbl${sel}" data-tbl="${t.name}" x="${p.x}" y="${p.y}" width="${TW}" height="${p.h}" rx="4"/>`;
     svg += `<rect class="nest-head${sel}" data-tbl="${t.name}" x="${p.x}" y="${p.y}" width="${TW}" height="${TH_HEAD}" rx="4"/>`;
     svg += `<rect x="${p.x}" y="${p.y + TH_HEAD - 6}" width="${TW}" height="6" fill="#5b6b7c"/>`;
-    svg += `<text class="nest-title" data-tbl="${t.name}" x="${p.x + 12}" y="${p.y + 22}">${t.name}</text>`;
+    // Q230：表级 checkbox
+    svg += chkBox(p.x + 8, p.y + 11, tableChecked(t), t.name, 'data-table-chk');
+    svg += `<text class="nest-title" data-tbl="${t.name}" x="${p.x + 26}" y="${p.y + 22}">${t.name}</text>`;
     t.columns.forEach((c, i) => {
       const fr = fieldRect(p, i);
       svg += `<rect class="nest-field" x="${fr.x}" y="${fr.y}" width="${fr.w}" height="${fr.h}"/>`;
       const cy = fr.y + fr.h / 2 + 4;
-      svg += fieldText(fr.x + 8, cy, c);
+      // Q230：字段级 checkbox（矩形内左侧）
+      svg += chkBox(fr.x + 4, fr.y + (fr.h - 11) / 2, !FIELD_HIDDEN.has(t.name + '.' + colDisplayName(c)),
+        t.name + '.' + colDisplayName(c), 'data-field-chk');
+      svg += fieldText(fr.x + 22, cy, c);
     });
   }
   // 连线：字段矩形边缘 → 字段矩形边缘（正交绕障折线 + 锚点圆点，最上层）
