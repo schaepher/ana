@@ -66,6 +66,7 @@
 53. [构建期性能优化（Q221，2026-08-19）](#53-构建期性能优化q2212026-08-19)
 54. [ORM 读路径 read→对象边缺失（Q222，2026-08-19）](#54-orm-读路径-read对象边缺失q2222026-08-19)
 55. [闭包参数未落库与嵌套闭包丢失（Q223，2026-08-19）](#55-闭包参数未落库与嵌套闭包丢失q2232026-08-19)
+56. [业务 id 同源双写识别（Q225，2026-08-19）](#56-业务-id-同源双写识别q2252026-08-19)
 ---
 
 ## 1. 项目背景与目标
@@ -522,6 +523,8 @@ SSA 语义与映射类决策全部保留：Q1（SSA_VALUE 统一建模）、Q2�
     Q222（§54）——ORM 读路径 read→对象边缺失（Q205 提前 return）
     Q223（§55）——闭包参数未落库（Parameter 分支假设签名节点已发射）
     + 嵌套闭包整块丢失（emitFunction 跳过）
+    Q225（§56）——业务 id 同源双写识别（Q202 清空改求交、
+    Q202c taintExact 豁免）
 
 ---
 
@@ -2381,5 +2384,62 @@ accountBooks（未被 range 消费，无 UnOp）正常落库。
 函数）；AllFunctions 遍历到 ≠ 已发射。
 
 ---
+## 56. 业务 id 同源双写识别（Q225，2026-08-19）
 
-**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q223，逐 Q 编号 + 日期）。
+**场景**（用户提供）：表 A 的某个业务 id 先创建，和这条数据一起
+insert（`a.BizID = bizID; Insert(a)`），之后同一值再更新到表 B
+（`b.BizID = bizID; Update(b)`）——期望识别 `a_tab.biz_id →
+b_tab.biz_id` 同源 write。
+
+**现状验证**（测试先行）：
+
+- **同函数**变体天然识别（write 路径无 crossed 判定，hops=6）——
+  无需修复
+- **跨函数**变体（insert/update 拆独立函数，argument 边跨函数传
+  bizID）识别不了——三层根因：
+  1. **Q202 清空规则**：BFS 无向先到先得，「对象→字段写节点清空
+     taint」把链上 `a.BizID.write` 清零——字段写节点的值边方向
+     （bizID → 字段写）永远晚于基址方向到达，visited 去重后 taint
+     丢失
+  2. **EqualFold 不处理 snake_case**：`{biz_id}` ∩ `{BizID}` 为空
+     （字段读求交的严格性 Q218 是有意的——防换名噪声；但对象→
+     字段写是 ORM 字段映射，需 snake 对照）
+  3. **Q202c 外键形态**：跨函数 write 目标列须呼应表名，
+     `biz_id` 呼不应 `b_tab` → 丢弃
+
+**修复**（rg_relationsfor.go）：
+
+1. Q202 清空规则改为**与字段名求交**（与字段读求交对称）——
+   对象 taint 只取与字段名呼应的部分；`colMatchFold` 去下划线 +
+   小写归一（BizID ≈ biz_id、OrderID ≈ order_id，无需
+   commonInitialisms 表；ResId ≈ res_id 与 id 仍不匹配，Q202
+   role 案例不回归）
+2. **isExternal 虚拟列节点豁免**——虚拟列的值来源就是对象字段
+   映射（ORM 类型展开），对象整体传递即字段值传递
+3. **Q202c 加 taintExact 豁免**——与终点列完全同名（biz_id =
+   biz_id）是同名列双写的强呼应，值流真实传递，不因非外键形态
+   丢弃（弱呼应 id ⊆ res_id 仍要求外键形态，Q202c 原意保持）
+
+**验证**：
+
+- 3 个新测试（orm_write_same_source_test.go）：同函数（hops=6）、
+  值流链路、跨函数（hops=8）；跨函数断言 `b_tab.id` 被 Q202c
+  丢弃（对象展开噪声，严格性锁定）
+- make test 12 包（含 -race）全绿
+- go2o reindex：mm_member 9→16 条——**fk 5 全保留**（Q202/Q218
+  降噪未破坏），新增 7 条**同名列跨函数双写**（create_time/email/
+  phone/update_time/profile_photo → 各表同名列，真实同源）；
+  mm_flow_log → mm_balance_log/mm_integral_log 的 8 跳字段复制
+  同源出现
+- 新 fixture **examples/repro-bizid-same-source**（脱敏：a_tab/
+  b_tab/biz_id）：同函数 + 跨函数双变体；README 注明 `b_tab.id`
+  是同函数对象展开的已知噪声（id 结尾列不聚合，Q202b）
+
+**教训**：无向 BFS 的「清空」语义会误伤值边方向（先到先得）；
+字段读写节点的 taint 都应与字段名呼应（读写对称求交）——清空是
+「求交为空」的特例，但对象 taint 与字段名呼应时（同名列双写）
+清空会丢失真实值流。
+
+---
+
+**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q225，逐 Q 编号 + 日期）。

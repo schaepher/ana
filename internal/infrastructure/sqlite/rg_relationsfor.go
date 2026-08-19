@@ -66,6 +66,29 @@ func taintMatches(taint []string, col string) bool {
 	return false
 }
 
+// taintExact taint 中任一字段与列名完全同名（大小写不敏感）——同名列
+// 跨表双写（业务 id 同源：a_tab.biz_id 写入值 → b_tab.biz_id）为
+// 强呼应，值流真实传递，无需外键形态兜底（Q225；与 taintMatches 的
+// 弱呼应 id ⊆ res_id 区分——弱呼应仍要求目标列外键形态）。
+func taintExact(taint []string, col string) bool {
+	for _, tf := range taint {
+		if strings.EqualFold(tf, col) {
+			return true
+		}
+	}
+	return false
+}
+
+// colMatchFold 列名与字段名对照：去下划线后大小写不敏感比较——ORM
+// snake_case 映射（BizID ≈ biz_id、OrderID ≈ order_id），且无需
+// commonInitialisms 表（ID/Id/id 归一为 id；ResId ≈ res_id 与 id
+// 仍不匹配，Q202 role 案例不回归）。
+func colMatchFold(a, b string) bool {
+	na := strings.ReplaceAll(strings.ToLower(a), "_", "")
+	nb := strings.ReplaceAll(strings.ToLower(b), "_", "")
+	return na == nb
+}
+
 // fkColMatches 外键列名与表名呼应（Q202b）：col=xxx_id/xxx，表名以
 // xxx 结尾（rbac_role_res.role_id base=role ↔ rbac_role）或相等
 // （含 _ 前缀形式）。id/xxx 无 base 不匹配（create_time → id 不受益）。
@@ -154,15 +177,31 @@ func (g *relationGraph) relationsFor(table string) []*domain.TableRelation {
 						t = intersectTaint(cur.taint, []string{cn})
 					}
 				}
-				// Q202 精确化：对象（指针/结构体）→ 字段写节点不延续 taint
-				// ——字段写节点的值由写入值（另一条边）决定，基地址对象只是
-				// 取址，不携带字段值流（go2o 实测：role 对象整体传入后
-				// t9.ResId.write 被误标 {id}，实际 res_id 来自请求参数）
+				// Q202 精确化：对象（指针/结构体）→ 字段写节点不延续对象
+				// 整体 taint，只取与字段名呼应的部分（与字段读求交对称，
+				// Q225 修正）：字段写节点的值由写入值（另一条边）决定，
+				// 基址对象只取址——但对象 taint 若与字段名呼应（如对象
+				// taint={biz_id} 写 BizID 字段）正是该字段的真实值流
+				// （业务 id 先 insert 表 A 再 update 表 B 的同源双写，
+				// 跨函数时原「置 nil」把链上 a.BizID.write 清零导致终点
+				// taint 丢失）。role taint={id} 写 ResId → 对照空仍丢弃
+				// （Q202 go2o 案例不回归）。isExternal 虚拟列节点豁免——
+				// 虚拟列的值来源就是对象字段映射（ORM 类型展开）
 				if n := g.nodes[cur.id]; n != nil && n.kind == string(domain.KindSSAValue) &&
 					(strings.HasPrefix(n.typeString, "*") || strings.Contains(n.typeString, "struct")) {
 					if on := g.nodes[other]; on != nil && on.kind == string(domain.KindFieldAccess) &&
-						on.access == "write" {
-						t = nil
+						on.access == "write" && !on.isExternal {
+						if cn := colNameOf(on.name); cn != "" {
+							t = nil
+							for _, x := range cur.taint {
+								if colMatchFold(x, cn) {
+									t = append(t, x)
+									break
+								}
+							}
+						} else {
+							t = nil
+						}
 					}
 				}
 				tainted[other] = t
@@ -230,7 +269,10 @@ func (g *relationGraph) relationsFor(table string) []*domain.TableRelation {
 					// role.id → res_id 虽值流 taint 呼应（{id} ⊆ res_id），
 					// 但 res_id 是资源 id 非角色外键（值仅同函数上下文
 					// 连通，非直接关系），不展示；role_id/order_id 呼应
-					if !fkColMatches(col, table) {
+					// Q225：taintExact 豁免——与终点列完全同名（biz_id =
+					// biz_id）是同名列双写的强呼应（业务 id 同源），值流
+					// 真实传递，不因非外键形态丢弃
+					if !fkColMatches(col, table) && !taintExact(tainted[id], col) {
 						continue
 					}
 				}
