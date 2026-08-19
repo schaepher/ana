@@ -333,6 +333,20 @@ const erInfo = await page.evaluate(() => document.getElementById('info').textCon
 check('ER info 栏统计含 fk 计数',
   /条关联（fk \d+/.test(erInfo),
   'info=' + erInfo.slice(0, 80));
+// 15. 双击表 → 按需加载期间展示「加载中...」弹框，加载完成取消（Q224）：
+//     双击触发 loadTableRels（fetch ?table=X）→ 弹框显示 → then 后取消并渲染
+await page.evaluate(() => {
+  const tbl = document.querySelector('[data-tbl]');
+  if (tbl) tbl.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+});
+await page.waitForTimeout(1500);
+const erLoading = await page.evaluate(() => ({
+  hidden: document.getElementById('loading').classList.contains('hidden'),
+  selected: document.querySelectorAll('.tbl.selected, .nest-tbl.selected').length,
+}));
+check('ER 双击表加载中弹框加载后取消且表展开生效',
+  erLoading.hidden && erLoading.selected > 0,
+  JSON.stringify(erLoading));
 
 console.log('\n===== 字段追溯 e2e: ' + passed + ' passed, ' + failed + ' failed =====');
 await browser.close();

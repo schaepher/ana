@@ -42,6 +42,12 @@
   .tbl-head.selected { fill: #fa8c16; }
   .nest-tbl.selected { stroke: #fa8c16; stroke-width: 3; }
   .nest-head.selected { fill: #fa8c16; }
+  /* 加载中弹框（双击表展开/全图画线按需加载期间，Q224） */
+  #loading { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: rgba(0, 0, 0, .25); z-index: 100; }
+  #loading .box { background: #fff; padding: 18px 32px; border-radius: 8px; font-size: 14px;
+    color: #333; box-shadow: 0 4px 16px rgba(0, 0, 0, .15); }
+  #loading.hidden { display: none; }
 </style>
 </head>
 <body>
@@ -74,6 +80,7 @@
   </div>
 </header>
 <div id="svg-wrap"></div>
+<div id="loading" class="hidden"><div class="box">加载中...</div></div>
 <script>
 // ---- 平铺画法常量 ----
 const W = 240, HEAD_H = 32, ROW_H = 22, PAD = 8;
@@ -123,21 +130,44 @@ function mergeRels(newRels) {
   DATA.relations = [...seen.values()];
 }
 
-// Q210：双击展开只加载该表相关关系（?table=X 单表 BFS + 单表缓存），
-// 不全量——多表展开累积合并
-async function loadTableRels(table) {
-  if (FULL_LOADED || tableRelsLoaded.has(table)) return;
-  const d = await fetchER(currentHops(), false, table);
-  mergeRels(d.relations);
-  tableRelsLoaded.add(table);
+// Q224：按需加载期间的「加载中...」弹框（计数器支持并发加载：
+// 快速双击多个表时最后一次加载完成才取消）
+let loadingCount = 0;
+function showLoading() {
+  if (++loadingCount === 1) document.getElementById('loading').classList.remove('hidden');
+}
+function hideLoading() {
+  if (--loadingCount <= 0) {
+    loadingCount = 0;
+    document.getElementById('loading').classList.add('hidden');
+  }
 }
 
-// Q210：全图画线开关才触发全量加载
+// Q210：双击展开只加载该表相关关系（?table=X 单表 BFS + 单表缓存），
+// 不全量——多表展开累积合并；加载期间展示「加载中...」弹框（Q224）
+async function loadTableRels(table) {
+  if (FULL_LOADED || tableRelsLoaded.has(table)) return;
+  showLoading();
+  try {
+    const d = await fetchER(currentHops(), false, table);
+    mergeRels(d.relations);
+    tableRelsLoaded.add(table);
+  } finally {
+    hideLoading();
+  }
+}
+
+// Q210：全图画线开关才触发全量加载（同样带加载弹框，Q224）
 async function ensureFullRels() {
   if (FULL_LOADED) return;
-  const d = await fetchER(currentHops(), false, '');
-  mergeRels(d.relations);
-  FULL_LOADED = true;
+  showLoading();
+  try {
+    const d = await fetchER(currentHops(), false, '');
+    mergeRels(d.relations);
+    FULL_LOADED = true;
+  } finally {
+    hideLoading();
+  }
 }
 
 async function fetchER(hops, skipRelations, table) {
