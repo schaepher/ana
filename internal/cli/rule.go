@@ -11,13 +11,13 @@ import (
 	"go.uber.org/zap"
 )
 
-// cmdRule 用户连线规则管理（Q220c）：
+// cmdRule 用户连线规则管理（Q220c/Q220d）：
 //
 //	codeintel rule add "<expr>" --repo <path>  添加规则
-//	    expr 形态（→ 或 -> 均可）：
-//	      x → B.y        模式规则：所有含 x 列的表 → B.y
-//	      A.x → B.y      显式列对：仅 A.x → B.y
-//	      x → B          目标列省略时默认 B.id
+//	    expr 形态（from/to 主语法，兼容旧箭头）：
+//	      from x to B.y      模式规则：所有含 x 列的表 → B.y
+//	      from A.x to B.y    显式列对：仅 A.x → B.y
+//	      from x to B        目标列省略时默认 B.id
 //	codeintel rule list [--json] --repo <path>  列出规则
 //	codeintel rule remove <id> --repo <path>    删除规则
 //
@@ -63,7 +63,7 @@ func ruleAdd(r *sqlite.Repo, args []string) int {
 	logger.Debug("enter ruleAdd")
 	defer logger.Debug("exit ruleAdd")
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "用法: codeintel rule add \"a_id → table_b.id\" --repo <path>")
+		fmt.Fprintln(os.Stderr, "用法: codeintel rule add \"from a_id to table_b.id\" --repo <path>")
 		return 2
 	}
 	var exprParts []string
@@ -76,7 +76,7 @@ func ruleAdd(r *sqlite.Repo, args []string) int {
 	expr := strings.Join(exprParts, " ")
 	from, to, ok := splitRuleExpr(expr)
 	if !ok {
-		fmt.Fprintf(os.Stderr, "规则表达式无效: %q（形态：x → B.y 或 A.x → B.y）\n", expr)
+		fmt.Fprintf(os.Stderr, "规则表达式无效: %q（形态：from x to B.y 或 from A.x to B.y）\n", expr)
 		return 2
 	}
 	var rule sqlite.RelationRule
@@ -99,7 +99,7 @@ func ruleAdd(r *sqlite.Repo, args []string) int {
 	if rule.FromTable != "" {
 		kind = "显式"
 	}
-	fmt.Printf("已添加%s规则 #%d: %s.%s → %s.%s（生效时校验表/列存在）\n",
+	fmt.Printf("已添加%s规则 #%d: from %s.%s to %s.%s（生效时校验表/列存在）\n",
 		kind, id, rule.FromTable, rule.FromCol, rule.ToTable, rule.ToCol)
 	return 0
 }
@@ -138,7 +138,7 @@ func ruleList(r *sqlite.Repo, args []string) int {
 		if scope == "" {
 			scope = "*"
 		}
-		fmt.Printf("#%d  %s.%s → %s.%s\n", ru.ID, scope, ru.FromCol, ru.ToTable, ru.ToCol)
+		fmt.Printf("#%d  from %s.%s to %s.%s\n", ru.ID, scope, ru.FromCol, ru.ToTable, ru.ToCol)
 	}
 	return 0
 }
@@ -165,22 +165,33 @@ func ruleRemove(r *sqlite.Repo, args []string) int {
 	return 0
 }
 
-// splitRuleExpr 拆分规则表达式 "A.x → B.y"（→ 或 ->）。
+// splitRuleExpr 拆分规则表达式（Q220d：主语法 from/to）：
+//
+//	"from A.x to B.y"   显式列对
+//	"from x to B.y"     模式规则
+//	"from x to B"       目标列省略默认 id
+//
+// 大小写不敏感（FROM/TO 亦可）；兼容旧箭头形态 "A.x → B.y"（-> 亦可）。
 func splitRuleExpr(expr string) (from, to string, ok bool) {
-	arrow := "->"
-	if i := strings.Index(expr, "→"); i >= 0 {
-		arrow = "→"
+	up := strings.ToUpper(strings.TrimSpace(expr))
+	from, to, ok = "", "", false
+	if i := strings.Index(up, " TO "); i >= 0 && strings.HasPrefix(up, "FROM ") {
+		from = strings.TrimSpace(expr[len("FROM "):i])
+		to = strings.TrimSpace(expr[i+len(" TO "):])
+		ok = from != "" && to != ""
+	} else {
+		// 兼容旧箭头形态
+		arrow := "->"
+		if j := strings.Index(expr, "→"); j >= 0 {
+			arrow = "→"
+		}
+		if j := strings.Index(expr, arrow); j >= 0 {
+			from = strings.TrimSpace(expr[:j])
+			to = strings.TrimSpace(expr[j+len(arrow):])
+			ok = from != "" && to != ""
+		}
 	}
-	i := strings.Index(expr, arrow)
-	if i < 0 {
-		return "", "", false
-	}
-	from = strings.TrimSpace(expr[:i])
-	to = strings.TrimSpace(expr[i+len(arrow):])
-	if from == "" || to == "" {
-		return "", "", false
-	}
-	if strings.Count(from, ".") > 1 || strings.Count(to, ".") > 1 {
+	if !ok || strings.Count(from, ".") > 1 || strings.Count(to, ".") > 1 {
 		return "", "", false
 	}
 	return from, to, true

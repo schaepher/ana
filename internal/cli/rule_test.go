@@ -77,7 +77,7 @@ func ruleRelationsJSON(t *testing.T, dir string) []map[string]any {
 // remove 后消失。
 func TestRuleCLIAddListRemove(t *testing.T) {
 	dir := seedRuleRepo(t)
-	if code := cmdRule([]string{"add", "a_id → table_b.id", "--repo", dir}); code != 0 {
+	if code := cmdRule([]string{"add", "from a_id to table_b.id", "--repo", dir}); code != 0 {
 		t.Fatalf("rule add 应成功，code=%d", code)
 	}
 	rels := ruleRelationsJSON(t, dir)
@@ -120,7 +120,7 @@ func TestRuleCLIAddListRemove(t *testing.T) {
 // TestRuleCLIExplicit：显式列对规则只生成单对。
 func TestRuleCLIExplicit(t *testing.T) {
 	dir := seedRuleRepo(t)
-	if code := cmdRule([]string{"add", "table_a.a_id → table_b.id", "--repo", dir}); code != 0 {
+	if code := cmdRule([]string{"add", "from table_a.a_id to table_b.id", "--repo", dir}); code != 0 {
 		t.Fatalf("rule add 应成功，code=%d", code)
 	}
 	rels := ruleRelationsJSON(t, dir)
@@ -143,7 +143,7 @@ func TestRuleCLIInvalid(t *testing.T) {
 	if code := cmdRule([]string{"add", "garbage", "--repo", dir}); code == 0 {
 		t.Fatal("非法规则应报错")
 	}
-	if code := cmdRule([]string{"add", "a_id → ghost_table.id", "--repo", dir}); code != 0 {
+	if code := cmdRule([]string{"add", "from a_id to ghost_table.id", "--repo", dir}); code != 0 {
 		t.Fatalf("语法合法应成功（存在性校验在生效期），code=%d", code)
 	}
 }
