@@ -46,6 +46,13 @@ func seedTableRelations(t *testing.T) string {
 	}, nil); err != nil {
 		t.Fatalf("save: %v", err)
 	}
+	// Q228：query relations --all / export relations 要求计算完成——预计算
+	if err := r.Save(&domain.BuildMeta{BuildID: "b1", ToolName: "all", Status: "success"}); err != nil {
+		t.Fatalf("Save build: %v", err)
+	}
+	if err := r.PrecomputeAllRelations(nil); err != nil {
+		t.Fatalf("precompute: %v", err)
+	}
 	return dir
 }
 

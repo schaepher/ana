@@ -75,6 +75,23 @@ func (s *Server) handleER(w http.ResponseWriter, r *http.Request) {
 		data, err = s.acts.ERTables()
 	default:
 		data, err = s.acts.ER()
+		if err != nil && errors.Is(err, domain.ErrRelationInProgress) {
+			// Q228：全量未计算——自动兜底启动后台计算（无活跃任务时）
+			// + 返回进度（表清单 + progress），前端轮询直到完成
+			if started, serr := s.acts.StartRelationComputeIfNeeded(); serr == nil && started {
+				go func() { _ = s.acts.PrecomputeAllRelations(nil) }()
+			}
+			prog, perr := s.acts.RelationProgress()
+			tables, terr := s.acts.ERTables()
+			if perr == nil && terr == nil {
+				writeJSON(w, map[string]any{
+					"tables":     tables.Tables,
+					"relations":  nil,
+					"progress":   prog,
+				})
+				return
+			}
+		}
 	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())

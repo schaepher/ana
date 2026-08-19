@@ -152,6 +152,13 @@ func TestRelationsAll(t *testing.T) {
 	}, nil); err != nil {
 		t.Fatalf("save: %v", err)
 	}
+	// Q228：全量查询要求计算完成——预计算
+	if err := r.Save(&domain.BuildMeta{BuildID: "b1", ToolName: "all", Status: "success"}); err != nil {
+		t.Fatalf("Save build: %v", err)
+	}
+	if err := r.PrecomputeAllRelations(nil); err != nil {
+		t.Fatalf("precompute: %v", err)
+	}
 	acts = New(r)
 	rels, err := acts.RelationsAll("")
 	if err != nil {

@@ -65,6 +65,13 @@ func TestHandleER(t *testing.T) {
 	if _, err := r.SaveBatchStats(nodes, edges, nil); err != nil {
 		t.Fatalf("save: %v", err)
 	}
+	// Q228：全量查询要求计算完成——预计算（进度 done + 写缓存）
+	if err := r.Save(&domain.BuildMeta{BuildID: "b1", ToolName: "all", Status: "success"}); err != nil {
+		t.Fatalf("Save build: %v", err)
+	}
+	if err := r.PrecomputeAllRelations(nil); err != nil {
+		t.Fatalf("precompute: %v", err)
+	}
 
 	web := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<html></html>")}}
 	srv := New(context.Background(), action.New(r), web, dir)
@@ -165,6 +172,13 @@ func TestHandleERHopsParam(t *testing.T) {
 	if _, err := r.SaveBatchStats(nodes, edges, nil); err != nil {
 		t.Fatalf("save: %v", err)
 	}
+	// Q228：全量查询要求计算完成——预计算（进度 done + 写缓存）
+	if err := r.Save(&domain.BuildMeta{BuildID: "b1", ToolName: "all", Status: "success"}); err != nil {
+		t.Fatalf("Save build: %v", err)
+	}
+	if err := r.PrecomputeAllRelations(nil); err != nil {
+		t.Fatalf("precompute: %v", err)
+	}
 
 	web := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<html></html>")}}
 	srv := New(context.Background(), action.New(r), web, dir)
@@ -231,6 +245,13 @@ func TestHandleERSkipRelations(t *testing.T) {
 	}
 	if _, err := r.SaveBatchStats(nodes, edges, nil); err != nil {
 		t.Fatalf("save: %v", err)
+	}
+	// Q228：全量查询要求计算完成——预计算（进度 done + 写缓存）
+	if err := r.Save(&domain.BuildMeta{BuildID: "b1", ToolName: "all", Status: "success"}); err != nil {
+		t.Fatalf("Save build: %v", err)
+	}
+	if err := r.PrecomputeAllRelations(nil); err != nil {
+		t.Fatalf("precompute: %v", err)
 	}
 
 	web := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<html></html>")}}
@@ -300,6 +321,13 @@ func TestHandleERTableParam(t *testing.T) {
 	if _, err := r.SaveBatchStats(nodes, edges, nil); err != nil {
 		t.Fatalf("save: %v", err)
 	}
+	// Q228：全量查询要求计算完成——预计算（进度 done + 写缓存）
+	if err := r.Save(&domain.BuildMeta{BuildID: "b1", ToolName: "all", Status: "success"}); err != nil {
+		t.Fatalf("Save build: %v", err)
+	}
+	if err := r.PrecomputeAllRelations(nil); err != nil {
+		t.Fatalf("precompute: %v", err)
+	}
 
 	web := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<html></html>")}}
 	srv := New(context.Background(), action.New(r), web, dir)
@@ -351,6 +379,13 @@ func TestHandleRules(t *testing.T) {
 	}
 	if _, err := r.SaveBatchStats(nodes, nil, nil); err != nil {
 		t.Fatalf("save: %v", err)
+	}
+	// Q228：全量查询要求计算完成——预计算
+	if err := r.Save(&domain.BuildMeta{BuildID: "b1", ToolName: "all", Status: "success"}); err != nil {
+		t.Fatalf("Save build: %v", err)
+	}
+	if err := r.PrecomputeAllRelations(nil); err != nil {
+		t.Fatalf("precompute: %v", err)
 	}
 
 	web := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<html></html>")}}

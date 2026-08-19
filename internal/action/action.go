@@ -49,6 +49,11 @@ type Reader interface {
 	AddRelationRule(rule domain.RelationRule) (int64, error)
 	ListRelationRules() ([]domain.RelationRule, error)
 	RemoveRelationRule(id int64) error
+
+	// Q228：全量 relations 计算进度（precompute 命令 / serve 后台任务）
+	RelationProgress() (domain.RelationProgress, error)
+	StartRelationComputeIfNeeded() (bool, error)
+	PrecomputeAllRelations(progressFn func(done, total int)) error
 }
 
 // Actions 是 CLI 与 HTTP 共享的查询用例集合。
@@ -79,6 +84,31 @@ func (a *Actions) RemoveRelationRule(id int64) error {
 	logger.Info("enter (Actions).RemoveRelationRule")
 	defer logger.Info("exit (Actions).RemoveRelationRule")
 	return a.repo.RemoveRelationRule(id)
+}
+
+// RelationProgress 全量 relations 计算进度（Q228，薄封装）。
+func (a *Actions) RelationProgress() (domain.RelationProgress, error) {
+	logger := zap.L()
+	logger.Info("enter (Actions).RelationProgress")
+	defer logger.Info("exit (Actions).RelationProgress")
+	return a.repo.RelationProgress()
+}
+
+// StartRelationComputeIfNeeded 查询端自动兜底启动计算（Q228，薄封装）：
+// 返回 started=true 表示调用方应起 goroutine 执行 PrecomputeAllRelations。
+func (a *Actions) StartRelationComputeIfNeeded() (bool, error) {
+	logger := zap.L()
+	logger.Info("enter (Actions).StartRelationComputeIfNeeded")
+	defer logger.Info("exit (Actions).StartRelationComputeIfNeeded")
+	return a.repo.StartRelationComputeIfNeeded()
+}
+
+// PrecomputeAllRelations 全量计算并写缓存（Q228，薄封装）。
+func (a *Actions) PrecomputeAllRelations(progressFn func(done, total int)) error {
+	logger := zap.L()
+	logger.Info("enter (Actions).PrecomputeAllRelations")
+	defer logger.Info("exit (Actions).PrecomputeAllRelations")
+	return a.repo.PrecomputeAllRelations(progressFn)
 }
 
 // New 创建 Actions。

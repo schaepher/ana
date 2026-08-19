@@ -186,6 +186,10 @@ func TestGetAllTableRelationsRebuildCache(t *testing.T) {
 	if _, err := r.GetTableRelations("table_a", ""); err != nil {
 		t.Fatalf("GetTableRelations: %v", err)
 	}
+	// Q228：全量查询要求计算完成——先预计算
+	if err := r.PrecomputeAllRelations(nil); err != nil {
+		t.Fatalf("precompute: %v", err)
+	}
 	rels, err := r.GetAllTableRelations("")
 	if err != nil {
 		t.Fatalf("GetAllTableRelations: %v", err)

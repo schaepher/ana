@@ -95,6 +95,13 @@ func (r *Repo) GetAllTableRelations(mode string) ([]*domain.TableRelation, error
 	defer func() {
 		logger.Info("exit (Repo).GetAllTableRelations", zap.Duration("elapsed", time.Since(start)))
 	}()
+	// Q228：全量路径先查计算进度——done 才返回数据；未完成返回
+	// ErrRelationInProgress（调用方读 RelationProgress 展示/轮询进度，
+	// 不现场计算——计算由 precompute 命令或 serve 后台任务执行）
+	if p, _ := r.RelationProgress(); p.Status != "done" {
+		logger.Debug("relations --all 计算未完成", zap.String("status", p.Status))
+		return nil, ErrRelationInProgress
+	}
 	// 缓存优先：该 build_id（含分析逻辑版本）已完整计算（覆盖全部表）→ 直接返回
 	if buildID := r.cacheKey(); buildID != "" {
 		if rels, ok := r.loadAllRelationCandidates(buildID); ok {
@@ -148,6 +155,97 @@ func (r *Repo) GetAllTableRelations(mode string) ([]*domain.TableRelation, error
 	final := dedupRelationNoise(out, r.relationHops)
 	// Q220c：合并用户连线规则（规则生成 fk，同 key 覆盖低 rank）
 	return r.mergeRuleRelations(final, "")
+}
+
+// PrecomputeAllRelations 全量计算并写入缓存（Q228）：加载关系图 →
+// 逐表 relationsFor → 每批写进度（progressFn(done, total)）→ 完成写
+// relation_candidates + status=done。CLI precompute 命令（前台同步）
+// 与 serve 后台任务（goroutine）共用。
+func (r *Repo) PrecomputeAllRelations(progressFn func(done, total int)) error {
+	logger := zap.L()
+	logger.Info("enter (Repo).PrecomputeAllRelations")
+	start := time.Now()
+	defer func() {
+		logger.Info("exit (Repo).PrecomputeAllRelations", zap.Duration("elapsed", time.Since(start)))
+	}()
+	g, err := r.cachedRelationGraph()
+	if err != nil {
+		return err
+	}
+	tables := g.tables()
+	total := len(tables)
+	if ok, err := r.beginRelationCompute(total); err != nil {
+		return err
+	} else if !ok {
+		// 已有任务在跑（serve 兜底刚抢占或跨进程）——继续计算：rebuild
+		// 缓存为幂等覆盖写（结果一致），finish 统一置 done；进度沿用
+		// 已有任务行（Q228：begin 失败不再提前 return——否则 serve
+		// 兜底启动的 goroutine 抢占失败后不计算，进度永远停在 running）
+		logger.Debug("begin 抢占失败——继续计算（幂等覆盖）")
+	}
+	seen := map[string]*domain.TableRelation{}
+	for i, t := range tables {
+		for _, rel := range g.relationsFor(t) {
+			key := rel.FromTable + "|" + rel.FromCol + "|" + rel.ToTable + "|" + rel.ToCol
+			ex, ok := seen[key]
+			if !ok || rel.Hops < ex.Hops || (rel.Hops == ex.Hops && relTypeRank(rel.Type) > relTypeRank(ex.Type)) {
+				seen[key] = rel
+			}
+		}
+		// 每 5 表写一次进度（避免逐表写库）；total<=5 时最后一表也写
+		if (i+1)%5 == 0 || i+1 == total {
+			if err := r.updateRelationProgress(i + 1); err != nil {
+				return err
+			}
+		}
+		if progressFn != nil {
+			progressFn(i+1, total)
+		}
+	}
+	out := make([]*domain.TableRelation, 0, len(seen))
+	for _, rel := range seen {
+		out = append(out, rel)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.FromTable != b.FromTable {
+			return a.FromTable < b.FromTable
+		}
+		if a.FromCol != b.FromCol {
+			return a.FromCol < b.FromCol
+		}
+		if a.ToTable != b.ToTable {
+			return a.ToTable < b.ToTable
+		}
+		return a.ToCol < b.ToCol
+	})
+	r.rebuildRelationCandidates(out, tables)
+	return r.finishRelationCompute(total)
+}
+
+// StartRelationComputeIfNeeded 查询端自动兜底（Q228，serve /api/er
+// 全量路径）：计算未完成且无活跃任务（unknown/pending/过期 running）
+// 时抢占并启动——返回 started=true 表示调用方应起 goroutine 执行
+// PrecomputeAllRelations；已有 done/活跃任务返回 false。
+func (r *Repo) StartRelationComputeIfNeeded() (bool, error) {
+	logger := zap.L()
+	logger.Debug("enter (Repo).StartRelationComputeIfNeeded")
+	defer logger.Debug("exit (Repo).StartRelationComputeIfNeeded")
+	p, err := r.RelationProgress()
+	if err != nil {
+		return false, err
+	}
+	if p.Status == "done" {
+		return false, nil
+	}
+	if p.Status == "running" && time.Now().Unix()-r.progressUpdatedAt() < 600 {
+		return false, nil // 活跃任务在跑（本进程或其他进程）
+	}
+	g, err := r.cachedRelationGraph()
+	if err != nil {
+		return false, err
+	}
+	return r.beginRelationCompute(len(g.tables()))
 }
 
 // relTypeRank 关联类型优先级（聚合去重用）：fk > query > write > read。

@@ -69,7 +69,11 @@ func TestGetAllTableRelationsCacheHit(t *testing.T) {
 	if err := r.Save(&domain.BuildMeta{BuildID: "b1", ToolName: "all", Status: "success"}); err != nil {
 		t.Fatalf("Save build: %v", err)
 	}
-	// 第一次 --all：全量计算并写缓存（正向 query + 反向 read = 2 条）
+	// Q228：全量查询要求计算完成——先预计算（进度 done + 写缓存）
+	if err := r.PrecomputeAllRelations(nil); err != nil {
+		t.Fatalf("precompute: %v", err)
+	}
+	// 第一次 --all：命中缓存（正向 fk + 反向 read = 2 条）
 	rels1, err := r.GetAllTableRelations("")
 	if err != nil || len(rels1) != 2 {
 		t.Fatalf("first --all = %+v, %v; want 2", rels1, err)
@@ -86,6 +90,10 @@ func TestGetAllTableRelationsCacheHit(t *testing.T) {
 	// build_id 变化 → 缓存失效 → 重算（filter 已删 → 无关联）
 	if err := r.Save(&domain.BuildMeta{BuildID: "b2", ToolName: "all", Status: "success"}); err != nil {
 		t.Fatalf("Save b2: %v", err)
+	}
+	// Q228：新 build_id 无进度——需重新预计算（filter 已删 → 空结果）
+	if err := r.PrecomputeAllRelations(nil); err != nil {
+		t.Fatalf("precompute b2: %v", err)
 	}
 	rels3, err := r.GetAllTableRelations("")
 	if err != nil {

@@ -69,6 +69,7 @@
 56. [业务 id 同源双写识别（Q225，2026-08-19）](#56-业务-id-同源双写识别q2252026-08-19)
 57. [ER 页面配置连线规则（Q226，2026-08-19）](#57-er-页面配置连线规则q2262026-08-19)
 58. [全图画线开关不持久化（Q227，2026-08-19）](#58-全图画线开关不持久化q2272026-08-19)
+59. [全量 relations 计算进度协议（Q228，2026-08-19）](#59-全量-relations-计算进度协议q2282026-08-19)
 ---
 
 ## 1. 项目背景与目标
@@ -2498,4 +2499,55 @@ localStorage 无残留），e2e-fixture 33 项全绿。
 
 ---
 
-**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q227，逐 Q 编号 + 日期）。
+## 59. 全量 relations 计算进度协议（Q228，2026-08-19）
+
+**需求**（用户设计）：添加命令计算全量表间关联、进度记录在 db；前端
+或命令行获取时查询进度——计算完成才返回数据，否则返回进度。
+
+**现状**：全量 relations（/api/er 缺省 / query relations --all）为
+「查询时现场计算」——go2o 冷请求 4.5s（152 表 206 关系），缓存命中
+0.12s。首次请求无反馈干等。
+
+**实现**：
+
+1. **进度表**（configSchema 幂等补建，按 build_id 主键——增量构建/
+   分析逻辑版本变更自动失效）：`relation_progress (build_id, status
+   pending/running/done, done_count, total_count, updated_at)`；clean
+   保留（configSchema 表不 DROP）
+2. **计算循环进度化**：PrecomputeAllRelations 逐表 relationsFor，每
+   5 表写一次 db 进度 + 回调（CLI 打印）；完成写 relation_candidates
+   缓存 + status=done。CLI `codeintel precompute relations --repo
+   <path>`（前台同步执行）与 serve 后台任务共用
+3. **查询协议**：GetAllTableRelations 先查进度——done 才返回数据；
+   未完成返回 `ErrRelationInProgress`（domain 哨兵）→ 调用方读
+   RelationProgress。CLI --all 打印进度；serve /api/er 全量路径
+   **自动兜底**：无活跃任务（unknown/pending/过期 running）时
+   StartRelationComputeIfNeeded 抢占（db 原子 UPDATE + INSERT OR
+   IGNORE 防跨进程重复）→ goroutine 执行 → 返回
+   `{tables, relations:null, progress:{status,done,total}}`
+4. **前端轮询**：fetchERFull——响应含 progress 时展示「计算关联中
+   X/Y 表」（复用 Q224 弹框）+ 1s 轮询，done 后返回数据渲染
+5. **单表查询**（双击展开）保持现场算（快）不受影响；规则读取期
+   合并不变
+
+**验证**：
+
+- sqlite：进度流程测试（未计算 → ErrRelationInProgress → 预计算回调
+  推进 → done → 缓存命中返回）+ StartRelationComputeIfNeeded（unknown
+  启动 / running 不重复 / done 不启动）
+- go2o 实测（清进度+缓存模拟冷状态）：首次请求 0.65s 返回
+  tables+progress(running 0/152) → 6s 后返回 206 条 relations，
+  db done|152|152
+- make test 12 包 + e2e-fixture 33 项（e2e-fixture 流程加
+  precompute 步骤保证环境恒为已计算）
+- 既有测试适配：GetAllTableRelations 全量路径测试全部前置
+  PrecomputeAllRelations（新协议不再现场算）
+
+**教训**：serve 兜底「先 begin 再起 goroutine」与 PrecomputeAllRelations
+内部 begin 重复抢占——后者失败提前 return 导致进度永远停在 running；
+修复为 begin 失败仍继续计算（rebuild 幂等覆盖）。「查询不再现场算」
+改变了全量查询语义——相关测试的 fixture 需显式预计算。
+
+---
+
+**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q228，逐 Q 编号 + 日期）。

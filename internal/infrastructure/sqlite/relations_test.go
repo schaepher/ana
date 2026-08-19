@@ -145,8 +145,15 @@ func TestGetAllTableRelations(t *testing.T) {
 			Kind: domain.FactSummaryIO, ToolSource: domain.ToolSSA, Confidence: 1},
 	}
 	save(t, r, nodes, edges)
+	if err := r.Save(&domain.BuildMeta{BuildID: "b1", ToolName: "all", Status: "success"}); err != nil {
+		t.Fatalf("Save build: %v", err)
+	}
 
-	rels, err := r.GetAllTableRelations("")
+		// Q228：全量查询要求计算完成——先预计算
+	if err := r.PrecomputeAllRelations(nil); err != nil {
+		t.Fatalf("precompute: %v", err)
+	}
+rels, err := r.GetAllTableRelations("")
 	if err != nil {
 		t.Fatalf("GetAllTableRelations: %v", err)
 	}

@@ -135,6 +135,16 @@ CREATE TABLE IF NOT EXISTS relation_rules (
     to_col TEXT NOT NULL DEFAULT 'id',
     created_at INTEGER NOT NULL DEFAULT 0
 );
+-- Q228：全量 relations 计算进度（precompute 命令/查询端自动兜底写入，
+-- 按 build_id 主键——增量构建或分析逻辑版本变更自动失效）。
+-- status: pending / running / done；done_count/total_count = 已完成表数/总表数。
+CREATE TABLE IF NOT EXISTS relation_progress (
+    build_id TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    done_count INTEGER NOT NULL DEFAULT 0,
+    total_count INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL DEFAULT 0
+);
 `
 
 // Open 打开（或创建）仓库根目录下的 .codeintel/codeintel.db，并校验 schema 版本。

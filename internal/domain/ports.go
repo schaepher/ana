@@ -1,5 +1,7 @@
 package domain
 
+import "errors"
+
 import (
 	"context"
 
@@ -151,6 +153,20 @@ type TableRelation struct {
 	ToCol     string `json:"to_col"`     // 关联表列
 	Hops      int    `json:"hops"`       // 数据流链长度（边数）
 	Type      string `json:"type"`       // query（键关联）/ write（同源）/ read（间接）
+}
+
+// ErrRelationInProgress 全量 relations 计算未完成（Q228）：查询端据此
+// 读 RelationProgress 返回进度（前端轮询），不现场计算——计算由
+// precompute 命令或 serve 后台任务执行。
+var ErrRelationInProgress = errors.New("relation compute in progress")
+
+// RelationProgress 全量 relations 计算进度（Q228）：查询端（CLI --all /
+// /api/er 全量）先查进度——done 才返回数据；running/pending 返回进度
+// （前端轮询展示「计算关联中 X/Y 表」）。
+type RelationProgress struct {
+	Status string `json:"status"` // pending / running / done
+	Done   int    `json:"done"`   // 已完成表数
+	Total  int    `json:"total"`  // 总表数（0 = 未知）
 }
 
 // RelationHops 三类关系的跳数上限（Q197，0 = 不限制）：

@@ -52,6 +52,7 @@ e2e:
 e2e-fixture:
 	go build -o /tmp/codeintel-e2e ./cmd/codeintel
 	@/tmp/codeintel-e2e init --repo integration/fixtureapp >/dev/null 2>&1
+	@/tmp/codeintel-e2e precompute relations --repo integration/fixtureapp >/dev/null 2>&1
 	@/tmp/codeintel-e2e serve --repo integration/fixtureapp --addr :8096 >/dev/null 2>&1 & \
 	  echo $$! > /tmp/codeintel-e2e.pid
 	@sleep 2

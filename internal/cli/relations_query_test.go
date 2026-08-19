@@ -115,6 +115,10 @@ func TestQueryRelationsFilters(t *testing.T) {
 	}, nil); err != nil {
 		t.Fatalf("save read rel: %v", err)
 	}
+	// Q228：图变化后重建缓存（precompute 写缓存后新节点不被反映）
+	if err := r.PrecomputeAllRelations(nil); err != nil {
+		t.Fatalf("precompute: %v", err)
+	}
 
 	out := captureStdout(func() {
 		if code := cmdQuery([]string{"relations", "table_a", "--repo", dir, "--json"}); code != 0 {
