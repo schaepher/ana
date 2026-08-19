@@ -1,8 +1,8 @@
 # 构建期性能优化记录（Q221，2026-08-19）
 
 **目标**：降低大项目（go2o，135 包 / 12875 函数）全量构建的时间与内存占用。
-**结果**：冷启动 **5m16s → 39.9s（7.9 倍加速）**；CPU 总量 660s → 227s；
-峰值 RSS 2.73G（workers=8 + GOGC=40，8 核 7.4G 机器）。缓存命中构建 15s。
+**结果**：冷启动 **5m16s → 16.8s（18.8 倍加速）**；CPU 总量 660s → 48s；
+峰值 RSS 2.71G（workers=8 + GOGC=40，8 核 7.4G 机器）。缓存命中构建 15s。
 
 ---
 
@@ -57,6 +57,17 @@ fieldExtractor 创建时 `dispatchRegs: *dispatchRegs` 解引用复制后
 **结果**：2m20s → **40s**（总加速 7.9 倍）；CPU 637s → 227s（分配
 减少连带 GC 开销下降）。
 
+## 3.5 优化 2.5：regHits 预处理 Index 级（pprof 复查再抓 2.9 倍）
+
+修复 dispatchRegs 后重采 pprof：GC/分配仍占 ~60%，业务热点
+candidateKey 7%——复查发现**同模式第二处**：`ext.regHits`（Q168
+注册命中 O(1) 判定表）也是 extractor 懒构建——每个函数都重新遍历
+全部注册点 × 动态类型全部方法 × candidateKey（Type().String()
+分配）。修复：Index 级 buildRegHits 一次，extractor 共享只读。
+
+**结果**：adapters 34.9s → 12.0s；CPU 227s → 48s（regHits 重建
+贡献 ~180s CPU）。
+
 ## 4. 优化 3：GOGC 实验
 
 pprof 显示 GC 相关 ~38% CPU（GOGC=40 并行下扫描开销）。实测
@@ -80,9 +91,9 @@ init / reindex / update 三处默认值统一（defaultBuildWorkers）。
 
 | 指标 | 基线（workers=1） | 优化后（默认 workers=8） |
 |---|---|---|
-| 冷启动 Wall | 5m16s | **39.9s（7.9×）** |
-| CPU 总量 | ~660s | 227s |
-| 峰值 RSS | 2.33G | 2.73G |
+| 冷启动 Wall | 5m16s | **16.8s（18.8×）** |
+| CPU 总量 | ~660s | 48s |
+| 峰值 RSS | 2.33G | 2.71G |
 | 缓存命中构建 | — | 15s |
 
 ## 7. 诊断工具
@@ -94,10 +105,11 @@ init / reindex / update 三处默认值统一（defaultBuildWorkers）。
 
 ## 8. 经验教训
 
-1. **懒初始化兜底掩盖初始化遗漏**：`ext.dispatchRegs == nil` 检查本意
-   是防 nil，但因上层从未初始化而变成"每个函数都全图扫描"的隐形
-   性能黑洞——pprof 是唯一能定位的手段（45 分钟构建期优化中该修复
-   贡献 80% 收益）。
+1. **懒初始化兜底掩盖初始化遗漏**：`ext.dispatchRegs == nil` / 
+   `ext.regHits == nil` 检查本意是防 nil，但因上层从未初始化而变成
+   "每个函数都全量预处理"的隐形性能黑洞——同模式出现两次（dispatchRegs
+   46%、regHits ~180s CPU），修复后合计贡献构建期 95% 以上收益。
+   pprof 是唯一能定位的手段；修复后必须重采确认。
 2. **并行度要先于算法优化**：8 核机器 CPU 利用率 2.9 核时，任何
    单线程算法优化都封顶于 ~1 核收益；先让核数满起来。
 3. **测量数据驱动决策**：GOGC=100 "看起来更快"的直觉被 RSS +54%

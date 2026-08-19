@@ -21,6 +21,36 @@ import (
 // dispatchReg 注册点：接口类型 → 动态类型 String → 注册行号。
 type dispatchReg map[*types.Named]map[string]int
 
+// regHits Q221：注册命中预处理（iface.String() → candidateKey → true）——
+// dispatchOriginOf 的 O(1) 判定表。原实现挂在 extractor（每函数新建）
+// 上懒构建：12875 函数 × 遍历全部注册点方法 ≈ 重复预处理。Index 级
+// 构建一次，extractor 共享只读。
+type regHits map[string]map[string]bool
+
+// buildRegHits Q221：构建注册命中预处理表（Index 级一次，原 extractor
+// 懒构建每函数重复全量遍历注册点方法）。
+func buildRegHits(regs dispatchReg, prog *ssa.Program) regHits {
+	out := regHits{}
+	for ifc, ifcRegs := range regs {
+		hits := map[string]bool{}
+		for dyn := range ifcRegs {
+			t := dynamicTypeOf(dyn, prog)
+			if ptr, ok := t.(*types.Pointer); ok {
+				t = ptr.Elem()
+			}
+			named, ok := t.(*types.Named)
+			if !ok {
+				continue
+			}
+			for i := 0; i < named.NumMethods(); i++ {
+				hits[candidateKey(named.Method(i))] = true
+			}
+		}
+		out[ifc.String()] = hits
+	}
+	return out
+}
+
 // emitDispatches 发射全部 dispatch_to 边：
 //  1. 收集模块内 MakeInterface 注册点
 //  2. 遍历模块内函数的所有动态接口方法调用（cc.Method != nil）

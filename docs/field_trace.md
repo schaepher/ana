@@ -2271,13 +2271,14 @@ flush <1s。workers=8 冷启动仅 1.56 倍加速（3m27s）——CPU 利用率 
 1 个 goroutine。改为：未命中缓存包全部拆块进全局 worker 池并行（块内
 单包，产物按包收集写缓存）。3m27s → 2m20s。
 
-**优化 2：dispatchRegs Index 级初始化（pprof 46% 热点）**。CPU profile
-定位 collectDispatchRegistrations cum 305s：a.dispatchRegs 从未初始化
-（零值 nil map）→ extractor 解引用复制后 `ext.dispatchRegs == nil`
-永远成立 → cf_call.go 懒初始化兜底导致**每个函数都全程序 AllFunctions
-扫描**（12875 次 × 全图遍历）。修复：Index 级（sp.Build 后）初始化一次，
-各 extractor 共享只读 map。2m20s → **40s**（总加速 7.9 倍）；CPU 660s →
-227s（分配减少连带 GC 降）。
+**优化 2：dispatchRegs/regHits Index 级初始化（pprof 46% 热点 + 复查
+同模式第二处）**。CPU profile 定位 collectDispatchRegistrations cum
+305s：a.dispatchRegs 从未初始化（零值 nil map）→ extractor 解引用
+复制后 nil 检查永远成立 → 懒初始化兜底导致**每个函数都全程序
+AllFunctions 扫描**（12875 次 × 全图遍历）。修复后重采 pprof 又发现
+同模式：ext.regHits（注册命中判定表）也是每函数懒构建（遍历全部
+注册点方法 ≈ 180s CPU）——一并 Index 级一次。2m20s → **12.0s**
+（总加速 18.8 倍）；CPU 660s → 48s。
 
 **优化 3：GOGC 可调（CODEINTEL_GOGC）**。pprof 显示 GC 占 ~38% CPU
 （GOGC=40 并行扫描开销）。GOGC=100 实测：wall 40s→36s（+9%）但 RSS
@@ -2290,8 +2291,8 @@ flush <1s。workers=8 冷启动仅 1.56 倍加速（3m27s）——CPU 利用率 
 **诊断工具**：`CODEINTEL_CPU_PROFILE=<file>` 输出构建期 CPU profile
 （main 构建类命令内 Start/Stop，os.Exit 前落盘）。
 
-**最终指标（go2o 冷启动）**：5m16s → 39.9s（7.9 倍）；CPU 660s → 227s；
-峰值 RSS 2.73G（workers=8 + GOGC=40）。缓存命中构建 15s。
+**最终指标（go2o 冷启动）**：5m16s → 16.8s（18.8 倍）；CPU 660s → 48s；
+峰值 RSS 2.71G（workers=8 + GOGC=40）。缓存命中构建 15s。
 
 ---
 

@@ -75,6 +75,7 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 	// 全图遍历 ≈ 305s CPU，pprof 46% 热点）。初始化后各 extractor
 	// 共享只读 map。
 	a.dispatchRegs = collectDispatchRegistrations(prog, repo.Modules)
+	a.regHits = buildRegHits(a.dispatchRegs, prog)
 
 	idents := buildIdentIndex(pkgs, repo.Modules)
 	stage("buildIdentIndex")
@@ -240,7 +241,7 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 				return emit(item)
 			}
 			for _, fn := range blk.fns {
-				owner, fd, err := emitFunction(repo, prog, fn, idents, assignTargets, specs, &fallbackTotal, pkgEmit, typePkgs, &a.dispatchRegs, a.typeMapping)
+				owner, fd, err := emitFunction(repo, prog, fn, idents, assignTargets, specs, &fallbackTotal, pkgEmit, typePkgs, &a.dispatchRegs, a.regHits, a.typeMapping)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "emitFunction %s: %v\n", fn.Name(), err)
 					return

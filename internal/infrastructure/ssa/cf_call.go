@@ -213,29 +213,8 @@ func (ext *fieldExtractor) emitCall(cc *ssa.CallCommon, callVal ssa.Value) error
 // Q168：注册命中按 (iface, candidateKey) 预处理成 map——原逐调用点
 // 线性扫描注册点（动态调用点多时 O(调用点×注册点)）→ O(1) 查找。
 func (ext *fieldExtractor) dispatchOriginOf(iface *types.Named, method string, implFn *types.Func) (string, float64) {
-	if ext.dispatchRegs == nil {
-		ext.dispatchRegs = collectDispatchRegistrations(ext.prog, ext.repo.Modules)
-	}
-	if ext.regHits == nil {
-		ext.regHits = map[string]map[string]bool{}
-		for ifc, regs := range ext.dispatchRegs {
-			hits := map[string]bool{}
-			for dyn := range regs {
-				t := dynamicTypeOf(dyn, ext.prog)
-				if ptr, ok := t.(*types.Pointer); ok {
-					t = ptr.Elem()
-				}
-				named, ok := t.(*types.Named)
-				if !ok {
-					continue
-				}
-				for i := 0; i < named.NumMethods(); i++ {
-					hits[candidateKey(named.Method(i))] = true
-				}
-			}
-			ext.regHits[ifc.String()] = hits
-		}
-	}
+	// Q221：dispatchRegs/regHits 均为 Index 级共享（Adapter 初始化一次）
+	// ——原 extractor 懒构建导致每函数重复全量预处理
 	if ext.regHits[iface.String()][candidateKey(implFn)] {
 		return "register", 0.9
 	}

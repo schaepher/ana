@@ -22,6 +22,9 @@ type Adapter struct {
 	// dispatchRegs 接口注册点缓存（Q161 动态边候选元数据）：Index 级
 	// 共享一次扫描——放 extractor（每函数新建）会每函数全 prog 扫描
 	dispatchRegs dispatchReg
+	// regHits Q221：注册命中预处理表（Q168 O(1) 判定）——Index 级一次，
+	// 原 extractor 懒构建每函数重复遍历全部注册点方法
+	regHits regHits
 	// typeMapping Q211：orm.Mapping 实体类型→表名注册（Index 级收集，
 	// 发射前全量扫描——规避按包处理顺序：Mapping 可能在包 A 注册、
 	// 包 B 使用）
