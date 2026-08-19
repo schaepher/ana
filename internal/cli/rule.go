@@ -13,11 +13,10 @@ import (
 
 // cmdRule 用户连线规则管理（Q220c/Q220d）：
 //
-//	codeintel rule add "<expr>" --repo <path>  添加规则
-//	    expr 形态（from/to 主语法，兼容旧箭头）：
-//	      from x to B.y      模式规则：所有含 x 列的表 → B.y
-//	      from A.x to B.y    显式列对：仅 A.x → B.y
-//	      from x to B        目标列省略时默认 B.id
+//	codeintel rule add <from> <to> --repo <path>  添加规则（两个位置参数）：
+//	      member_id mm_member.id        模式规则：所有含 member_id 列的表 → mm_member.id
+//	      mm_relation.member_id mm_member.id  显式列对（单对）
+//	      目标列省略时默认 id；输出用箭头（→）；单参形态兼容旧解析
 //	codeintel rule list [--json] --repo <path>  列出规则
 //	codeintel rule remove <id> --repo <path>    删除规则
 //
@@ -57,26 +56,38 @@ func cmdRule(args []string) int {
 	}
 }
 
-// ruleAdd 解析表达式并添加规则。
+// ruleAdd 添加规则（Q220d：from/to 分为两个位置参数，输出用箭头）：
+//
+//	codeintel rule add member_id mm_member.id           模式规则（所有含 member_id 列的表 → mm_member.id）
+//	codeintel rule add mm_relation.member_id mm_member.id   显式列对（单对）
+//
+// 目标列省略时默认 id（to 传 mm_member 亦可）。单参数形态兼容旧解析
+// （"from x to y" / "x → y"）。输出用箭头（→）。
 func ruleAdd(r *sqlite.Repo, args []string) int {
 	logger := zap.L()
 	logger.Debug("enter ruleAdd")
 	defer logger.Debug("exit ruleAdd")
-	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "用法: codeintel rule add \"from a_id to table_b.id\" --repo <path>")
-		return 2
-	}
-	var exprParts []string
+	var positional []string
 	for _, a := range args {
 		if a == "--json" {
 			continue
 		}
-		exprParts = append(exprParts, a)
+		positional = append(positional, a)
 	}
-	expr := strings.Join(exprParts, " ")
-	from, to, ok := splitRuleExpr(expr)
-	if !ok {
-		fmt.Fprintf(os.Stderr, "规则表达式无效: %q（形态：from x to B.y 或 from A.x to B.y）\n", expr)
+	var from, to string
+	switch {
+	case len(positional) >= 2:
+		from, to = positional[0], positional[1]
+	case len(positional) == 1:
+		// 兼容旧单参形态（"from x to y" / "x → y"）
+		var ok bool
+		from, to, ok = splitRuleExpr(positional[0])
+		if !ok {
+			fmt.Fprintf(os.Stderr, "规则表达式无效: %q（用法：rule add <from> <to>，如 rule add member_id mm_member.id）\n", positional[0])
+			return 2
+		}
+	default:
+		fmt.Fprintln(os.Stderr, "用法: codeintel rule add <from> <to> --repo <path>（如 rule add member_id mm_member.id）")
 		return 2
 	}
 	var rule sqlite.RelationRule
@@ -99,7 +110,7 @@ func ruleAdd(r *sqlite.Repo, args []string) int {
 	if rule.FromTable != "" {
 		kind = "显式"
 	}
-	fmt.Printf("已添加%s规则 #%d: from %s.%s to %s.%s（生效时校验表/列存在）\n",
+	fmt.Printf("已添加%s规则 #%d: %s.%s → %s.%s（生效时校验表/列存在）\n",
 		kind, id, rule.FromTable, rule.FromCol, rule.ToTable, rule.ToCol)
 	return 0
 }
@@ -138,7 +149,7 @@ func ruleList(r *sqlite.Repo, args []string) int {
 		if scope == "" {
 			scope = "*"
 		}
-		fmt.Printf("#%d  from %s.%s to %s.%s\n", ru.ID, scope, ru.FromCol, ru.ToTable, ru.ToCol)
+		fmt.Printf("#%d  %s.%s → %s.%s\n", ru.ID, scope, ru.FromCol, ru.ToTable, ru.ToCol)
 	}
 	return 0
 }

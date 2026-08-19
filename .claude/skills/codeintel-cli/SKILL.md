@@ -31,10 +31,10 @@ codeintel export graph --type value-trace|callees|lifecycle --target <节点> [-
                                            # lifecycle 生命周期图（[存储]/[观测]/[读]/[写]+条件标注）
 codeintel clean --repo <path> --force      # 删除索引（schema 变更后必须 clean + init 重建；默认保留 .codeintel/cache 包级分析缓存——pkg hash + analyzer 分析源码 hash 自校验（Q181/Q183，仅分析逻辑变化失效，CLI/前端等无关改动不触发），分析逻辑/包源码变化自动失效重算；磁盘清理加 --purge-cache）
 codeintel reindex --repo <path> [--workers N] # 一步重建索引（FullBuild 清空图数据表 DROP+CREATE 重建，不删库文件；--workers 同 init）
-codeintel rule add "<expr>" --repo <path>    # 用户连线规则（Q220c/d）：值流验证不了的外键列手动声明连线
-                                           #   "from merchant_id to mch_merchant.id"  模式规则（所有含 merchant_id 列的表 → mch_merchant.id）
-                                           #   "from table_a.merchant_id to mch_merchant.id"  显式列对（单对）
-                                           #   目标列省略默认 id；from/to 主语法（兼容旧箭头）；生成关系 type=fk（ER 默认显示）
+codeintel rule add <from> <to> --repo <path>  # 用户连线规则（Q220c/d）：值流验证不了的外键列手动声明连线
+                                           #   rule add merchant_id mch_merchant.id   模式规则（所有含 merchant_id 列的表 → mch_merchant.id）
+                                           #   rule add table_a.merchant_id mch_merchant.id  显式列对（单对）
+                                           #   目标列省略默认 id；输出用箭头（→）；单参形态兼容旧解析；生成关系 type=fk（ER 默认显示）
 codeintel rule list [--json] --repo <path>  # 列出规则
 codeintel rule remove <id> --repo <path>    # 删除规则
                                            # 规则存 relation_rules 表（数据库），clean/reindex 保留；
