@@ -67,6 +67,7 @@
 54. [ORM 读路径 read→对象边缺失（Q222，2026-08-19）](#54-orm-读路径-read对象边缺失q2222026-08-19)
 55. [闭包参数未落库与嵌套闭包丢失（Q223，2026-08-19）](#55-闭包参数未落库与嵌套闭包丢失q2232026-08-19)
 56. [业务 id 同源双写识别（Q225，2026-08-19）](#56-业务-id-同源双写识别q2252026-08-19)
+57. [ER 页面配置连线规则（Q226，2026-08-19）](#57-er-页面配置连线规则q2262026-08-19)
 ---
 
 ## 1. 项目背景与目标
@@ -525,6 +526,7 @@ SSA 语义与映射类决策全部保留：Q1（SSA_VALUE 统一建模）、Q2�
     + 嵌套闭包整块丢失（emitFunction 跳过）
     Q225（§56）——业务 id 同源双写识别（Q202 清空改求交、
     Q202c taintExact 豁免）
+    Q226（§57）——ER 页面配置连线规则（/api/rules + 规则面板）
 
 ---
 
@@ -2441,5 +2443,43 @@ b_tab.biz_id` 同源 write。
 清空会丢失真实值流。
 
 ---
+## 57. ER 页面配置连线规则（Q226，2026-08-19）
 
-**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q225，逐 Q 编号 + 日期）。
+**需求**：在 ER 页面（er.html）直接配置用户连线规则——此前仅 CLI
+（`codeintel rule add <from> <to>`，Q220c/d）。
+
+**后端**（/api/rules 新端点）：
+
+- `GET /api/rules` 规则列表 / `POST /api/rules` 添加（JSON：
+  from_table?/from_col/to_table/to_col?，目标列省略默认 id，与 CLI
+  语义一致）/ `DELETE /api/rules?id=N` 删除
+- RelationRule 类型从 sqlite 层上移到 domain（存储层复用，action 层
+  Reader 接口 + 薄封装，server 按 method 分发）
+- 读取期合并不变（/api/er 响应自动含规则生成的 fk 线）——**添加/
+  删除后前端重新拉取即生效，无需 reindex**；clean/reindex 保留
+
+**前端**（er.html 规则面板）：
+
+- header「规则」按钮 → 右侧面板：添加表单（来源 → 目标两个输入框，
+  回车/按钮提交；来源无表名前缀 = 模式规则）+ 规则列表（删除按钮）
+- 操作后 `refreshRels()`：失效按需加载缓存 + 全量重拉 + 渲染
+
+**验证**：
+
+- TestHandleRules（server 端到端）：列表空 → 添加 → 列表含规则 →
+  /api/er 响应含规则 fk 线 → 删除 → 列表空 → 无效规则 400
+- e2e 新增 3 条断言（面板添加 → 列表出现 → ER relations 含
+  orders.id→settlement.order_id:fk → 面板可关闭），e2e-fixture
+  32 项全绿
+- make test 12 包；go2o serve 实测 POST/DELETE 正常（临时规则
+  已清理）
+
+**教训**：er.html 编辑时误把 bindRelFilter/bindModeSwitch/
+bindDblClick/bindHopsConfig 四个初始化调用覆盖删除（Edit 的
+old_string 含调用序列）——双击/开关全部失效，e2e 第 15 条（双击
+弹框）稳定失败暴露；修复后恢复。前端初始化调用序列是隐性契约，
+编辑时勿误删。
+
+---
+
+**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q226，逐 Q 编号 + 日期）。

@@ -44,12 +44,41 @@ type Reader interface {
 	Counts() (nodes int, edges int, err error)
 	GetLatest() (*domain.BuildMeta, error)
 	RepoPath() string
+
+	// Q226：用户连线规则（CLI rule / ER 页面配置）——写操作 + 列表
+	AddRelationRule(rule domain.RelationRule) (int64, error)
+	ListRelationRules() ([]domain.RelationRule, error)
+	RemoveRelationRule(id int64) error
 }
 
 // Actions 是 CLI 与 HTTP 共享的查询用例集合。
 type Actions struct {
 	repo     Reader
 	modNames []string // 全部 module 路径缓存（P2-3 多 go.mod；modules() 填充）
+}
+
+// AddRelationRule 添加用户连线规则（Q226，薄封装）。
+func (a *Actions) AddRelationRule(rule domain.RelationRule) (int64, error) {
+	logger := zap.L()
+	logger.Info("enter (Actions).AddRelationRule")
+	defer logger.Info("exit (Actions).AddRelationRule")
+	return a.repo.AddRelationRule(rule)
+}
+
+// ListRelationRules 列出用户连线规则（Q226，薄封装）。
+func (a *Actions) ListRelationRules() ([]domain.RelationRule, error) {
+	logger := zap.L()
+	logger.Info("enter (Actions).ListRelationRules")
+	defer logger.Info("exit (Actions).ListRelationRules")
+	return a.repo.ListRelationRules()
+}
+
+// RemoveRelationRule 删除用户连线规则（Q226，薄封装）。
+func (a *Actions) RemoveRelationRule(id int64) error {
+	logger := zap.L()
+	logger.Info("enter (Actions).RemoveRelationRule")
+	defer logger.Info("exit (Actions).RemoveRelationRule")
+	return a.repo.RemoveRelationRule(id)
 }
 
 // New 创建 Actions。

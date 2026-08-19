@@ -129,6 +129,21 @@ const (
 
 // TableRelation 表间关联（query relations）：本表某列的值沿数据流链
 // 流入另一表的列（A.x 读出 → B.y 过滤/写入——代码层关联，无外键依赖）。
+// RelationRule 用户连线规则（Q220c）：手工声明的表间关联——CLI
+// `codeintel rule add` 或 ER 页面配置，读取期与推断关系合并
+// （mergeRuleRelations）。FromTable 为空 = 模式规则（所有含 FromCol
+// 列的表 → ToTable.ToCol）。生成关系 type=fk（用户声明可信）、hops=1。
+type RelationRule struct {
+	ID        int64  `json:"id"`
+	FromTable string `json:"from_table,omitempty"` // '' = 模式规则
+	FromCol   string `json:"from_col"`
+	ToTable   string `json:"to_table"`
+	ToCol     string `json:"to_col,omitempty"`
+	CreatedAt int64  `json:"created_at,omitempty"`
+}
+
+// TableRelation 表间关联（query relations）：本表某列的值沿数据流链
+// 流入另一表的列（A.x 读出 → B.y 过滤/写入——代码层关联，无外键依赖）。
 type TableRelation struct {
 	FromTable string `json:"from_table"` // 本表
 	FromCol   string `json:"from_col"`   // 本表列

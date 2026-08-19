@@ -347,6 +347,42 @@ const erLoading = await page.evaluate(() => ({
 check('ER 双击表加载中弹框加载后取消且表展开生效',
   erLoading.hidden && erLoading.selected > 0,
   JSON.stringify(erLoading));
+// 16. 规则面板（Q226）：配置用户连线规则 → 列表出现 + ER 线出现（读取期合并）
+await page.evaluate(async () => {
+  // 幂等清理：删除既有规则（fixture 每次 init 重建，保险起见）
+  const listRes = await fetch('/api/rules');
+  const list = await listRes.json();
+  for (const ru of (list.rules || [])) {
+    await fetch('/api/rules?id=' + ru.id, { method: 'DELETE' });
+  }
+  // 打开面板并添加规则 orders.id → settlement.order_id（fixture 真实列）
+  document.getElementById('btn-rules').click();
+  document.getElementById('r-from').value = 'orders.id';
+  document.getElementById('r-to').value = 'settlement.order_id';
+  document.getElementById('r-add').click();
+});
+await page.waitForTimeout(1500);
+const erRules = await page.evaluate(async () => {
+  const listRes = await fetch('/api/rules');
+  const list = await listRes.json();
+  const rules = (list.rules || []).map((r) => r.from_table + '.' + r.from_col + '→' + r.to_table + '.' + r.to_col);
+  const erRes = await fetch('/api/er?q_hops=4&w_hops=4&r_hops=4');
+  const er = await erRes.json();
+  const rels = (er.relations || []).map((r) => r.from_table + '.' + r.from_col + '→' + r.to_table + '.' + r.to_col + ':' + r.type);
+  return { rules, rels, panelHidden: document.getElementById('rules-panel').classList.contains('hidden') };
+});
+check('ER 规则面板添加规则后列表出现',
+  erRules.rules.includes('orders.id→settlement.order_id'),
+  JSON.stringify(erRules.rules));
+check('ER 规则生成的 fk 线出现在 relations（读取期合并，无需 reindex）',
+  erRules.rels.includes('orders.id→settlement.order_id:fk'),
+  JSON.stringify(erRules.rels));
+check('ER 规则面板可关闭',
+  !erRules.panelHidden && (await page.evaluate(() => {
+    document.getElementById('rules-close').click();
+    return document.getElementById('rules-panel').classList.contains('hidden');
+  })),
+  'panelHidden=' + erRules.panelHidden);
 
 console.log('\n===== 字段追溯 e2e: ' + passed + ' passed, ' + failed + ' failed =====');
 await browser.close();

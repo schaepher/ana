@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/schaepher/codeintel/internal/domain"
 	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
 	"go.uber.org/zap"
 )
@@ -90,7 +91,7 @@ func ruleAdd(r *sqlite.Repo, args []string) int {
 		fmt.Fprintln(os.Stderr, "用法: codeintel rule add <from> <to> --repo <path>（如 rule add member_id mm_member.id）")
 		return 2
 	}
-	var rule sqlite.RelationRule
+	var rule domain.RelationRule
 	if i := strings.Index(from, "."); i >= 0 {
 		rule.FromTable, rule.FromCol = from[:i], from[i+1:]
 	} else {

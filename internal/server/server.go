@@ -57,6 +57,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/incremental", s.handleIncremental)
 	mux.HandleFunc("/api/module-calls", s.handleModuleCalls)
 	mux.HandleFunc("/api/er", s.handleER)
+	mux.HandleFunc("/api/rules", s.handleRules) // Q226：ER 页面配置用户连线规则
 	mux.Handle("/", http.FileServer(http.FS(s.web)))
 	return mux
 }

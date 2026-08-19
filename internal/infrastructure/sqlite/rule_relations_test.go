@@ -46,7 +46,7 @@ func ruleFixture(t *testing.T, r *Repo) {
 func TestRuleRelationModePattern(t *testing.T) {
 	r := newTestRepo(t)
 	ruleFixture(t, r)
-	id, err := r.AddRelationRule(RelationRule{FromCol: "merchant_id", ToTable: "mch_merchant", ToCol: "id"})
+	id, err := r.AddRelationRule(domain.RelationRule{FromCol: "merchant_id", ToTable: "mch_merchant", ToCol: "id"})
 	if err != nil || id <= 0 {
 		t.Fatalf("AddRelationRule: id=%d err=%v", id, err)
 	}
@@ -98,17 +98,17 @@ func TestRuleRelationExplicitAndValidation(t *testing.T) {
 	r := newTestRepo(t)
 	ruleFixture(t, r)
 	// 显式规则：table_a.merchant_id → mch_merchant.id（存在 → 生成）
-	if _, err := r.AddRelationRule(RelationRule{
+	if _, err := r.AddRelationRule(domain.RelationRule{
 		FromTable: "table_a", FromCol: "merchant_id", ToTable: "mch_merchant", ToCol: "id"}); err != nil {
 		t.Fatalf("AddRelationRule: %v", err)
 	}
 	// 目标表不存在（ghost_table）→ 不生成
-	if _, err := r.AddRelationRule(RelationRule{
+	if _, err := r.AddRelationRule(domain.RelationRule{
 		FromCol: "merchant_id", ToTable: "ghost_table", ToCol: "id"}); err != nil {
 		t.Fatalf("AddRelationRule ghost: %v", err)
 	}
 	// 显式来源列不存在（table_a.nonexist）→ 不生成
-	if _, err := r.AddRelationRule(RelationRule{
+	if _, err := r.AddRelationRule(domain.RelationRule{
 		FromTable: "table_a", FromCol: "nonexist", ToTable: "mch_merchant", ToCol: "id"}); err != nil {
 		t.Fatalf("AddRelationRule badcol: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestRuleRelationExplicitAndValidation(t *testing.T) {
 func TestRuleRelationSurvivesReset(t *testing.T) {
 	r := newTestRepo(t)
 	ruleFixture(t, r)
-	if _, err := r.AddRelationRule(RelationRule{FromCol: "merchant_id", ToTable: "mch_merchant", ToCol: "id"}); err != nil {
+	if _, err := r.AddRelationRule(domain.RelationRule{FromCol: "merchant_id", ToTable: "mch_merchant", ToCol: "id"}); err != nil {
 		t.Fatalf("AddRelationRule: %v", err)
 	}
 	if err := r.ResetGraphTables(); err != nil {
@@ -195,7 +195,7 @@ func TestRuleRelationMergeRank(t *testing.T) {
 	}
 	save(t, r, nodes, edges)
 	// 规则：merchant_id → table_b.id（目标存在）
-	if _, err := r.AddRelationRule(RelationRule{FromCol: "merchant_id", ToTable: "table_b", ToCol: "id"}); err != nil {
+	if _, err := r.AddRelationRule(domain.RelationRule{FromCol: "merchant_id", ToTable: "table_b", ToCol: "id"}); err != nil {
 		t.Fatalf("AddRelationRule: %v", err)
 	}
 	rels, err := r.GetTableRelations("table_a", "full")

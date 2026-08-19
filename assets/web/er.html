@@ -48,6 +48,34 @@
   #loading .box { background: #fff; padding: 18px 32px; border-radius: 8px; font-size: 14px;
     color: #333; box-shadow: 0 4px 16px rgba(0, 0, 0, .15); }
   #loading.hidden { display: none; }
+  /* 规则配置面板（Q226） */
+  #btn-rules { border: 1px solid #d9d9d9; border-radius: 6px; background: #fff; padding: 4px 12px;
+    font-size: 12px; cursor: pointer; color: #555; }
+  #btn-rules:hover { color: #2f54eb; border-color: #2f54eb; }
+  #rules-panel { position: fixed; right: 20px; top: 60px; width: 420px; max-height: 60vh;
+    background: #fff; border: 1px solid #e8e8e8; border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,.18);
+    z-index: 200; display: flex; flex-direction: column; }
+  #rules-panel.hidden { display: none; }
+  .rules-head { padding: 10px 14px; font-size: 13px; font-weight: 600; color: #333;
+    border-bottom: 1px solid #f0f0f0; display: flex; justify-content: space-between; align-items: center; }
+  #rules-close { border: none; background: none; font-size: 16px; cursor: pointer; color: #999; }
+  .rules-add { padding: 10px 14px; display: flex; gap: 6px; align-items: center;
+    border-bottom: 1px solid #f0f0f0; }
+  .rules-add input { flex: 1; border: 1px solid #d9d9d9; border-radius: 4px; padding: 4px 6px;
+    font-size: 12px; min-width: 0; }
+  .rules-add .arrow { color: #999; }
+  #r-add { border: none; background: #2f54eb; color: #fff; border-radius: 4px; padding: 5px 12px;
+    font-size: 12px; cursor: pointer; white-space: nowrap; }
+  #r-list { overflow: auto; padding: 6px 0; }
+  .rule-item { display: flex; align-items: center; gap: 8px; padding: 6px 14px; font-size: 12px;
+    color: #333; }
+  .rule-item:hover { background: #f6f8fa; }
+  .rule-item code { background: #f0f2f5; border-radius: 3px; padding: 1px 5px;
+    font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; }
+  .rule-item .scope { color: #999; }
+  .rule-item button { margin-left: auto; border: none; background: none; color: #f5222d;
+    cursor: pointer; font-size: 12px; }
+  .rules-empty { padding: 14px; font-size: 12px; color: #999; text-align: center; }
 </style>
 </head>
 <body>
@@ -71,6 +99,7 @@
     <label><input id="h-write" type="number" min="0" value="4" style="width:44px">w</label>
     <label><input id="h-read" type="number" min="0" value="4" style="width:44px">r</label>
   </div>
+  <button id="btn-rules" title="配置用户连线规则（存数据库，clean 保留；添加后立即生效）">规则</button>
   <div class="legend">
     <span class="li"><svg width="30" height="10"><line x1="1" y1="5" x2="29" y2="5" stroke="#1677ff" stroke-width="2.8"/></svg>外键关联 fk（粗实线）</span>
     <span class="li"><svg width="30" height="10"><line x1="1" y1="5" x2="29" y2="5" stroke="#1677ff" stroke-width="2.2" stroke-dasharray="10,4"/></svg>键关联 query（长虚线）</span>
@@ -81,6 +110,19 @@
 </header>
 <div id="svg-wrap"></div>
 <div id="loading" class="hidden"><div class="box">加载中...</div></div>
+<!-- 规则配置面板（Q226）：用户连线规则——来源 → 目标；来源无表名前缀 = 模式规则 -->
+<div id="rules-panel" class="hidden">
+  <div class="rules-head">连线规则（用户声明，读取期合并，clean 保留）
+    <button id="rules-close" title="关闭">×</button>
+  </div>
+  <div class="rules-add">
+    <input id="r-from" placeholder="来源列/表.列（如 member_id 或 mm_relation.member_id）" title="无表名前缀 = 模式规则（所有含该列的表）">
+    <span class="arrow">→</span>
+    <input id="r-to" placeholder="目标表.列（列省略默认 id）" title="如 mm_member.id">
+    <button id="r-add">添加</button>
+  </div>
+  <div id="r-list"></div>
+</div>
 <script>
 // ---- 平铺画法常量 ----
 const W = 240, HEAD_H = 32, ROW_H = 22, PAD = 8;
@@ -659,10 +701,106 @@ function bindModeSwitch() {
     render();
   }
 }
+// ---- 用户连线规则面板（Q226）：添加/删除规则后立即生效（读取期
+// 合并，无需 reindex）----
+
+// 规则变更后全量刷新：失效按需加载缓存 + 重新拉取全部关系 + 渲染
+async function refreshRels() {
+  tableRelsLoaded.clear();
+  FULL_LOADED = false;
+  const d = await fetchER(currentHops(), false, '');
+  DATA = d;
+  render();
+}
+
+// 解析规则输入：来源/目标均可带表名前缀（表.列）；来源无前缀 = 模式规则
+function parseRuleInput(from, to) {
+  const rule = { from_table: '', from_col: '', to_table: '', to_col: '' };
+  const fi = from.indexOf('.');
+  if (fi >= 0) {
+    rule.from_table = from.slice(0, fi).trim();
+    rule.from_col = from.slice(fi + 1).trim();
+  } else {
+    rule.from_col = from.trim();
+  }
+  const ti = to.indexOf('.');
+  if (ti >= 0) {
+    rule.to_table = to.slice(0, ti).trim();
+    rule.to_col = to.slice(ti + 1).trim();
+  } else {
+    rule.to_table = to.trim();
+    rule.to_col = 'id'; // 目标列省略默认 id（与 CLI 一致）
+  }
+  return rule;
+}
+
+async function loadRules() {
+  const res = await fetch('/api/rules');
+  const d = await res.json();
+  const list = document.getElementById('r-list');
+  const rules = d.rules || [];
+  if (rules.length === 0) {
+    list.innerHTML = '<div class="rules-empty">暂无规则——添加后立即在图中显示连线</div>';
+    return;
+  }
+  list.innerHTML = rules.map((ru) =>
+    '<div class="rule-item"><span class="scope">' +
+    (ru.from_table ? '' : '*') + '</span><code>' +
+    (ru.from_table ? ru.from_table + '.' : '') + ru.from_col +
+    '</code><span>→</span><code>' + ru.to_table +
+    (ru.to_col ? '.' + ru.to_col : '') + '</code>' +
+    '<button data-del="' + ru.id + '" title="删除">删除</button></div>'
+  ).join('');
+  list.querySelectorAll('button[data-del]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      await fetch('/api/rules?id=' + btn.getAttribute('data-del'), { method: 'DELETE' });
+      await Promise.all([loadRules(), refreshRels()]);
+    });
+  });
+}
+
+async function addRule() {
+  const from = document.getElementById('r-from').value.trim();
+  const to = document.getElementById('r-to').value.trim();
+  if (!from || !to) { alert('请填写来源与目标'); return; }
+  const res = await fetch('/api/rules', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(parseRuleInput(from, to)),
+  });
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    alert('添加失败: ' + (d.error || res.status));
+    return;
+  }
+  document.getElementById('r-from').value = '';
+  document.getElementById('r-to').value = '';
+  await Promise.all([loadRules(), refreshRels()]);
+}
+
+function bindRulesPanel() {
+  const panel = document.getElementById('rules-panel');
+  document.getElementById('btn-rules').addEventListener('click', () => {
+    panel.classList.toggle('hidden');
+    if (!panel.classList.contains('hidden')) loadRules();
+  });
+  document.getElementById('rules-close').addEventListener('click', () => {
+    panel.classList.add('hidden');
+  });
+  document.getElementById('r-add').addEventListener('click', addRule);
+  // 回车提交
+  document.getElementById('r-from').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') addRule();
+  });
+  document.getElementById('r-to').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') addRule();
+  });
+}
 bindRelFilter();
 bindModeSwitch();
 bindDblClick();
 bindHopsConfig();
+bindRulesPanel();
 load();
 </script>
 </body>

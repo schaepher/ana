@@ -98,7 +98,7 @@ func TestRuleCLIAddListRemove(t *testing.T) {
 			t.Errorf("rule list exit = %d", code)
 		}
 	})
-	var rules []sqlite.RelationRule
+	var rules []domain.RelationRule
 	if err := json.Unmarshal([]byte(listOut), &rules); err != nil {
 		t.Fatalf("rule list JSON: %v\n%s", err, listOut)
 	}

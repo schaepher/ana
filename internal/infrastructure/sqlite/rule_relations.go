@@ -12,19 +12,10 @@ import (
 // 关联（值流无法静态验证时的用户补充）。FromTable 为空 = 模式规则
 // （所有含 FromCol 列的表都连到 ToTable.ToCol）；非空 = 显式列对。
 // 存 relation_rules 表，clean/reindex（ResetGraphTables）保留。
-type RelationRule struct {
-	ID        int64
-	FromTable string // '' = 模式规则
-	FromCol   string
-	ToTable   string
-	ToCol     string
-	CreatedAt int64
-}
-
 // AddRelationRule 添加连线规则（Q220c）。校验语法（列名非空、目标表名
 // 非空），存在性校验在生效期（ruleRelations）执行——允许先加规则后建
 // 索引。
-func (r *Repo) AddRelationRule(rule RelationRule) (int64, error) {
+func (r *Repo) AddRelationRule(rule domain.RelationRule) (int64, error) {
 	logger := zap.L()
 	logger.Debug("enter (Repo).AddRelationRule")
 	defer logger.Debug("exit (Repo).AddRelationRule")
@@ -44,7 +35,7 @@ func (r *Repo) AddRelationRule(rule RelationRule) (int64, error) {
 }
 
 // ListRelationRules 全部规则（Q220c）。
-func (r *Repo) ListRelationRules() ([]RelationRule, error) {
+func (r *Repo) ListRelationRules() ([]domain.RelationRule, error) {
 	logger := zap.L()
 	logger.Debug("enter (Repo).ListRelationRules")
 	defer logger.Debug("exit (Repo).ListRelationRules")
@@ -54,9 +45,9 @@ func (r *Repo) ListRelationRules() ([]RelationRule, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []RelationRule
+	var out []domain.RelationRule
 	for rows.Next() {
-		var ru RelationRule
+		var ru domain.RelationRule
 		if err := rows.Scan(&ru.ID, &ru.FromTable, &ru.FromCol, &ru.ToTable, &ru.ToCol, &ru.CreatedAt); err != nil {
 			return nil, err
 		}
