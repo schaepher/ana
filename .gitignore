@@ -8,3 +8,4 @@ e2e/node_modules
 integration/fixtureapp/.codeintel/
 .cc-connect/
 examples/*/.codeintel/
+e2e/integration/
