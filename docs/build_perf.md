@@ -81,6 +81,26 @@ pprof 显示 GC 系列 ~40% CPU → 尝试 CodeEntity/Fact sync.Pool：flush
 **回滚**：生命周期约定（use-after-reuse 风险）+ IIFE 可读性代价不值
 8% 且不可复现的收益。保留 BatchSize（10000→20000，cgocall 减半）。
 
+## 3.7 SQLite 驱动切换基准（modernc 纯 Go，实测否决）
+
+动机：pprof cgocall 16%（mattn/go-sqlite3 的 C 调用边界）——切换
+modernc.org/sqlite（纯 Go 实现）能否消除边界开销？
+
+**基准**（tmp/bench-sqlite，独立模块）：14 万节点 + 20 万边批量
+INSERT OR REPLACE，WAL，事务批 2 万（模拟构建期 flush 形态）：
+
+| 驱动 | nodes 14 万行 | edges 20 万行 | 合计 |
+|---|---|---|---|
+| mattn（cgo，现状） | 0.65s | 2.50s | **3.15s** |
+| modernc（纯 Go） | 1.15s | 3.20s | **4.36s（慢 38%）** |
+
+**结论：不切换**。cgocall 16% 是边界开销上限，但 modernc 是 C→Go
+自动翻译实现，SQLite 引擎（B-tree/WAL/排序）执行慢于原生 C——写
+路径净慢 38%，读路径（relations 全表扫描/BFS join）通常同样吃亏。
+纯 Go 的收益仅工程性（无 cgo/交叉编译便利），非性能。若需消除
+cgocall 边界，替代方向：减少写库调用次数（BatchSize 已做）。基准
+脚本保留在 tmp/bench-sqlite（gitignore），可复测。
+
 ## 4. 优化 3：GOGC 实验
 
 pprof 显示 GC 相关 ~38% CPU（GOGC=40 并行下扫描开销）。实测
