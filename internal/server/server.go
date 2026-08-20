@@ -62,8 +62,6 @@ func (s *Server) Handler() http.Handler {
 	return mux
 }
 
-// handleSearch 全库符号搜索（名称/ID/文件模糊匹配，上限 50）。
-
 // NodeJSON 节点输出格式。
 type NodeJSON struct {
 	ID         string          `json:"id"`
@@ -99,19 +97,6 @@ type EdgeJSON struct {
 	Metadata  map[string]any `json:"metadata,omitempty"`
 }
 
-// handleModuleCalls 模块间调用（field_trace.md §21.3）：HTTP JSON 透出
-// action.ModuleCalls（grpc + http，transport 标注）——前端模块视图数据源。
-
-// handleIncremental 增量构建自动触发（field_trace.md §20.1）：
-// POST /incremental（无负载，serve 已绑定 repo）→ 202 + 异步执行；
-// 执行中再请求 → 409（单写者）；未配置 buildFn → 404（提示先 init）。
-
-// handleRoots 返回顶层入口节点（main 入口 + HTTP/gRPC 服务入口）。
-
-// handleExpand 返回某节点的一级邻居（双向）。
-
-// nodeToJSON 转换节点为前端格式；roots 场景补充入口标记。
-
 // FlowRowJSON 函数内字段数据流的一步（/api/flows 输出）。
 type FlowRowJSON struct {
 	ID         string   `json:"id"`
@@ -127,10 +112,3 @@ type FlowRowJSON struct {
 	FuncName   string   `json:"funcName,omitempty"`   // 所属函数短名（函数上下文分组）
 	Conditions []string `json:"conditions,omitempty"` // 路径条件标注（Q92，查询期叠加）
 }
-
-// handleValueTrace 返回数据值全链（函数上下文分组渲染数据）。
-
-// handleFlows 返回函数/方法节点内的完整字段数据流（文本树渲染数据）。
-
-// shortFuncName 从 canonical ID 提取函数短名（symbol:go:<pkg>:<name> → <name>，
-// 方法保留 (T).m 形式）——字段访问/SSA 值节点所属函数的展示用。

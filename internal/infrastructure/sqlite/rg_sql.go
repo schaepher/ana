@@ -280,6 +280,3 @@ func (r *Repo) relationsForSQL(table string) ([]*domain.TableRelation, error) {
 	// 键关联被误滤；与内存路径分叉）
 	return filterFKNoise(all), nil
 }
-
-// getAllTableRelationsSQL --memory sql 模式的全库聚合：GetTables 枚举 +
-// 逐表 relationsForSQL（逐节点查询，内存 O(1)——大仓库逃生路径）。

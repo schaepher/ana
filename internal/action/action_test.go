@@ -144,13 +144,3 @@ func TestValueTraceSearchExpandFlows(t *testing.T) {
 		t.Errorf("flows = %v, %v", flows, err)
 	}
 }
-
-// TestSummaryChainWriteAnchorDownstream：③ 回归——写锚点的下游经
-// 同 full_path 读节点跳板接入使用链（consume）。
-
-// TestValueTraceDispatchMark：Q157 P1——value-trace 候选派发标注。
-// 行所属函数是 dispatch_to 边 target（接口候选实现）时标记来源与
-// 置信度（链路混入多候选实现时可区分）。
-
-// TestRelationsAll：全库关联聚合（Q160）——多表 BFS 结果合并去重，
-// 同列对保留 hops 最小 + query 类型（如 A.id → B 在 B 视角可能重复出现）。

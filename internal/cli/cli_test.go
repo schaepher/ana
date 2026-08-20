@@ -13,8 +13,6 @@ import (
 	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
 )
 
-// captureStdout 捕获 stdout 输出（CLI 结果断言用）。
-
 func TestMainDispatch(t *testing.T) {
 	ctx := context.Background()
 	if code := Main(ctx, []string{}); code != 2 {
@@ -82,10 +80,6 @@ func TestCleanPurgeCache(t *testing.T) {
 	}
 }
 
-// seedRepo 建临时仓库 + 预填一个小图（query 的 resolveRepo 要求 go.mod）。
-
-// seedFieldTrace 预填字段追溯数据：函数节点 + 摘要行 + field_access/ssa_value 图。
-
 // TestValueTracePersist：value-trace 经过 SQL 持久化虚拟节点
 // （Q97：字段 → 表.列 映射可见）。
 func TestValueTracePersist(t *testing.T) {
@@ -115,12 +109,6 @@ func TestValueTracePersist(t *testing.T) {
 		t.Errorf("value-trace 应显示持久化节点 users.name:\n%s", out)
 	}
 }
-
-// TestQuerySymbolCandidates：接口类型 symbol 详情展示候选实现
-// （Q95：candidates + 置信度 + 注册点）。
-
-// TestQueryFieldsCallSite：indirect_write 摘要展示调用点（Q90 调用点级回连）：
-// INDIRECT_WRITE 边 metadata 的调用点行号与实参变量名出现在 fields 输出。
 
 func TestQueryTraceBackward(t *testing.T) {
 	dir := seedFieldTrace(t)
@@ -206,24 +194,3 @@ func TestInitGoWorkReject(t *testing.T) {
 		t.Errorf("init module dir under go.work = %d, want 0", code)
 	}
 }
-
-// TestQuerySummary：跨层摘要（Q100）——主链提取 + 步骤类型标注。
-
-// TestQuerySummaryFieldPath：③ 回归——类型限定字段路径（非符号）作为
-// 锚点输入可解析（此前被识别为"不存在的符号"）。
-
-// TestVersionNoOTLNoise：④ 回归——version 命令 stdout 不含 OTel JSON。
-
-// TestQueryTable：query table——表级聚合：列虚拟节点 + 写入方（summary_io 入边）。
-
-// TestQueryGraphOutputs：⑬ 猎 bug——impact/callees 文本输出与 JSON 输出
-// 的 nodeBriefs/printNodes/printFacts 格式路径。
-
-// TestExportGraphValueTraceDot：⑬ 猎 bug——export graph value-trace 的
-// DOT 渲染路径（renderValueTraceDot，此前 0% 覆盖）。
-
-// TestUpdateNoGitRepo：⑬ 猎 bug——update 在非 git 仓库（无 .git）应
-// 报错而非 panic/静默成功（变更检测依赖 git）。
-
-// TestInitNoGoMod：⑬ 猎 bug——init 在无 go.mod 目录（ensureGoEnv 路径）
-// 应报错而非 panic。

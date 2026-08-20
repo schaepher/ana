@@ -148,6 +148,9 @@ func pkgOfID(id domain.CanonicalID) string {
 	return s
 }
 
+// emitSelectorCall 对象方法调用（x.Method()）：gRPC 客户端调用、手写
+// client、HTTP 客户端、uses 边。
+
 func (ctx *fileCtx) emitSelectorCall(call *ast.CallExpr, callee *types.Func, sel *ast.SelectorExpr,
 	xid *ast.Ident, callerID domain.CanonicalID) {
 	pkg := ctx.pkg

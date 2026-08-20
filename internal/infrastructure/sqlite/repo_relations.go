@@ -153,12 +153,3 @@ func (r *Repo) GetAllTableRelations(mode string) ([]*domain.TableRelation, error
 	// Q220c：合并用户连线规则（规则生成 fk，同 key 覆盖低 rank）
 	return r.mergeRuleRelations(final, "")
 }
-
-// GetTableColumns 按表名聚合列虚拟节点（query table）：Name=表（整表行）
-// 或 表.列（Q97 持久化映射）；每列带写入方（summary_io 入边 source 值节点
-// 的所属函数与行号）。读取方（出边）通常为空——SELECT 读路径未解析。
-
-// GetAllTableColumns ER 图列数据源（/api/er）：一次查询全库外部表列
-// （表.列 形态，过滤与 GetTables 一致：is_external + gorm/sql/xorm），
-// 按列名排序去重（同名列多节点首个保留）。不带 writers/readers 明细
-// （ER 图不需要，避免逐表 N+1 查询）。

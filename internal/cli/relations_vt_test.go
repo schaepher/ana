@@ -24,25 +24,25 @@ func seedTableRelations(t *testing.T) string {
 	nodes := []*domain.CodeEntity{
 		{ID: funcID, Kind: domain.KindFunction, Name: "find", FilePath: "a.go"},
 		{ID: funcID + "#ext.sql.table_a.id.read@6", Kind: domain.KindFieldAccess,
-			Name:	"table_a.id", FilePath: "a.go", LineStart: 6,
+			Name: "table_a.id", FilePath: "a.go", LineStart: 6,
 			Properties: map[string]any{"full_path": "table_a.id", "access_kind": "read",
-				"type_string":	"sql", "is_external": "true", "func_id": string(funcID)}},
+				"type_string": "sql", "is_external": "true", "func_id": string(funcID)}},
 		{ID: funcID + "#t4", Kind: domain.KindSSAValue, Name: "t4",
-			Properties:	map[string]any{"func_id": string(funcID)}},
+			Properties: map[string]any{"func_id": string(funcID)}},
 		{ID: funcID + "#x", Kind: domain.KindSSAValue, Name: "id",
-			Properties:	map[string]any{"func_id": string(funcID)}},
+			Properties: map[string]any{"func_id": string(funcID)}},
 		{ID: funcID + "#ext.sql.table_b.a_id.filter@9", Kind: domain.KindFieldAccess,
-			Name:	"table_b.a_id", FilePath: "a.go", LineStart: 9,
+			Name: "table_b.a_id", FilePath: "a.go", LineStart: 9,
 			Properties: map[string]any{"full_path": "table_b.a_id", "access_kind": "filter",
-				"type_string":	"sql", "is_external": "true", "func_id": string(funcID)}},
+				"type_string": "sql", "is_external": "true", "func_id": string(funcID)}},
 	}
 	if _, err := r.SaveBatchStats(nodes, []*domain.Fact{
 		{SourceID: funcID + "#ext.sql.table_a.id.read@6", TargetID: funcID + "#t4",
-			Kind:	domain.FactSummaryIO, ToolSource: domain.ToolSSA, Confidence: 1},
+			Kind: domain.FactSummaryIO, ToolSource: domain.ToolSSA, Confidence: 1},
 		{SourceID: funcID + "#t4", TargetID: funcID + "#x",
-			Kind:	domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
+			Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
 		{SourceID: funcID + "#x", TargetID: funcID + "#ext.sql.table_b.a_id.filter@9",
-			Kind:	domain.FactSummaryIO, ToolSource: domain.ToolSSA, Confidence: 1},
+			Kind: domain.FactSummaryIO, ToolSource: domain.ToolSSA, Confidence: 1},
 	}, nil); err != nil {
 		t.Fatalf("save: %v", err)
 	}
@@ -55,9 +55,6 @@ func seedTableRelations(t *testing.T) string {
 	}
 	return dir
 }
-
-// TestValueTraceMinConfCLI：Q161——value-trace --min-conf 剪枝低置信
-// 候选边（0.7 < 0.8），且边级候选标注 JSON 输出。
 
 // TestQueryFieldsOrigins：Q161——query fields 展示间接写多来源
 // （summary_origins 落库 + dispatch join）。
@@ -78,14 +75,14 @@ func TestQueryFieldsOrigins(t *testing.T) {
 	}
 	if _, err := r.SaveBatchStats(nodes, []*domain.Fact{
 		{SourceID: "symbol:go:example.com/m:Iface", TargetID: domain.CanonicalID(implID),
-			Kind:	domain.FactDispatchTo, ToolSource: domain.ToolSSA, Confidence: 0.7,
-			Metadata:	map[string]any{"origin": "enum"}},
+			Kind: domain.FactDispatchTo, ToolSource: domain.ToolSSA, Confidence: 0.7,
+			Metadata: map[string]any{"origin": "enum"}},
 	}, []*domain.FunctionFieldSummary{
 		{FunctionID: domain.CanonicalID(runID), AccessKind: domain.SummaryIndirectWrite,
-			FieldPath:	"example.com/m.T.X", InstancePath: "t.X", LineStart: 5},
+			FieldPath: "example.com/m.T.X", InstancePath: "t.X", LineStart: 5},
 	}, []*domain.SummaryOrigin{
 		{FunctionID: domain.CanonicalID(runID), AccessKind: domain.SummaryIndirectWrite,
-			FieldPath:	"example.com/m.T.X", CallLine: 7, CalleeID: domain.CanonicalID(implID)},
+			FieldPath: "example.com/m.T.X", CallLine: 7, CalleeID: domain.CanonicalID(implID)},
 	}); err != nil {
 		t.Fatalf("save: %v", err)
 	}
@@ -97,13 +94,13 @@ func TestQueryFieldsOrigins(t *testing.T) {
 	})
 	var got struct {
 		Rows []struct {
-			AccessKind	string	`json:"access_kind"`
-			Origins		[]struct {
-				CallLine	int	`json:"call_line"`
-				Callee		string	`json:"callee"`
-				Origin		string	`json:"origin"`
-				Confidence	float64	`json:"confidence"`
-			}	`json:"origins"`
+			AccessKind string `json:"access_kind"`
+			Origins    []struct {
+				CallLine   int     `json:"call_line"`
+				Callee     string  `json:"callee"`
+				Origin     string  `json:"origin"`
+				Confidence float64 `json:"confidence"`
+			} `json:"origins"`
 		} `json:"rows"`
 	}
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
@@ -148,27 +145,27 @@ func TestValueTraceIncludeContainerCLI(t *testing.T) {
 	r := sqlite.NewRepo(db)
 	funcID := "symbol:go:example.com/m:calc"
 	write := &domain.CodeEntity{ID: domain.CanonicalID(funcID + "#invoice.SettledFee.write@3"),
-		Kind:	domain.KindFieldAccess, Name: "invoice.SettledFee", FilePath: "m.go", LineStart: 3,
+		Kind: domain.KindFieldAccess, Name: "invoice.SettledFee", FilePath: "m.go", LineStart: 3,
 		Properties: map[string]any{"full_path": "example.com/m.Invoice.SettledFee",
-			"instance_path":	"invoice.SettledFee", "access_kind": "write", "func_id": funcID}}
+			"instance_path": "invoice.SettledFee", "access_kind": "write", "func_id": funcID}}
 	v := &domain.CodeEntity{ID: domain.CanonicalID(funcID + "#t0"), Kind: domain.KindSSAValue, Name: "t0",
-		Properties:	map[string]any{"func_id": funcID}}
+		Properties: map[string]any{"func_id": funcID}}
 	invRead := &domain.CodeEntity{ID: domain.CanonicalID(funcID + "#invoice.read@5"),
-		Kind:	domain.KindFieldAccess, Name: "invoice", FilePath: "m.go", LineStart: 5,
+		Kind: domain.KindFieldAccess, Name: "invoice", FilePath: "m.go", LineStart: 5,
 		Properties: map[string]any{"full_path": "example.com/m.Invoice",
-			"instance_path":	"invoice", "access_kind": "read", "func_id": funcID,
-			"type_string":	"*example.com/m.Invoice"}}
+			"instance_path": "invoice", "access_kind": "read", "func_id": funcID,
+			"type_string": "*example.com/m.Invoice"}}
 
 	refundParam := &domain.CodeEntity{ID: domain.CanonicalID(funcID + "#refund"),
-		Kind:	domain.KindSSAValue, Name: "refund",
-		Properties:	map[string]any{"func_id": funcID}}
+		Kind: domain.KindSSAValue, Name: "refund",
+		Properties: map[string]any{"func_id": funcID}}
 	if _, err := r.SaveBatchStats([]*domain.CodeEntity{write, v, invRead, refundParam}, []*domain.Fact{
 		{SourceID: v.ID, TargetID: write.ID, Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
 		{SourceID: invRead.ID, TargetID: v.ID, Kind: domain.FactDataFlowsTo, ToolSource: domain.ToolSSA, Confidence: 1},
 
 		{SourceID: refundParam.ID, TargetID: v.ID, Kind: domain.FactReturns, ToolSource: domain.ToolSSA,
-			Confidence:	1, Metadata: map[string]any{"interface": "example.com/m.RefundSource",
-				"candidate_origin":	"enum", "confidence": 0.7}},
+			Confidence: 1, Metadata: map[string]any{"interface": "example.com/m.RefundSource",
+				"candidate_origin": "enum", "confidence": 0.7}},
 	}, nil); err != nil {
 		t.Fatalf("save: %v", err)
 	}
@@ -193,6 +190,3 @@ func TestValueTraceIncludeContainerCLI(t *testing.T) {
 		t.Error("--include-container --min-conf 0 后候选路径应可达")
 	}
 }
-
-// TestTraceBackwardIndirectCLI：Q172——trace-backward --follow-indirect
-// 经 summary_origins 链到达下游真实写者；默认（无 flag）为空。

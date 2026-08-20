@@ -97,10 +97,9 @@ func loadRelationGraph(r *Repo) (*relationGraph, error) {
 	return g, nrows.Err()
 }
 
-// isDataKind 是否为 BFS 数据流边。
-
 // tables 内存版 GetTables（语义一致：外部 gorm/sql/xorm 虚拟节点
 // 表名去重排序；name 无点或含多点不产生表名）。
+
 func (g *relationGraph) tables() []string {
 	set := map[string]bool{}
 	for _, n := range g.nodes {
@@ -157,18 +156,6 @@ func (g *relationGraph) filterReachable2(id string) bool {
 	return false
 }
 
-// relationsFor 单表关联分析（等价旧 GetTableRelations 逐节点 SQL 版）：
-// 本表全部列虚拟节点为起点 BFS，收集其他表虚拟节点（表.列，is_external），
-// 输出稳定排序（from_col, hops, to_table, to_col）。
-
-// filterFKNoise Q159 外键语义过滤（独立函数便于单测）：
-// id→id 一律丢弃（两表都不会拿各自自增主键互查）；同目标列多起点时
-// 外键形态列（xxx_id）优先——主键 id 起点是对象值共享桥接噪音；保留
-// 形态：A.xxx_id → B.id（外键查主键）、A.id → B.xxx_id（主键被外键引用
-// 查询）、A.xxx_id → B.xxx_id（业务关联键）。
-
-// typeNameOf 查节点 type_string 并提取类型名（[]example.com/m.Session →
-// Session；*Session → Session；无类型/非 ssa_value 返回 ok=false）。
 func (r *Repo) typeNameOf(id string) (string, bool) {
 	var ts sql.NullString
 	if err := r.QueryRow(`SELECT json_extract(properties, '$.type_string') FROM nodes WHERE id = ?`, id).Scan(&ts); err != nil || !ts.Valid {

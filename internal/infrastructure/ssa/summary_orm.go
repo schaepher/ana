@@ -87,24 +87,8 @@ func (ext *fieldExtractor) applyORMRead(cc *ssa.CallCommon, calleeID domain.Cano
 	return nil
 }
 
-// applyORMWrite 处理 ORM 写调用（②⑦：GORM Create/Save/Updates/Delete/
-// Update 等）：
-//   - 对象实参（结构体字面量/变量）：类型 → 表名（snake_case）+ 字段 →
-//     列名 → 虚拟节点 表.列 + summary_io 边（字段值 → 虚拟节点）。
-//     字段值不可定位（变量/调用结果/空字面量——调用点无字段级 Store）
-//     时不跳过该列：仍按类型展开生成 表.列 节点，连对象值兜底
-//   - 字符串列名实参（Update("col", v) 单列更新）：表名溯源链式调用
-//     receiver 的 Model(&X{}) 范围对象（⑦），列名取字符串实参
-
-// emitORMColumn 生成单个 表.列 虚拟节点 + summary_io 边（值实参 → 节点）。
-
-// chainScopeObject 溯源链式调用的范围对象（⑦）：Update/Updates 的 receiver
-// 沿定义链回溯中间调用（Where/Model 等），找到实参为结构体对象的调用
-// （如 Model(&Session{ID:...})）返回其类型。链上游无结构体实参返回 nil。
-
-// fieldValueOf 按字段索引取对象值的字段读取（对象为 Alloc/寄存器时经
-// FieldAddr 或 Field 指令；无法定位时返回 nil——字段值无 SSA 实体则
-// 跳过该列）。
+// tableNameOf 实体类型表名：TableName() 方法（SSA Return 常量）优先，
+// fallback snakeCase(类型名)（GORM 默认命名）。
 
 func (ext *fieldExtractor) tableNameOf(entity types.Type) string {
 	if p, ok := entity.(*types.Pointer); ok {
@@ -150,6 +134,9 @@ func tableNameOfSlow(ext *fieldExtractor, entity types.Type, named *types.Named)
 	}
 	return snakeCase(named.Obj().Name())
 }
+
+// pkColumnOf 主键列名：字段 pk:"yes" tag（gorm column 优先）→ 该字段列名；
+// 无标记时 fallback "id"。
 
 func pkColumnOf(entity types.Type) string {
 	if p, ok := entity.(*types.Pointer); ok {

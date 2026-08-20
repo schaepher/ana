@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/schaepher/codeintel/internal/domain"
-	"golang.org/x/tools/go/packages"
 	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
+	"golang.org/x/tools/go/packages"
 )
 
 // fakeAdapter 测试用适配器：固定名字与结果。
@@ -23,7 +23,7 @@ func (f *fakeAdapter) Index(ctx context.Context, repo *domain.Repository, _ []*p
 	}
 	// 产出少量数据
 	_ = emit(domain.Item{Node: &domain.CodeEntity{
-		ID: domain.CanonicalID("symbol:go:example.com/m:" + f.name),
+		ID:   domain.CanonicalID("symbol:go:example.com/m:" + f.name),
 		Kind: domain.KindFunction, Name: f.name, FilePath: "main.go",
 	}})
 	return nil

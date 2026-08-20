@@ -221,18 +221,4 @@ func (r *Repo) StartRelationComputeIfNeeded() (bool, error) {
 	return r.beginRelationCompute(len(g.tables()))
 }
 
-// relTypeRank 关联类型优先级（聚合去重用）：fk > query > write > read。
-
 // MaxRelationHops 关系跳数上限默认值（Q195/Q196：6-10 跳长链为噪音失真）。
-
-// DefaultRelationHops 默认跳数上限（引用 domain 版，当前设定值 4/4/4）。
-
-// dedupRelationNoise 关系降噪（Q195/Q196/Q197，全部 relations 出口统一应用——
-// 缓存命中路径也过一遍，保证旧缓存同样被降噪）：
-// ① 跳数上限：按类型取 h（0=不限制）——query 长链同样失真，
-//    需要查看长链时设 Query=0（--include-long-query）
-// ② 同源写/间接读按 from字段→to表 聚合：同一 from 字段流入同一 to 表
-//    的多列（全列 INSERT/UPDATE 的列爆炸，如 atoms.aliases →
-//    knowledge_graphs 的 13 列各一条）只保留 hops 最小一条；
-//    query 保持列级（键关联每列独立有意义）。
-// 输出保持输入顺序（第一条位次，后续 hops 更小者替换值）。

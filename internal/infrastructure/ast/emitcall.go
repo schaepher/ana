@@ -199,14 +199,12 @@ func (ctx *fileCtx) emitCall(call *ast.CallExpr) {
 	}})
 }
 
-// emitSelectorCall 对象方法调用（x.Method()）：gRPC 客户端调用、手写
-// client、HTTP 客户端、uses 边。
-
 // emitHTTP §18.7：URL → 路由表匹配 → http_call 边 + http 路由节点。
 // httpMethod 由调用方按形态提取（Q205d：Get → GET；NewRequest →
 // Args[0]；NewRequestWithContext → Args[1]；Do → 复用 NewRequest 的），
 // 空则默认 GET——此前在函数内猜 Args[0] 会把 http.Get(url) 的 URL 当
 // method（模块间调用页 label 显示 "http http://..." 噪音）。
+
 func (ctx *fileCtx) emitHTTP(call *ast.CallExpr, callerID domain.CanonicalID, url string, line int, httpMethod string) {
 	host, path := parseURL(url)
 	target := ""
@@ -248,6 +246,3 @@ func (ctx *fileCtx) emitHTTP(call *ast.CallExpr, callerID domain.CanonicalID, ur
 	}})
 	ctx.httpURLsSeen[url] = true
 }
-
-// markServiceEntry 服务入口标记：net/http / grpc 调用、HTTP handler
-// 注册、gRPC RegisterXxxServer → caller 节点带 serves_http/serves_grpc。

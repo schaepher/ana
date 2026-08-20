@@ -267,20 +267,3 @@ func (ext *fieldExtractor) applySpecKind(cc *ssa.CallCommon, callVal ssa.Value, 
 	}
 	return true, nil
 }
-
-// emitEntityFields 为实体类型展开 表.列 虚拟节点（write/read）+ summary_io 边。
-// valID：write=对象值（边 值→节点）；read=调用点返回值（边 节点→值）。
-
-// emitWhereFilter 为 where 列发射 filter 虚拟节点 + 值实参 → 节点边。
-// whereArg 是 where 字符串实参下标；值实参在其后（variadic 解包）。
-
-// emitWhereFilterTyped 同 emitWhereFilter，type 参数指定虚拟节点
-// type_string（Q175：xorm；空默认 gorm）。
-
-// entityTypeOf 取接口摘要的实体类型：泛型接口实例化（Repository[M]）的
-// 类型实参优先；fallback 按 kind 从对象实参/返回值类型取。
-// tableNameOf 实体类型表名：TableName() 方法（SSA Return 常量）优先，
-// fallback snakeCase(类型名)（GORM 默认命名）。
-// pkColumnOf 主键列名：字段 pk:"yes" tag（gorm column 优先）→ 该字段列名；
-// 无标记时 fallback "id"。
-// gormColumnOf 提取 gorm:"column:x" 的列名（无则 snake_case 字段名）。

@@ -281,6 +281,8 @@ func (ext *fieldExtractor) applyTxBoundary(cc *ssa.CallCommon, calleeID domain.C
 	}})
 }
 
+// gormColumnOf 提取 gorm:"column:x" 的列名（无则 snake_case 字段名）。
+
 func gormColumnOf(tag reflect.StructTag, fieldName string) string {
 	g := tag.Get("gorm")
 	for _, part := range strings.Split(g, ";") {

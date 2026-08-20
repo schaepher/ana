@@ -155,21 +155,3 @@ func cmdExportRelations(args []string) int {
 	fmt.Printf("已导出 %d 条表间关联到 %s\n", len(rels), outPath)
 	return 0
 }
-
-// cmdExportGraph 实现 `codeintel export graph`（Q89）：
-//
-//	--type value-trace|callees --target <节点> [--format mermaid|dot] [--out file]
-//
-// value-trace 默认 mermaid（flowchart 子图表达函数分组）；callees 默认 dot。
-// 数据来自 action 层（复用查询用例，Q86 CLI 主通道）。
-
-// renderCalleesDot 渲染 callees 为 DOT digraph（节点用短名，边带 kind）。
-
-// renderValueTraceMermaid 渲染 value-trace 为 mermaid flowchart，
-// 函数上下文用 subgraph 分组（Q89）。
-
-// renderValueTraceDot 渲染 value-trace 为 DOT（同数据，dot 形态）。
-
-// renderLifecycleMermaid 端到端生命周期图（Q99）：value-trace 全链聚合
-// （含写锚点的下游跳板，⑤），节点类型标注（来源/读写/存储/观测）+
-// 路径条件（Q92），mermaid flowchart 输出。复用 TraceConditions。

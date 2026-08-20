@@ -230,14 +230,3 @@ func TestIndexUnrelatedPackagesNotIncluded(t *testing.T) {
 		}
 	}
 }
-
-// TestNestedArgExternalCallee：P2-2——外层 callee 是外部包函数时，
-// 参数位置的嵌套调用仍建 passes_result（fmt.Errorf("%v", joinIDs(x))
-// → joinIDs 有入边，unused 不误报）。
-
-// TestEmbeddedPromotedMethodCalled：P2-2 固化——嵌入提升方法调用
-// （a.Exec，Exec 由嵌入字段提升）建 calls 边到声明方法 (DB).Exec，
-// unused 不误报（§16.2 旧盲区，Selection 解析已解决）。
-
-// TestFuncValueCall：P2-1——函数值赋值盲区收敛：
-// f := g; f() 建 calls 边（h→g）；方法值 fn := obj.M; fn() 建边（m→(T).M）。

@@ -33,13 +33,13 @@ type SummaryOrigin struct {
 // FunctionFieldSummary 函数字段摘要行（function_field_summary 表，
 // 构建时预计算，加速 S1 查询，field_trace.md §5.2）。
 type FunctionFieldSummary struct {
-	FunctionID  CanonicalID
-	AccessKind  string // direct_read / direct_write / indirect_write
-	FieldPath   string // 类型限定路径（同 field_access.full_path）
+	FunctionID   CanonicalID
+	AccessKind   string // direct_read / direct_write / indirect_write
+	FieldPath    string // 类型限定路径（同 field_access.full_path）
 	InstancePath string
-	LineStart   int
-	CodeSnippet string
-	Origins     []*SummaryOrigin // Q161 间接写多来源（查询期填充）
+	LineStart    int
+	CodeSnippet  string
+	Origins      []*SummaryOrigin // Q161 间接写多来源（查询期填充）
 }
 
 // 摘要 access_kind 常量。
@@ -51,29 +51,29 @@ const (
 
 // TraceRow 字段追溯路径上的一步（S2/S3，field_trace.md §6.3/6.4）。
 type TraceRow struct {
-	ID        CanonicalID
-	Depth     int
-	Name      string
-	EdgeKinds string // 到达该节点经过的边类型（逗号连接）
-	Line      int
-	IsUsage   bool // S3：该节点是否为匹配 full_path 的使用点
-	Dir       int  // 函数内数据流方向（GetFunctionFlows）：0=产生链（反向），1=使用链（正向）
-	Kind      EntityKind
-	Access    string // field_access 的 read/write
-	FuncID    string // 所属函数 canonical ID（GetValueTrace 函数上下文分组用）
-	FullPath  string // field_access 的类型限定路径（前端展开匹配用）
-	Conditions []string // 路径条件标注（Q92 查询期计算，不落库）
-	DispatchCandidate bool    // 该行所属函数是接口候选实现（Q157 P1）
-	DispatchOrigin    string  // 候选来源（register / enum）
-	DispatchConf      float64 // 候选置信度
-	EdgeIface         string  // 到达该行的边是动态候选边（Q161）：接口类型
-	EdgeOrigin        string  // 候选来源（register / enum）
-	EdgeConf          float64 // 候选置信度（--min-conf 剪枝阈值用）
+	ID                CanonicalID
+	Depth             int
+	Name              string
+	EdgeKinds         string // 到达该节点经过的边类型（逗号连接）
+	Line              int
+	IsUsage           bool // S3：该节点是否为匹配 full_path 的使用点
+	Dir               int  // 函数内数据流方向（GetFunctionFlows）：0=产生链（反向），1=使用链（正向）
+	Kind              EntityKind
+	Access            string   // field_access 的 read/write
+	FuncID            string   // 所属函数 canonical ID（GetValueTrace 函数上下文分组用）
+	FullPath          string   // field_access 的类型限定路径（前端展开匹配用）
+	Conditions        []string // 路径条件标注（Q92 查询期计算，不落库）
+	DispatchCandidate bool     // 该行所属函数是接口候选实现（Q157 P1）
+	DispatchOrigin    string   // 候选来源（register / enum）
+	DispatchConf      float64  // 候选置信度
+	EdgeIface         string   // 到达该行的边是动态候选边（Q161）：接口类型
+	EdgeOrigin        string   // 候选来源（register / enum）
+	EdgeConf          float64  // 候选置信度（--min-conf 剪枝阈值用）
 }
 
 // DispatchMeta 接口派发元数据（Q157 P1：value-trace 候选标注用）。
 type DispatchMeta struct {
-	Origin     string  // register / enum
+	Origin     string // register / enum
 	Confidence float64
 }
 
@@ -112,16 +112,16 @@ type TableEndpoint struct {
 
 // TableColumn 表的一列虚拟节点及数据流（query table）。
 type TableColumn struct {
-	Name      string          `json:"name"`      // 表.列（无列时为表名）
-	Access    string          `json:"access"`    // read / write / filter
-	LineStart int             `json:"line_start"` // 定义行号
+	Name      string          `json:"name"`              // 表.列（无列时为表名）
+	Access    string          `json:"access"`            // read / write / filter
+	LineStart int             `json:"line_start"`        // 定义行号
 	Writers   []TableEndpoint `json:"writers,omitempty"` // summary_io 入边（值 → 虚拟节点）：谁写入该列
 	Readers   []TableEndpoint `json:"readers,omitempty"` // 虚拟节点出边（消费）；SELECT 读路径未解析时为空
 }
 
 // 表关联类型（关联终点虚拟节点的 access_kind 判定）：
 const (
-	RelationFK    = "fk"    // Q218：query 的子集——值级 taint 验证通过的真实键关联
+	RelationFK = "fk" // Q218：query 的子集——值级 taint 验证通过的真实键关联
 	// （链上对象字段读与起点列 lowercase 呼应，值确实从起点列流来）——
 	// ER 图默认连线类型；fk 默认不限跳（值流已验证）
 	RelationQuery = "query" // 终点是 WHERE 过滤列（filter）——A 的值作为 B 的查询条件（键关联，高置信；含对象字段换名型噪声）
@@ -198,8 +198,8 @@ type ERData struct {
 
 // SinceInfo --since <ref> 的 diff 解析结果（field_trace.md §16.5）。
 type SinceInfo struct {
-	Ref        string             // git ref（--since 参数）
-	NewFiles   map[string]bool    // 新增文件（文件内全部函数标 [new]）
+	Ref        string                  // git ref（--since 参数）
+	NewFiles   map[string]bool         // 新增文件（文件内全部函数标 [new]）
 	AddedLines map[string]map[int]bool // 每文件新增行号集合（+ 侧）
 }
 

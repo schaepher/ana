@@ -68,9 +68,9 @@ func TestProcessDocumentNodes(t *testing.T) {
 		},
 		Occurrences: []*scip.Occurrence{
 			{
-				Symbol:     "scip-go gomod example.com/m . `example.com/m/svc`/Service#",
+				Symbol:      "scip-go gomod example.com/m . `example.com/m/svc`/Service#",
 				SymbolRoles: int32(scip.SymbolRole_Definition),
-				Range:      []int32{10, 0, 7},
+				Range:       []int32{10, 0, 7},
 			},
 		},
 	}
@@ -137,12 +137,12 @@ func TestProcessDocumentImplements(t *testing.T) {
 				Kind:   scip.SymbolInformation_Struct,
 				Relationships: []*scip.Relationship{
 					{
-						Symbol:         "scip-go gomod example.com/m . `example.com/m/svc`/Payer#",
+						Symbol:           "scip-go gomod example.com/m . `example.com/m/svc`/Payer#",
 						IsImplementation: true,
 					},
 					// 非实现关系不建边
 					{
-						Symbol:         "scip-go gomod example.com/m . `example.com/m/other`/X#",
+						Symbol:           "scip-go gomod example.com/m . `example.com/m/other`/X#",
 						IsImplementation: false,
 					},
 				},
@@ -158,7 +158,7 @@ func TestProcessDocumentImplements(t *testing.T) {
 				Kind:   scip.SymbolInformation_MethodSpecification,
 				Relationships: []*scip.Relationship{
 					{
-						Symbol:         "scip-go gomod example.com/m . `example.com/m/svc`/Service#Handle().",
+						Symbol:           "scip-go gomod example.com/m . `example.com/m/svc`/Service#Handle().",
 						IsImplementation: true,
 					},
 				},
@@ -196,11 +196,11 @@ func TestProcessDocumentLocalSymbol(t *testing.T) {
 
 func TestIsInModule(t *testing.T) {
 	cases := map[string]bool{
-		"example.com/m":        true,
-		"example.com/m/svc":    true,
-		"example.com/other":    false,
-		"example.com/more":     false, // 前缀匹配不能误判 example.com/more
-		"example.com/m/extra":  true,
+		"example.com/m":       true,
+		"example.com/m/svc":   true,
+		"example.com/other":   false,
+		"example.com/more":    false, // 前缀匹配不能误判 example.com/more
+		"example.com/m/extra": true,
 	}
 	for p, want := range cases {
 		if got := isInModule(p, []string{"example.com/m"}); got != want {

@@ -81,67 +81,6 @@ type saveBatchResult struct {
 	FailedOrigins   []*domain.SummaryOrigin
 }
 
-// SaveBatch 在单个事务中保存节点与边（节点必须先于边插入以满足外键）。
-
-// SaveBatchStats 与 SaveBatch 相同，但返回批次统计（跳过的外键冲突边数），
-// 并接受函数字段摘要行（function_field_summary）。
-// 端点节点不存在的边（如 Git 追踪到 SCIP 未索引的文件）静默跳过，不中断构建。
-
-// marshalProps 序列化节点属性；nil 映射为空对象（json_patch 需要对象操作数）。
-
-// isFKError 判断是否为外键约束错误（SQLITE_CONSTRAINT_FOREIGNKEY = 787）。
-// go-sqlite3 的 sqlite3.Error 用 ExtendedCode 存扩展错误码。
-
-// SaveNode 保存单个节点（TD.md 4.2 接口）。
-
-// SaveEdges 保存边列表（TD.md 4.2 接口）。
-
-// DeleteByFile 删除某个文件的所有节点及其边（级联），用于增量构建。
-
-// GetSymbol 按 Canonical ID 查询符号。
-
-// GetSymbolByName 按名称查找：先精确匹配，无结果时退化为模糊匹配
-// （CLI 按名查找用）。
-
-// GetCallers 返回调用 id（或更上层）的边，深度 ≤ depth，置信度 ≥ minConfidence。
-// 递归 CTE 沿 source 方向向上遍历（TD.md ImpactAnalysisSpecification）。
-
-// GetCallees 返回 id 调用（或更下层）的边，深度 ≤ depth，置信度 ≥ minConfidence。
-
-// walkEdges 沿单向方向递归遍历 CALLS 边。
-//
-//	callers: edges 从 id 向上（e.target_id 为已到达节点）
-//	callees: edges 从 id 向下（e.source_id 为已到达节点）
-
-// GetImpact 计算变更影响范围：从 id 出发沿任意方向遍历，深度 ≤ depth（TD.md 决策 10）。
-
-// GetRoots 返回顶层入口节点（前端初始视图）：
-//   - main 入口函数（排除测试包生成的 main，其 id 形如 <pkg>.test:main）
-//   - HTTP 服务入口（serves_http 标记）
-//   - gRPC 服务入口（serves_grpc 标记）
-//   - 框架回调 struct：方法未被当前 module 其他文件调用（由框架调用）
-//
-// 约束：入口必须落在当前 module 内的文件（file_path 非空、非 _test.go、
-// 非仓库外路径）。
-
-// GetFrameworkStructs 返回"方法未被当前 module 其他文件调用"的 struct
-// （无跨文件 caller → 推测由框架通过注册/回调机制调用），标记为顶层。
-
-// shortStructID 压缩 struct ID 便于日志（保留 pkg 末段与类型名）。
-
-// shortMethodID 压缩方法 ID 便于日志（保留类型名与方法名）。
-
-// structIDFromMethod 将方法 ID（symbol:go:<pkg>:(T).M）还原为所属 struct ID
-// （symbol:go:<pkg>:T）。
-
-// Expand 返回节点的直接邻居（前端点击展开）：
-//   - 双向的 calls / implements / imports 边（含方向）
-//   - 邻居节点（去重）
-//
-// 上限 500 条边防止超大数据拖垮前端。
-
-// Counts 返回节点数与边数（构建报告用）。
-
 // Save 保存构建元数据。
 func (r *Repo) Save(meta *domain.BuildMeta) error {
 	logger := zap.L()

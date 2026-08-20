@@ -16,6 +16,7 @@
 //
 //	# 迁移 integration SelfContained 测试到单元测试（见 migrate.go 头注释）
 //	asttool migrate --pkg ssa internal/infrastructure/ssa/migrated_test integration/xxx_test.go
+//	asttool orphan <file...>                  列出孤立顶层注释（拆分残留）
 package main
 
 import (
@@ -35,6 +36,8 @@ func main() {
 		splitMain(os.Args[2:])
 	case "migrate":
 		migrateMain(os.Args[2:])
+	case "orphan":
+		orphanMain(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand %q\n", os.Args[1])
 		usage()

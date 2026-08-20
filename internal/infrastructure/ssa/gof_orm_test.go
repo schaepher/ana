@@ -120,12 +120,6 @@ func useOrm(o Orm, attrId int) {
 	}
 }
 
-// TestInferIfaceFilterFallback：Q205 兜底——无 spec 的业务接口方法
-// （go2o SelectAttrItem 形态：where 常量形参 + slice 返回）在调用点
-// 启发式识别：where 串列名 + 返回元素表名 → filter 节点 + 绑定值边。
-// 这补上"包裹方法"漏报：SelectAttrItem(where string) 内部 p.o.Select
-// 的 where 是形参（常量在调用点，不跨函数传播）。
-
 // TestSliceReturnNoDualEmit：Q205 双发射修复——slice 变量返回（go2o
 // SelectAttr：list := []T{}; p.o.Select(&list); return list）中，读边
 // 连 Alloc（#t0），returns 边连 UnOp load（#list）——同一逻辑值两个
@@ -194,11 +188,6 @@ func caller(o Orm) {
 		t.Errorf("双发射：读边 target=%s 但 returns source=%s（同一逻辑值两个节点）", readTarget, retSource)
 	}
 }
-
-// TestInferIfaceFilterSQLType：Q205 通用性——inferInterfaceFilter 的
-// vtype 不写死 gorm：where 串是完整 SQL（SELECT/FROM/WHERE）时标注
-// sql（业务接口方法如 SelectByQuery 封装返回 []T 的形态），列条件
-// 占位符形态（"col = $1"）保持 gorm。
 
 // TestBuiltinGofOrmSpecs：Q205 内置 spec 注册校验——gof orm.Orm 字符串
 // where 形态的 key 与参数（防止误删/参数漂移）。

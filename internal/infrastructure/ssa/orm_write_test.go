@@ -1,12 +1,5 @@
 package ssa
 
-// TestORMWriteVariableArg：② ORM 映射——实参为变量（非结构体字面量，
-// 调用点无字段级 Store，如 Create(row) / Delete(&X{})）时，仍须生成
-// "表.列" 虚拟节点（fieldValueOf 定位不到字段值时按类型展开）。
-// 通过 field-summary.yaml 的 orm_write 条目定义本地 ORM 写调用。
-
-// TestORMWriteEmptyLiteral：空字面量实参（Delete(&X{})）同样按类型展开。
-
 // TestORMChainUpdateColumnName：⑦ 链式 ORM——Model(&X{主键}).Where(...)
 // .Update("col", v) 字符串列名形态：表名溯源链式 Model 范围对象，
 // 列名取字符串实参（此前仅结构体实参可映射，该形态零节点）。

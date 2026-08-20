@@ -25,34 +25,34 @@ const (
 	KindObject    EntityKind = "object" // struct 实例化产生的对象
 
 	// 字段追溯（SSA 适配器，field_trace.md §4.1）
-	KindFieldAccess    EntityKind = "field_access"    // 结构体字段访问（实例槽）
-	KindSSAValue       EntityKind = "ssa_value"       // SSA 值（参数/局部/Phi/Alloc 等）
+	KindFieldAccess     EntityKind = "field_access"     // 结构体字段访问（实例槽）
+	KindSSAValue        EntityKind = "ssa_value"        // SSA 值（参数/局部/Phi/Alloc 等）
 	KindExternalSummary EntityKind = "external_summary" // 外部库摘要函数
-	KindParameter      EntityKind = "parameter"       // 函数签名参数
-	KindReceiver       EntityKind = "receiver"        // 方法接收者（与普通参数区分展示）
-	KindResult         EntityKind = "result"          // 函数/方法返回值
-	KindGrpcService    EntityKind = "grpc_service"    // gRPC 服务标识（模块间调用，field_trace.md §18）
-	KindHTTPRoute      EntityKind = "http_route"      // HTTP 路由（人工路由表 routes.yaml，§18.7）
+	KindParameter       EntityKind = "parameter"        // 函数签名参数
+	KindReceiver        EntityKind = "receiver"         // 方法接收者（与普通参数区分展示）
+	KindResult          EntityKind = "result"           // 函数/方法返回值
+	KindGrpcService     EntityKind = "grpc_service"     // gRPC 服务标识（模块间调用，field_trace.md §18）
+	KindHTTPRoute       EntityKind = "http_route"       // HTTP 路由（人工路由表 routes.yaml，§18.7）
 )
 
 // FactKind 事实（关系）种类，对应 edges.kind 列。
 type FactKind string
 
 const (
-	FactCalls       FactKind = "calls"
-	FactImports     FactKind = "imports"
-	FactDependsOn   FactKind = "depends_on"
-	FactImplements  FactKind = "implements"
-	FactModifiedBy  FactKind = "modified_by"
-	FactReferences  FactKind = "references"
-	FactDataFlowsTo FactKind = "data_flows_to"
-	FactTests       FactKind = "tests"
-	FactInitializes FactKind = "initializes" // struct 实例化（&T{} / T{} / new(T)）
-	FactUses        FactKind = "uses"        // 对象的方法被调用（使用处）
-	FactPassesTo    FactKind = "passes_to"   // 对象被传给其他函数（去处）
+	FactCalls        FactKind = "calls"
+	FactImports      FactKind = "imports"
+	FactDependsOn    FactKind = "depends_on"
+	FactImplements   FactKind = "implements"
+	FactModifiedBy   FactKind = "modified_by"
+	FactReferences   FactKind = "references"
+	FactDataFlowsTo  FactKind = "data_flows_to"
+	FactTests        FactKind = "tests"
+	FactInitializes  FactKind = "initializes"   // struct 实例化（&T{} / T{} / new(T)）
+	FactUses         FactKind = "uses"          // 对象的方法被调用（使用处）
+	FactPassesTo     FactKind = "passes_to"     // 对象被传给其他函数（去处）
 	FactPassesResult FactKind = "passes_result" // 接收者持有返回参数（A(B(C)) 嵌套调用）
-	FactOfType      FactKind = "of_type"      // 对象 → 其 struct 类型
-	FactHasMethod   FactKind = "has_method"   // receiver 类型 → 其方法（方法线）
+	FactOfType       FactKind = "of_type"       // 对象 → 其 struct 类型
+	FactHasMethod    FactKind = "has_method"    // receiver 类型 → 其方法（方法线）
 
 	// 字段追溯（SSA 适配器，field_trace.md §4.2）
 	FactArgument      FactKind = "argument"       // 实参节点 → 形参节点（跨过程）

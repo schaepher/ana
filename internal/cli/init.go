@@ -5,9 +5,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"runtime"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 

@@ -51,15 +51,6 @@ func buildRegHits(regs dispatchReg, prog *ssa.Program) regHits {
 	return out
 }
 
-// emitDispatches 发射全部 dispatch_to 边：
-//  1. 收集模块内 MakeInterface 注册点
-//  2. 遍历模块内函数的所有动态接口方法调用（cc.Method != nil）
-//  3. 候选 = 注册点命中（register 0.9）∪ 枚举实现者（enum 0.7）
-//  4. 接口类型节点 → 候选实现方法（模块内）→ dispatch_to 边
-
-// implMethodsFor 枚举模块内实现接口方法的具名类型方法（值与指针方法集
-// 都查）；接口自身（Implements 自反）排除。⑮ 动态派发追踪复用。
-
 // dispatchCandidate 单个候选实现。
 type dispatchCandidate struct {
 	fn         *types.Func

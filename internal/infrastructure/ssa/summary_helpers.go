@@ -7,10 +7,6 @@ import (
 	"golang.org/x/tools/go/ssa"
 )
 
-// extractWhereCols 从 SQL 语句剩余部分提取 WHERE 子句的过滤列
-// （`列 = ?` 序列，值实参按 ? 顺序映射——表关联分析的数据基础）。
-// 支持 a.y = ? 表前缀（去前缀）；WHERE 缺失返回 nil。
-
 // derefSlice 解切片（*[]Session → Session；GORM 读对象形态）。
 func derefSlice(t types.Type) types.Type {
 	if p, ok := t.(*types.Pointer); ok {
@@ -82,10 +78,9 @@ func snakeCase(s string) string {
 	return sb.String()
 }
 
-// whereColsOf 从 where 条件串提取列名：AND/OR 拆分 + 占位符剥离
-// （IN (?) 先处理；其余形态截到最后一个 ? 再 TrimRight 运算符——
-// 兼容 " = ?" / "=?" / " <?" / " LIKE ?" 等有无空格写法，以及多行
-// 条件串（AND/OR 前后为换行/制表符——pay_order 实测整串未被拆分）。
+// chainScopeObject 溯源链式调用的范围对象（⑦）：Update/Updates 的 receiver
+// 沿定义链回溯中间调用（Where/Model 等），找到实参为结构体对象的调用
+// （如 Model(&Session{ID:...})）返回其类型。链上游无结构体实参返回 nil。
 
 func chainScopeObject(recv ssa.Value) *types.Named {
 	c, ok := recv.(*ssa.Call)
@@ -106,6 +101,10 @@ func chainScopeObject(recv ssa.Value) *types.Named {
 	}
 	return nil
 }
+
+// fieldValueOf 按字段索引取对象值的字段读取（对象为 Alloc/寄存器时经
+// FieldAddr 或 Field 指令；无法定位时返回 nil——字段值无 SSA 实体则
+// 跳过该列）。
 
 func fieldValueOf(obj ssa.Value, idx int) ssa.Value {
 	refs := obj.Referrers()
@@ -134,6 +133,14 @@ func fieldValueOf(obj ssa.Value, idx int) ssa.Value {
 	}
 	return nil
 }
+
+// entityTypeOf 取接口摘要的实体类型：泛型接口实例化（Repository[M]）的
+// 类型实参优先；fallback 按 kind 从对象实参/返回值类型取。
+// tableNameOf 实体类型表名：TableName() 方法（SSA Return 常量）优先，
+// fallback snakeCase(类型名)（GORM 默认命名）。
+// pkColumnOf 主键列名：字段 pk:"yes" tag（gorm column 优先）→ 该字段列名；
+// 无标记时 fallback "id"。
+// gormColumnOf 提取 gorm:"column:x" 的列名（无则 snake_case 字段名）。
 
 func entityTypeOf(cc *ssa.CallCommon, spec summarySpec) types.Type {
 	t := cc.Value.Type()

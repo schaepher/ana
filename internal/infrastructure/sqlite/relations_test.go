@@ -149,11 +149,11 @@ func TestGetAllTableRelations(t *testing.T) {
 		t.Fatalf("Save build: %v", err)
 	}
 
-		// Q228：全量查询要求计算完成——先预计算
+	// Q228：全量查询要求计算完成——先预计算
 	if err := r.PrecomputeAllRelations(nil); err != nil {
 		t.Fatalf("precompute: %v", err)
 	}
-rels, err := r.GetAllTableRelations("")
+	rels, err := r.GetAllTableRelations("")
 	if err != nil {
 		t.Fatalf("GetAllTableRelations: %v", err)
 	}

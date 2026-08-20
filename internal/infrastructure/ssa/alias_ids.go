@@ -12,6 +12,12 @@ import (
 	"golang.org/x/tools/go/ssa"
 )
 
+// valueNodeID 生成并发射值节点的 canonical ID（funcID#slot，与 emitValue
+// 一致：shadowing 同名附加 @行号）。alias 边 source 用（B1：此前
+// funcIDOfValue 返回函数 ID，alias 边全部错挂在函数节点上——值节点
+// 看不到别名关系）。值节点可能未被 emitValue 发射（如 Field 指令的
+// 基值），此处保证端点存在（FK 约束）。
+
 func (p *aliasPass) valueNodeID(v ssa.Value) (domain.CanonicalID, bool) {
 	// Q178：参数/接收者统一用签名参数节点（与 emitValue 一致）——此前
 	// alias 对参数生成 ssa_value 副本（funcID#m），与签名参数节点
@@ -83,6 +89,9 @@ func (p *aliasPass) valueNodeID(v ssa.Value) (domain.CanonicalID, bool) {
 	return id, true
 }
 
+// objectIDOf 确保对象创建点（alloc / MakeMap / MakeSlice）的 ssa_value
+// 节点发射（Q7：被别名引用的对象也发射）。
+
 func (p *aliasPass) objectIDOf(obj ssa.Value) (domain.CanonicalID, bool) {
 	if id, ok := p.allocIDs[obj]; ok {
 		return id, true
@@ -128,6 +137,8 @@ func (p *aliasPass) objectIDOf(obj ssa.Value) (domain.CanonicalID, bool) {
 	}
 	return id, true
 }
+
+// fieldInfoFor 计算写字段指令的类型限定路径（复用 fieldInfo 语义）。
 
 func (p *aliasPass) fieldInfoFor(fa *ssa.FieldAddr) (fieldInfo, bool) {
 	named, st := derefStruct(fa.X.Type())
@@ -184,6 +195,8 @@ func (p *aliasPass) funcIDOf(fn *ssa.Function) (domain.CanonicalID, bool) {
 	p.funcIDs[fn] = id
 	return id, true
 }
+
+// elementWritePath 生成元素写路径（间接写条目用，Q5 记号）。
 
 func (p *aliasPass) elementWritePath(container, key ssa.Value) (string, bool) {
 	full := ""

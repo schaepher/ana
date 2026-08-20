@@ -262,21 +262,3 @@ func (p *aliasPass) emitAliasEdges(fn *ssa.Function, v ssa.Value) {
 		}
 	}
 }
-
-// valueNodeID 生成并发射值节点的 canonical ID（funcID#slot，与 emitValue
-// 一致：shadowing 同名附加 @行号）。alias 边 source 用（B1：此前
-// funcIDOfValue 返回函数 ID，alias 边全部错挂在函数节点上——值节点
-// 看不到别名关系）。值节点可能未被 emitValue 发射（如 Field 指令的
-// 基值），此处保证端点存在（FK 约束）。
-
-// objectIDOf 确保对象创建点（alloc / MakeMap / MakeSlice）的 ssa_value
-// 节点发射（Q7：被别名引用的对象也发射）。
-
-// fieldInfoFor 计算写字段指令的类型限定路径（复用 fieldInfo 语义）。
-
-// sourceLine 读仓库文件指定行的源码（去掉缩进，供 code_snippet 展示）。
-// 文件内容按路径缓存，避免每个调用点重复读盘（与 fieldExtractor.sourceLine 一致）。
-
-// funcIDOf 函数 → canonical ID（缓存）。
-
-// elementWritePath 生成元素写路径（间接写条目用，Q5 记号）。

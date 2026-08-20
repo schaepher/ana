@@ -1,8 +1,8 @@
 package cli
 
 import (
-	"os"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 

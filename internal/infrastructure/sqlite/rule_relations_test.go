@@ -93,7 +93,7 @@ func TestRuleRelationModePattern(t *testing.T) {
 }
 
 // TestRuleRelationExplicitAndValidation：显式规则只生成单对；目标表/
-	// 列不存在时不生成（幽灵线防护）。
+// 列不存在时不生成（幽灵线防护）。
 func TestRuleRelationExplicitAndValidation(t *testing.T) {
 	r := newTestRepo(t)
 	ruleFixture(t, r)

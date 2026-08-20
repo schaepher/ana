@@ -2,6 +2,8 @@ package sqlite
 
 import "github.com/schaepher/codeintel/internal/domain"
 
+// isDataKind 是否为 BFS 数据流边。
+
 func isDataKind(kind string) bool {
 	switch kind {
 	case "data_flows_to", "argument", "returns", "summary_io", "alias", "phi_operand":
@@ -16,6 +18,12 @@ func isDataKind(kind string) bool {
 func isDirectedKind(kind string) bool {
 	return kind == "argument" || kind == "returns"
 }
+
+// filterFKNoise Q159 外键语义过滤（独立函数便于单测）：
+// id→id 一律丢弃（两表都不会拿各自自增主键互查）；同目标列多起点时
+// 外键形态列（xxx_id）优先——主键 id 起点是对象值共享桥接噪音；保留
+// 形态：A.xxx_id → B.id（外键查主键）、A.id → B.xxx_id（主键被外键引用
+// 查询）、A.xxx_id → B.xxx_id（业务关联键）。
 
 func filterFKNoise(all []*domain.TableRelation) []*domain.TableRelation {
 	byTarget := map[string][]*domain.TableRelation{}

@@ -1,11 +1,5 @@
 package cli
 
-// outputOpts 查询输出选项（--json / --compact，Q96）。
-
-// encodeJSON 输出结构化 JSON（stdout 唯一内容）。
-
-// cmdQuery 实现 `codeintel query ...`。
-
 // queryFlags 是 query 子命令的手动解析结果。
 type queryFlags struct {
 	repoPath         string
@@ -32,45 +26,6 @@ type queryFlags struct {
 	readMaxHops      int      // relations --read-max-hops：间接读跳数上限（0=不限制，默认 4）
 	memory           string   // relations --memory：full/sql（默认 auto 按规模，P0④）
 }
-
-// parseQueryFlags 手动解析 query 子命令的参数，支持 flags 与位置参数任意顺序。
-
-// queryFields 输出函数的字段读写摘要（S1，field_trace.md §6.2），
-// 按 direct_read / direct_write / indirect_write 分组。
-
-// queryTraceDir 输出字段追溯路径（S2/S3，field_trace.md §6.3/6.4）。
-// 树形渲染：缩进 + 边类型 + 节点名 + (行号)（Q28）；--compact 去缩进。
-
-// lastEdgeKind 取路径上最后一段边类型（进入当前节点的边）。
-
-// sinceFlag 函数/方法节点的 --since 标注（§17.2）：[new]/[mod]/空。
-
-// sinceMarks 对 ID 列表批量计算 --since 标注（callers/callees 邻居用）。
-
-// querySymbol 输出符号摘要（对齐 TD.md 7.1 explore_symbol 摘要层）。
-
-// queryGraph 输出 callers/callees/impact 查询结果。
-
-// factEndpointIDs 提取边的端点 ID 列表（--since 标注用）。
-
-// factIDs 提取边的端点 ID 列表（endpoint=source/target，JSON 输出用）。
-
-// nodeBriefs 提取节点摘要（JSON 输出用）。
-
-// printFacts 打印边列表；endpoint 为 "source" 时显示边左端（调用者场景），
-// 否则显示右端（被调用者场景）。
-
-// shortID 压缩 canonical ID 显示：保留 pkg 末段与符号名。
-
-// printNodes 打印节点列表。
-
-// queryValueTrace 输出数据值在整条链路上的处理过程，按函数上下文分组
-// （field_trace.md §14.2 数据值全链追踪）。
-
-// shortFuncName 从函数 canonical ID 提取短名（symbol:go:<pkg>:<name> → <name>）。
-
-// querySummary 跨层摘要（Q100）：字段生命周期主链
-// （入口 → 计算 → 写入 → 消费），每步带 file:line。
 
 // dispatchJSON 候选派发标注（Q157 P1：value-trace --json 输出）。
 // edgeCandidateJSON 边级候选标注（Q161：动态 argument/returns 边元数据）。

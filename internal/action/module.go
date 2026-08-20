@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"github.com/schaepher/codeintel/internal/domain"
-	"gopkg.in/yaml.v3"
 	"go.uber.org/zap"
+	"gopkg.in/yaml.v3"
 )
 
 // moduleConfig modules.yaml（field_trace.md §18.1）：包路径前缀 → 模块名。

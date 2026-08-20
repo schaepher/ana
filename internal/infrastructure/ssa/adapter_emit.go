@@ -150,13 +150,9 @@ func mergeFuncData(fdMu *sync.Mutex, data map[domain.CanonicalID]*funcData,
 	d.indirectWrites = append(d.indirectWrites, fd.indirectWrites...)
 }
 
-// emitSignatureNodes 发射函数/方法签名的参数与返回节点（parameter / result）
-// 及 has_param / has_result 边——签名结构展示，前端展开函数节点时可见。
-// slot：参数 #param.<name>（接收者 #param.recv.<name> 防重名），
-// 返回 #result（多返回 #result.<idx>）。
-
 // funcIdentity 从 types.Func 生成 canonical ID / kind / name，与 AST 适配器 fnID 一致：
 // 方法统一 (T).method（值/指针接收者不区分），匿名结构体上的方法返回空。
+
 func funcIdentity(fn *types.Func) (domain.CanonicalID, domain.EntityKind, string) {
 	logger := zap.L()
 	logger.Debug("enter funcIdentity")

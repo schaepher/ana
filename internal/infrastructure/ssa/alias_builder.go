@@ -67,54 +67,6 @@ type writeInstr struct {
 	pos       token.Pos
 }
 
-// computeAliases 执行轻量别名分析，返回间接写排除集（emitSummaries 消费）。
-
-// underLimit 每函数 alloc 上限检查（Q10）。
-
-// collectFieldValues 收集参与字段访问的值（alias 边范围，Q53 精神）。
-
-// mayOf 过程内值 → alloc 集（跨函数注入经 paramMay/callMay）。
-
-// mayOfDepth 递归实现，visiting 防环（phi 环 / 互赋值 `a:=b;b:=a`），
-// 深度限制防栈溢出；环截断返回空（保守：excluded 判定对空集走 fallback）。
-
-// clearMayCache 清空函数的 may 缓存（保留顶层条目：mayOfDepth 直接对
-// p.may[id][v] 赋值，删条目会让 p.may[id] 变 nil 导致 panic——S1 修复
-// 踩过）。nil 安全。
-
-// mergeMay 合并 src 到 dst（dst 为 nil 时创建），返回是否有新增。
-
-// processCall 处理单个调用点：判定排除集并发射 alias 边。
-
-// callArgNames 提取调用点非 const 实参的源码变量名（Q90 回连展示；
-// Alloc 从标识符索引恢复，其余回退 SSA 名）。
-
-// writeInfoOf 惰性构建被调函数的写指令静态信息（字段写 faBase + 元素写列表）。
-// 语义与原 processCall 内联扫描一致；每个被调函数只扫描一次，
-// 多个调用点共享缓存（避免 O(调用点×被调函数大小) 的重复遍历）。
-
-// returnOperandsCached 惰性缓存函数的 Return 指令操作数（returns 传播复用）。
-
-// emitAliasEdges 发射 值 → alloc 的 ALIAS 边（may，conf 0.8）。
-
-// valueNodeID 生成并发射值节点的 canonical ID（funcID#slot，与 emitValue
-// 一致：shadowing 同名附加 @行号）。alias 边 source 用（B1：此前
-// funcIDOfValue 返回函数 ID，alias 边全部错挂在函数节点上——值节点
-// 看不到别名关系）。值节点可能未被 emitValue 发射（如 Field 指令的
-// 基值），此处保证端点存在（FK 约束）。
-
-// objectIDOf 确保对象创建点（alloc / MakeMap / MakeSlice）的 ssa_value
-// 节点发射（Q7：被别名引用的对象也发射）。
-
-// fieldInfoFor 计算写字段指令的类型限定路径（复用 fieldInfo 语义）。
-
-// sourceLine 读仓库文件指定行的源码（去掉缩进，供 code_snippet 展示）。
-// 文件内容按路径缓存，避免每个调用点重复读盘（与 fieldExtractor.sourceLine 一致）。
-
-// funcIDOf 函数 → canonical ID（缓存）。
-
-// elementWritePath 生成元素写路径（间接写条目用，Q5 记号）。
-
 // overlapMay 判断两个 may 集是否有交集。
 func overlapMay(a, b map[ssa.Value]bool) bool {
 	for x := range a {

@@ -17,6 +17,7 @@ type gitDiffInfo struct {
 //   - deleted file → 跳过
 //   - rename（similarity index）→ 按修改处理（新路径）
 //   - @@ -a,b +c,d @@ → + 侧新增行号（c..c+d-1，跳过上下文行）
+//
 // 返回：新增文件集合 + 每文件新增行号集合。
 func parseGitDiff(out string) *gitDiffInfo {
 	info := &gitDiffInfo{

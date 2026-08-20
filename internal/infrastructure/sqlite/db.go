@@ -124,7 +124,7 @@ CREATE INDEX IF NOT EXISTS idx_relcand_build_from ON relation_candidates(build_i
 // （CREATE TABLE IF NOT EXISTS，打开时始终执行，旧库自动获得配置表，
 // 不要求 clean 重建）；ResetGraphTables 不 DROP（clean/reindex 保留）。
 // 用户连线规则：外键形态列（merchant_id 等）值来自参数、无值流验证时，
-// 由用户声明规则连线。from_table='' 为模式规则（所有含 from_col 列的
+// 由用户声明规则连线。from_table=” 为模式规则（所有含 from_col 列的
 // 表 → to_table.to_col）；否则为显式列对。生效时校验目标表/列存在。
 const configSchema = `
 CREATE TABLE IF NOT EXISTS relation_rules (

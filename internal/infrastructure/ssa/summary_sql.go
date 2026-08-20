@@ -239,15 +239,10 @@ func callbackClosureParam(cc *ssa.CallCommon) ssa.Value {
 	return nil
 }
 
-// parseSQLStmt 从 SQL 语句提取表名、列名与 WHERE 过滤列（Q97 启发式，
-// 不做完整 SQL 解析）：
-//
-//	INSERT INTO t(a, b) VALUES(?, ?)  → t, [a b], nil
-//	UPDATE t SET a=?, b=?             → t, [a b], nil
-//	DELETE FROM t                     → t, [], nil
-//	SELECT a, b FROM t                → t, [a b], nil（P0-2 读路径）
-//	SELECT * FROM t                   → t, [], nil（表级）
-//	... WHERE y = ?                   → ..., [], [y]（表关联：值实参按 ? 顺序映射）
+// whereColsOf 从 where 条件串提取列名：AND/OR 拆分 + 占位符剥离
+// （IN (?) 先处理；其余形态截到最后一个 ? 再 TrimRight 运算符——
+// 兼容 " = ?" / "=?" / " <?" / " LIKE ?" 等有无空格写法，以及多行
+// 条件串（AND/OR 前后为换行/制表符——pay_order 实测整串未被拆分）。
 
 func whereColsOf(where string) []string {
 	var cols []string
@@ -258,6 +253,11 @@ func whereColsOf(where string) []string {
 		if j := strings.Index(up, stop); j >= 0 {
 			where = where[:j]
 			up = strings.ToUpper(where)
+			// whereColsOf 从 where 条件串提取列名：AND/OR 拆分 + 占位符剥离
+			// （IN (?) 先处理；其余形态截到最后一个 ? 再 TrimRight 运算符——
+			// 兼容 " = ?" / "=?" / " <?" / " LIKE ?" 等有无空格写法，以及多行
+			// 条件串（AND/OR 前后为换行/制表符——pay_order 实测整串未被拆分）。
+
 		}
 	}
 	// Q220：AND/OR 拆分大小写不敏感（此前区分大小写——go2o 的 lowercase

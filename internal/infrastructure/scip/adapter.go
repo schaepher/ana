@@ -20,9 +20,9 @@ import (
 
 	"github.com/schaepher/codeintel/internal/canonicalizer"
 	"github.com/schaepher/codeintel/internal/domain"
-	"golang.org/x/tools/go/packages"
 	"github.com/schaepher/codeintel/internal/logging"
 	"go.uber.org/zap"
+	"golang.org/x/tools/go/packages"
 )
 
 // Adapter 是 SCIP 索引适配器。

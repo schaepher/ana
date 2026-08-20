@@ -97,6 +97,9 @@ func (a *Actions) Trace(p TraceParams) (*domain.CodeEntity, []*domain.TraceRow, 
 	rows, err := a.repo.TraceBackward(p.Field, n.ID, p.MaxDepth)
 	return n, rows, err
 }
+
+// ValueTrace 数据值全链追踪（field_trace.md §14.2）。
+
 func (a *Actions) ValueTrace(nodeID domain.CanonicalID, maxDepth int, minConf float64, includeContainer bool) ([]*domain.TraceRow, error) {
 	logger := zap.L()
 	logger.Info("enter (Actions).ValueTrace", zap.String("node_id", string(nodeID)), zap.Int("max_depth", maxDepth), zap.Float64("min_conf", minConf), zap.Bool("include_container", includeContainer))

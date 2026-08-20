@@ -266,12 +266,3 @@ func TestGetSymbolByNameExcludesFieldTrace(t *testing.T) {
 // 修改后（行号/代码片段变化）fields 展示陈旧数据。改为 OR REPLACE
 // 覆盖；行残留（函数删除）由 FK ON DELETE CASCADE 保证（go2o 实测
 // 0 残留）。
-
-// TestSummaryReplaceUpdatesStale：同 UNIQUE 键（function+access+field）
-// 新内容插入 → 旧行被覆盖（行号更新）。
-
-// TestOriginsReplaceIdempotent：origins 的 UNIQUE 含全部业务列（含
-// call_line——不同调用点本来就是多行，设计语义），无内容陈旧问题；
-// REPLACE 保证同键重复写入幂等（不产生重复行）。
-
-// nodesForSummaryTest 摘要测试用函数节点（FK 端点必须存在）。

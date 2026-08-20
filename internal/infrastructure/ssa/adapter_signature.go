@@ -9,6 +9,11 @@ import (
 	"golang.org/x/tools/go/ssa"
 )
 
+// emitSignatureNodes 发射函数/方法签名的参数与返回节点（parameter / result）
+// 及 has_param / has_result 边——签名结构展示，前端展开函数节点时可见。
+// slot：参数 #param.<name>（接收者 #param.recv.<name> 防重名），
+// 返回 #result（多返回 #result.<idx>）。
+
 func emitSignatureNodes(fn *ssa.Function, funcID domain.CanonicalID, pos token.Position,
 	filePath string, emit domain.EmitFunc) error {
 	logger := zap.L()

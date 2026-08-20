@@ -202,7 +202,7 @@ func (r *Repo) saveRelationCandidates(table string, rels []*domain.TableRelation
 }
 
 // rebuildRelationCandidates --all 全量重建缓存：清空该 build_id 全部行，
-// 写全量 marker（from_table=''，loadAllRelationCandidates 完整性判定用）、
+// 写全量 marker（from_table=”，loadAllRelationCandidates 完整性判定用）、
 // 每张表写 marker（含无关联表），再写全部真实关联行。
 func (r *Repo) rebuildRelationCandidates(rels []*domain.TableRelation, tables []string) {
 	buildID := r.cacheKey()

@@ -6,9 +6,6 @@ import (
 	"github.com/schaepher/codeintel/internal/domain"
 )
 
-// TestLocalObjectTraceSelfContained：⑭ 局部对象追踪——DAO 返回对象 →
-// 局部变量 → helper 传参（起点须纳入与目标字段同类型的 local/phi 值）。
-
 // TestInterfaceCallTraceSelfContained：⑮ 接口动态派发——接口方法调用
 // 传参（无静态 callee）须经候选实现建立 argument 边，追踪进入实现。
 func TestInterfaceCallTraceSelfContained(t *testing.T) {
@@ -81,16 +78,6 @@ func main() {}
 		t.Errorf("全局对象传参未连到 helper2 写入，output=%v", rows)
 	}
 }
-
-// TestPhiObjectTraceSelfContained：举一反三 A2——phi 值传参
-// （if 分支各自赋值后传 helper）。
-
-// TestFuncValueCallTraceSelfContained：举一反三 B4——函数值调用
-// （f := getHandler(); f(record)——f 来自返回值，调用点无静态 callee）。
-
-// TestInterfaceReturnTraceSelfContained：举一反三——动态调用返回值贯通：
-// err := w.Write(&Record{})——value-trace 从返回值节点应连到候选实现的
-// Return 值（⑮ 只建了 argument，returns 边待验证）。
 
 // TestClosureFieldTraceSelfContained：继续查——闭包内字段写入节点生成
 // （闭包字段访问归入外层函数，func_id=外层——追踪可用性验证）。
@@ -171,11 +158,6 @@ func main() {}
 		t.Errorf("map 元素传参未连到 helper5 写入，output=%v", rows)
 	}
 }
-
-// TestCallbackClosureArgTraceSelfContained：继续查——callback 模式
-// （apply(rec, func(r){r.FinalFee=...})——闭包字面量作为实参传入后在被
-// 调函数内调用）：预期为已知限制（函数值参数跨函数无法静态解析），
-// 此处验证不 panic 且不误连。
 
 // TestTraceForwardStartFilteredSelfContained：B2 集成固化——trace-forward
 // 起点须与目标字段所属结构体类型匹配；无关类型参数与包级全局变量

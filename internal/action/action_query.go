@@ -59,8 +59,8 @@ func (a *Actions) FunctionFields(input string) (*domain.CodeEntity, []*domain.Fu
 	return n, rows, nil
 }
 
-// ValueTrace 数据值全链追踪（field_trace.md §14.2）。
 // Table 表级数据流聚合（query table）：表名 → 列虚拟节点 + 写入方。
+
 func (a *Actions) Table(table string) ([]*domain.TableColumn, error) {
 	logger := zap.L()
 	logger.Info("enter (Actions).Table", zap.String("table", table))

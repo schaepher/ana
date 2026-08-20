@@ -224,6 +224,9 @@ func serviceImplNode(pkg *packages.Package, call *ast.CallExpr, repo *domain.Rep
 	}
 }
 
+// markServiceEntry 服务入口标记：net/http / grpc 调用、HTTP handler
+// 注册、gRPC RegisterXxxServer → caller 节点带 serves_http/serves_grpc。
+
 func (ctx *fileCtx) markServiceEntry(call *ast.CallExpr, callee *types.Func,
 	caller *types.Func, callerID domain.CanonicalID, callerKind domain.EntityKind) {
 	pkg := ctx.pkg

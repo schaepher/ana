@@ -11,9 +11,9 @@ import (
 	"strings"
 
 	"github.com/schaepher/codeintel/internal/domain"
-	"golang.org/x/tools/go/packages"
 	"github.com/schaepher/codeintel/internal/logging"
 	"go.uber.org/zap"
+	"golang.org/x/tools/go/packages"
 )
 
 // Adapter 是 Git 历史适配器。

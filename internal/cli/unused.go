@@ -54,14 +54,14 @@ func unusedJSON(rep *action.UnusedReport) map[string]any {
 	u := make([]map[string]any, 0, len(rep.Unused))
 	for _, x := range rep.Unused {
 		u = append(u, map[string]any{
-			"id":        string(x.ID),
-			"name":      x.Name,
-			"kind":      string(x.Kind),
-			"file":      x.FilePath,
-			"line":      x.LineStart,
-			"exported":  x.Exported,
+			"id":         string(x.ID),
+			"name":       x.Name,
+			"kind":       string(x.Kind),
+			"file":       x.FilePath,
+			"line":       x.LineStart,
+			"exported":   x.Exported,
 			"referenced": x.Referenced,
-			"since":     x.SinceMark,
+			"since":      x.SinceMark,
 		})
 	}
 	c := make([][]map[string]any, 0, len(rep.Chains))
@@ -83,7 +83,7 @@ func unusedJSON(rep *action.UnusedReport) map[string]any {
 	}
 	if rep.Since != nil {
 		out["since"] = map[string]any{
-			"ref": rep.Since.Ref,
+			"ref":           rep.Since.Ref,
 			"new_functions": len(rep.Unused),
 		}
 	}

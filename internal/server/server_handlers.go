@@ -85,9 +85,9 @@ func (s *Server) handleER(w http.ResponseWriter, r *http.Request) {
 			tables, terr := s.acts.ERTables()
 			if perr == nil && terr == nil {
 				writeJSON(w, map[string]any{
-					"tables":     tables.Tables,
-					"relations":  nil,
-					"progress":   prog,
+					"tables":    tables.Tables,
+					"relations": nil,
+					"progress":  prog,
 				})
 				return
 			}

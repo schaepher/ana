@@ -198,22 +198,3 @@ func analyzerMarkerPath(repoDir string) string {
 
 // AnalyzerMarkerPath 导出 marker 路径（orchestrator 测试用）。
 func AnalyzerMarkerPath(repoDir string) string { return analyzerMarkerPath(repoDir) }
-
-// LoadAnalyzerMarker 读全局 marker；无 marker 返回空。
-
-// SaveAnalyzerMarker 写全局 marker（目录自动创建；失败返回错误——调用方
-// 决定是否阻塞）。
-
-// pkgCachePath 缓存文件路径（.codeintel/cache/<sha256(pkgPath)>.json）。
-
-// pkgContentHash 包源码内容 hash（CompiledGoFiles 拼接 sha256）。
-
-// pkgCacheKeyHash Q213：本包缓存键 = 本包源码 hash + 直接依赖包源码
-// hash 列表（按包路径排序拼接保证确定性）。depMemo 复用依赖包 hash
-// （每包重读依赖文件是 O(包数×依赖文件总量)，memo 后降为每包一次）。
-
-// loadPkgCache 读缓存并校验 hash；未命中（缺文件/版本/analyzer/hash 不符）
-// 返回 nil。Q181：Analyzer 是二进制内容 hash——分析逻辑变化后旧缓存
-// 自动失效（确定机制，无需手动清理）。
-
-// savePkgCache 写缓存（目录自动创建；写失败不阻塞构建——缓存是加速非必需）。

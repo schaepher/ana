@@ -137,7 +137,7 @@ func TestDeleteFilesBatching(t *testing.T) {
 	for i := 0; i < n; i++ {
 		p := "f_" + string(rune('a'+i%26)) + ".go"
 		nodes = append(nodes, &domain.CodeEntity{
-			ID: domain.CanonicalID("symbol:go:example.com/m:node" + string(rune('a'+i%26)) + string(rune('0'+i/26))),
+			ID:   domain.CanonicalID("symbol:go:example.com/m:node" + string(rune('a'+i%26)) + string(rune('0'+i/26))),
 			Kind: domain.KindFunction, Name: "f", FilePath: p,
 		})
 		paths = append(paths, p)

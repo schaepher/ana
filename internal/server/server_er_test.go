@@ -271,16 +271,3 @@ func TestHandleERSkipRelations(t *testing.T) {
 		t.Errorf("正常请求应返回 relations")
 	}
 }
-
-// TestHandleERTableParam：Q210 ?table=X 只返回该表相关 relations
-// （单表 BFS + 单表缓存）——双击展开按需加载，不全量。
-
-// TestHandleRules：/api/rules——ER 页面配置用户连线规则（Q226）。
-// GET 列表 / POST 添加（JSON：from_col/to_table 等）/ DELETE 删除；
-// 添加后 /api/er 响应合并规则生成的 fk 线（读取期合并，无需 reindex）。
-
-// post 发送 JSON POST 请求（测试 helper）。
-
-// newReq 构造请求（测试 helper）。
-
-// doReq 执行请求并解码 JSON（测试 helper）。

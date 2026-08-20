@@ -37,6 +37,17 @@ func extractWhereCols(rest string) []string {
 	}
 	return out
 }
+
+// parseSQLStmt 从 SQL 语句提取表名、列名与 WHERE 过滤列（Q97 启发式，
+// 不做完整 SQL 解析）：
+//
+//	INSERT INTO t(a, b) VALUES(?, ?)  → t, [a b], nil
+//	UPDATE t SET a=?, b=?             → t, [a b], nil
+//	DELETE FROM t                     → t, [], nil
+//	SELECT a, b FROM t                → t, [a b], nil（P0-2 读路径）
+//	SELECT * FROM t                   → t, [], nil（表级）
+//	... WHERE y = ?                   → ..., [], [y]（表关联：值实参按 ? 顺序映射）
+
 func parseSQLStmt(sql string) (table string, cols []string, whereCols []string) {
 	upper := strings.ToUpper(sql)
 	rest := ""
