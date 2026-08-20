@@ -291,12 +291,3 @@ func (ext *fieldExtractor) emitValue(v ssa.Value) (domain.CanonicalID, error) {
 	}
 	return id, ext.emit(domain.Item{Node: n})
 }
-
-// lineOf 值的源码行号（无 Pos / 0 行返回 0——合成值 phi、Const 等）。
-func lineOf(ext *fieldExtractor, v ssa.Value) int {
-	line := ext.prog.Fset.PositionFor(v.Pos(), false).Line
-	if line < 0 {
-		return 0
-	}
-	return line
-}

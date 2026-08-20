@@ -72,6 +72,7 @@
 59. [全量 relations 计算进度协议（Q228，2026-08-19）](#59-全量-relations-计算进度协议q2282026-08-19)
 60. [ER 线点击聚焦（Q229，2026-08-19）](#60-er-线点击聚焦q2292026-08-19)
 61. [ER 字段/表级 checkbox 控制连线（Q230，2026-08-19）](#61-er-字段表级-checkbox-控制连线q2302026-08-19)
+62. [大文件拆分（Q231，2026-08-20）](#62-大文件拆分q2312026-08-20)
 ---
 
 ## 1. 项目背景与目标
@@ -2595,4 +2596,44 @@ restored=4），e2e-fixture 38 项全绿。
 
 ---
 
-**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q230，逐 Q 编号 + 日期）。
+## 62. 大文件拆分（Q231，2026-08-20）
+
+**需求**：检查超过 300 行的文件，用 scripts/asttool（analyze/split）
+协助拆分——Q161 的延续（当时 14 个大文件全拆后，Q219–Q230 期间
+relations/进度/闭包参数等改动使文件重新超行）。
+
+**拆分结果**（17 个 >300 行 → 全部 ≤300；internal 下无超行文件）：
+
+- sqlite（4）：repo_relations.go 491 → 168 + relations_dedup.go
+  （降噪）+ relations_columns.go（表列）+ 进度方法移入 rg_progress.go；
+  rg_relationsfor.go 333 → 249 + rg_taint.go（taint/列名工具）；
+  rg_sql.go 325 → 285 + rg_sql_all.go；repo.go 311 → 177（删除尾部
+  130 行孤立注释——方法实现早拆走、注释残留且与实现文件重复）
+- ssa（8）：summary_iface.go 407 → 286 + summary_where.go；pkg_cache.go
+  332 → 219 + pkg_cache_io.go；summary_orm.go 314 → 170 +
+  summary_orm_write.go；summary_helpers.go 311 → 189 +
+  summary_sqlparse.go；dispatch.go 304 → 183 + dispatch_emit.go；
+  adapter_index.go 317 → 295 + adapter_finish.go（Index 尾部收尾
+  抽方法）；fe_value.go 302 → 293（lineOf 移 fe_nodes）；
+  fe_emit.go 302 → 247（collectAddrUses + emitElementOp 抽方法）
+- ast（1）：ast_objects.go 310 → 176 + ast_objects_type.go
+- 测试（3）：server_er_test.go 511 → 286 + server_er_table_test.go +
+  server_rules_test.go（TestHandleRules + HTTP helpers）；
+  repo_save_test.go 344 → 277 + repo_summary_test.go；
+  gof_orm_test.go 321 → 235 + gof_iface_filter_test.go
+
+**流程**：asttool analyze 列声明 → 按主题分组 → asttool split 搬移
+（os.Create 新建文件）→ goimports 清 import → 手动移动跨主题方法
+（Precompute → rg_progress.go）→ gofmt → 全量验证。
+
+**验证**：make test 12 包 + e2e-fixture 38 项全绿；internal 全部
+≤300 行。
+
+**教训**：单方法超行（Index 285 / emitFunctionFields 289）按声明拆
+不动——抽辅助方法（finishIndex/collectAddrUses/emitElementOp）或移
+小函数（lineOf）；方法抽取的签名/日志开销可能使行数不减反增
+（emitElementOp 初次抽取后 312 > 310）——移到行数余量大的文件解决。
+
+---
+
+**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q231，逐 Q 编号 + 日期）。

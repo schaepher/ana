@@ -4,9 +4,9 @@ import (
 	"go/constant"
 	"go/types"
 
+	"go.uber.org/zap"
 	"golang.org/x/tools/go/ssa"
 	"golang.org/x/tools/go/ssa/ssautil"
-	"go.uber.org/zap"
 )
 
 // gofOrmIfacePath gof（github.com/ixre/gof）db/orm.Orm 接口全路径——

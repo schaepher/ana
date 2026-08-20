@@ -286,32 +286,10 @@ func (a *Adapter) Index(ctx context.Context, repo *domain.Repository, pkgs []*pa
 	logger.Info("pkg cache", zap.Int("hits", cacheHits), zap.Int("total", len(pkgOrder)))
 	stage("emitFunction 循环（全库函数块池 + 缓存）")
 
-	if n := fallbackTotal.Load(); n > 0 {
-		fmt.Fprintf(os.Stderr, "warning: %d 个字段访问静态类型解析失败（匿名 struct 等），已回退源码字面量路径\n", n)
-	}
-
-	aliasRes, err := computeAliases(repo, prog, idents, a.fd, emit)
-	if err != nil {
-		return fmt.Errorf("alias analysis: %w", err)
-	}
-	stage("computeAliases")
-
-	idents, assignTargets = nil, nil
-
-	if err := emitSummaries(a.fd, aliasRes, emit); err != nil {
+	// Q231：构建收尾（alias/摘要/全局/动态派发）抽到 adapter_finish.go
+	if err := finishIndex(repo, prog, idents, a, typePkgs, &fallbackTotal, emit); err != nil {
 		return err
 	}
-	stage("emitSummaries")
-
-	a.fd, aliasRes = nil, nil
-
-	if err := emitGlobalInit(repo, prog, emit); err != nil {
-		return err
-	}
-
-	if err := emitDispatches(repo, prog, typePkgs, emit); err != nil {
-		return err
-	}
-	stage("emitDispatches")
+	stage("finishIndex")
 	return nil
 }

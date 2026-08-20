@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"sort"
 	"time"
 
 	"github.com/schaepher/codeintel/internal/domain"
@@ -128,3 +129,110 @@ func (r *Repo) finishRelationCompute(total int) error {
 		total, time.Now().Unix(), bid)
 	return err
 }
+
+// PrecomputeAllRelations 全量计算并写入缓存（Q228）：加载关系图 →
+// 逐表 relationsFor → 每批写进度（progressFn(done, total)）→ 完成写
+// relation_candidates + status=done。CLI precompute 命令（前台同步）
+// 与 serve 后台任务（goroutine）共用。
+func (r *Repo) PrecomputeAllRelations(progressFn func(done, total int)) error {
+	logger := zap.L()
+	logger.Info("enter (Repo).PrecomputeAllRelations")
+	start := time.Now()
+	defer func() {
+		logger.Info("exit (Repo).PrecomputeAllRelations", zap.Duration("elapsed", time.Since(start)))
+	}()
+	g, err := r.cachedRelationGraph()
+	if err != nil {
+		return err
+	}
+	tables := g.tables()
+	total := len(tables)
+	if ok, err := r.beginRelationCompute(total); err != nil {
+		return err
+	} else if !ok {
+		// 已有任务在跑（serve 兜底刚抢占或跨进程）——继续计算：rebuild
+		// 缓存为幂等覆盖写（结果一致），finish 统一置 done；进度沿用
+		// 已有任务行（Q228：begin 失败不再提前 return——否则 serve
+		// 兜底启动的 goroutine 抢占失败后不计算，进度永远停在 running）
+		logger.Debug("begin 抢占失败——继续计算（幂等覆盖）")
+	}
+	seen := map[string]*domain.TableRelation{}
+	for i, t := range tables {
+		for _, rel := range g.relationsFor(t) {
+			key := rel.FromTable + "|" + rel.FromCol + "|" + rel.ToTable + "|" + rel.ToCol
+			ex, ok := seen[key]
+			if !ok || rel.Hops < ex.Hops || (rel.Hops == ex.Hops && relTypeRank(rel.Type) > relTypeRank(ex.Type)) {
+				seen[key] = rel
+			}
+		}
+		// 每 5 表写一次进度（避免逐表写库）；total<=5 时最后一表也写
+		if (i+1)%5 == 0 || i+1 == total {
+			if err := r.updateRelationProgress(i + 1); err != nil {
+				return err
+			}
+		}
+		if progressFn != nil {
+			progressFn(i+1, total)
+		}
+	}
+	out := make([]*domain.TableRelation, 0, len(seen))
+	for _, rel := range seen {
+		out = append(out, rel)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.FromTable != b.FromTable {
+			return a.FromTable < b.FromTable
+		}
+		if a.FromCol != b.FromCol {
+			return a.FromCol < b.FromCol
+		}
+		if a.ToTable != b.ToTable {
+			return a.ToTable < b.ToTable
+		}
+		return a.ToCol < b.ToCol
+	})
+	r.rebuildRelationCandidates(out, tables)
+	return r.finishRelationCompute(total)
+}
+
+// StartRelationComputeIfNeeded 查询端自动兜底（Q228，serve /api/er
+// 全量路径）：计算未完成且无活跃任务（unknown/pending/过期 running）
+// 时抢占并启动——返回 started=true 表示调用方应起 goroutine 执行
+// PrecomputeAllRelations；已有 done/活跃任务返回 false。
+func (r *Repo) StartRelationComputeIfNeeded() (bool, error) {
+	logger := zap.L()
+	logger.Debug("enter (Repo).StartRelationComputeIfNeeded")
+	defer logger.Debug("exit (Repo).StartRelationComputeIfNeeded")
+	p, err := r.RelationProgress()
+	if err != nil {
+		return false, err
+	}
+	if p.Status == "done" {
+		return false, nil
+	}
+	if p.Status == "running" && time.Now().Unix()-r.progressUpdatedAt() < 600 {
+		return false, nil // 活跃任务在跑（本进程或其他进程）
+	}
+	g, err := r.cachedRelationGraph()
+	if err != nil {
+		return false, err
+	}
+	return r.beginRelationCompute(len(g.tables()))
+}
+
+// relTypeRank 关联类型优先级（聚合去重用）：fk > query > write > read。
+
+// MaxRelationHops 关系跳数上限默认值（Q195/Q196：6-10 跳长链为噪音失真）。
+
+// DefaultRelationHops 默认跳数上限（引用 domain 版，当前设定值 4/4/4）。
+
+// dedupRelationNoise 关系降噪（Q195/Q196/Q197，全部 relations 出口统一应用——
+// 缓存命中路径也过一遍，保证旧缓存同样被降噪）：
+// ① 跳数上限：按类型取 h（0=不限制）——query 长链同样失真，
+//    需要查看长链时设 Query=0（--include-long-query）
+// ② 同源写/间接读按 from字段→to表 聚合：同一 from 字段流入同一 to 表
+//    的多列（全列 INSERT/UPDATE 的列爆炸，如 atoms.aliases →
+//    knowledge_graphs 的 13 列各一条）只保留 hops 最小一条；
+//    query 保持列级（键关联每列独立有意义）。
+// 输出保持输入顺序（第一条位次，后续 hops 更小者替换值）。

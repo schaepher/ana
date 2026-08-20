@@ -52,120 +52,16 @@ func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Func
 		typeMapping:   typeMapping,
 	}
 
-	for _, b := range fn.Blocks {
-		for _, instr := range b.Instrs {
-			fa, ok := instr.(*ssa.FieldAddr)
-			if !ok {
-				ia, ok2 := instr.(*ssa.IndexAddr)
-				if !ok2 {
-					continue
-				}
-				if !isSliceLike(ia.X.Type()) {
-					continue
-				}
-
-				if ext.prog.Fset.PositionFor(ia.Pos(), false).Line == 0 {
-					continue
-				}
-				hasStore, hasDeref := faUses(ia)
-				if hasStore || !hasDeref {
-					if f := ext.newElementAccess(ia.X, ia.Index, ia.Pos(), "write", ""); f != nil {
-						ext.indexes[ia] = f
-					}
-				}
-				if hasDeref {
-					if f := ext.newElementAccess(ia.X, ia.Index, ia.Pos(), "read", ""); f != nil {
-						ext.indexReads[ia] = f
-					}
-				}
-				continue
-			}
-
-			hasStore, hasDeref := fieldAddrUse(fa)
-			if hasStore || !hasDeref {
-
-				if f := ext.newFieldAccess(fa, "write"); f != nil {
-					ext.fields[fa] = f
-				}
-			}
-			if hasDeref {
-
-				if f := ext.newFieldAccess(fa, "read"); f != nil {
-					ext.reads[fa] = f
-				}
-			}
-		}
-	}
+	// Q231：第一遍收集（FieldAddr/IndexAddr 用途判定）抽到
+	// collectAddrUses（fe_emit.go 行数收敛）
+	ext.collectAddrUses(fn)
 
 	for _, b := range fn.Blocks {
 		for _, instr := range b.Instrs {
 			switch v := instr.(type) {
-			case *ssa.Lookup:
-
-				if !isSliceLike(v.X.Type()) && !isMapLike(v.X.Type()) {
-					continue
-				}
-				if f := ext.newElementAccess(v.X, v.Index, v.Pos(), "read", ""); f != nil {
-					if err := f.emit(); err != nil {
-						return err
-					}
-
-					if err := ext.emitFlow(f.id, v); err != nil {
-						return err
-					}
-				}
-			case *ssa.Index:
-				if !isSliceLike(v.X.Type()) {
-					continue
-				}
-				if f := ext.newElementAccess(v.X, v.Index, v.Pos(), "read", ""); f != nil {
-					if err := f.emit(); err != nil {
-						return err
-					}
-					if err := ext.emitFlow(f.id, v); err != nil {
-						return err
-					}
-				}
-			case *ssa.MapUpdate:
-				if !isMapLike(v.Map.Type()) {
-					continue
-				}
-				if f := ext.newElementAccess(v.Map, v.Key, v.Pos(), "write", ""); f != nil {
-					if err := f.emit(); err != nil {
-						return err
-					}
-
-					if err := ext.emitFlowValue(v.Map, f.id); err != nil {
-						return err
-					}
-					if err := ext.emitFlowValue(v.Value, f.id); err != nil {
-						return err
-					}
-				}
-			case *ssa.Send:
-				if !isChanLike(v.Chan.Type()) {
-					continue
-				}
-
-				if f := ext.newElementAccess(v.Chan, nil, v.Pos(), "write", "[send]"); f != nil {
-					if err := f.emit(); err != nil {
-						return err
-					}
-					if err := ext.emitFlowValue(v.Chan, f.id); err != nil {
-						return err
-					}
-					if err := ext.emitFlowValue(v.X, f.id); err != nil {
-						return err
-					}
-				}
-			case *ssa.Range:
-				if f := ext.newElementAccess(v.X, nil, v.Pos(), "read", ""); f != nil {
-					if err := f.emit(); err != nil {
-						return err
-					}
-					if err := ext.emitFlowValue(v.X, f.id); err != nil {
-						return err
-					}
+			case *ssa.Lookup, *ssa.Index, *ssa.MapUpdate, *ssa.Send, *ssa.Range:
+				if err := ext.emitElementOp(v); err != nil {
+					return err
 				}
 			case *ssa.IndexAddr:
 				if f := ext.indexes[v]; f != nil {
@@ -299,4 +195,53 @@ func emitFunctionFields(repo *domain.Repository, prog *ssa.Program, fn *ssa.Func
 		fallbackTotal.Add(int64(ext.fallbackCount))
 	}
 	return err
+}
+
+// collectAddrUses 第一遍遍历（Q231 拆分自 emitFunctionFields）：
+// 收集 FieldAddr/IndexAddr 的读写用途 → fields/reads/indexes/indexReads
+// 映射（第二遍指令发射时用）。
+func (ext *fieldExtractor) collectAddrUses(fn *ssa.Function) {
+	logger := zap.L()
+	logger.Debug("enter (fieldExtractor).collectAddrUses")
+	defer logger.Debug("exit (fieldExtractor).collectAddrUses")
+	for _, b := range fn.Blocks {
+		for _, instr := range b.Instrs {
+			fa, ok := instr.(*ssa.FieldAddr)
+			if !ok {
+				ia, ok2 := instr.(*ssa.IndexAddr)
+				if !ok2 {
+					continue
+				}
+				if !isSliceLike(ia.X.Type()) {
+					continue
+				}
+				if ext.prog.Fset.PositionFor(ia.Pos(), false).Line == 0 {
+					continue
+				}
+				hasStore, hasDeref := faUses(ia)
+				if hasStore || !hasDeref {
+					if f := ext.newElementAccess(ia.X, ia.Index, ia.Pos(), "write", ""); f != nil {
+						ext.indexes[ia] = f
+					}
+				}
+				if hasDeref {
+					if f := ext.newElementAccess(ia.X, ia.Index, ia.Pos(), "read", ""); f != nil {
+						ext.indexReads[ia] = f
+					}
+				}
+				continue
+			}
+			hasStore, hasDeref := fieldAddrUse(fa)
+			if hasStore || !hasDeref {
+				if f := ext.newFieldAccess(fa, "write"); f != nil {
+					ext.fields[fa] = f
+				}
+			}
+			if hasDeref {
+				if f := ext.newFieldAccess(fa, "read"); f != nil {
+					ext.reads[fa] = f
+				}
+			}
+		}
+	}
 }

@@ -184,3 +184,78 @@ func (ext *fieldExtractor) funcIDOfFn(fn *ssa.Function) (domain.CanonicalID, boo
 	}
 	return id, true
 }
+
+// lineOf 值的源码行号（无 Pos / 0 行返回 0——合成值 phi、Const 等）。
+// Q231：从 fe_value.go 移入（文件行数收敛）。
+func lineOf(ext *fieldExtractor, v ssa.Value) int {
+	line := ext.prog.Fset.PositionFor(v.Pos(), false).Line
+	if line < 0 {
+		return 0
+	}
+	return line
+}
+
+// emitElementOp 容器元素类指令发射（Q231 拆分自 emitFunctionFields）：
+// Lookup/Index（读）、MapUpdate/Send（写）、Range（迭代读）——生成
+// 元素访问节点 + 值流边。非容器类型直接返回（原 case 的 continue）。
+func (ext *fieldExtractor) emitElementOp(v ssa.Instruction) error {
+	logger := zap.L()
+	logger.Debug("enter (fieldExtractor).emitElementOp")
+	defer logger.Debug("exit (fieldExtractor).emitElementOp")
+	switch ins := v.(type) {
+	case *ssa.Lookup:
+		if !isSliceLike(ins.X.Type()) && !isMapLike(ins.X.Type()) {
+			return nil
+		}
+		if f := ext.newElementAccess(ins.X, ins.Index, ins.Pos(), "read", ""); f != nil {
+			if err := f.emit(); err != nil {
+				return err
+			}
+			return ext.emitFlow(f.id, ins)
+		}
+	case *ssa.Index:
+		if !isSliceLike(ins.X.Type()) {
+			return nil
+		}
+		if f := ext.newElementAccess(ins.X, ins.Index, ins.Pos(), "read", ""); f != nil {
+			if err := f.emit(); err != nil {
+				return err
+			}
+			return ext.emitFlow(f.id, ins)
+		}
+	case *ssa.MapUpdate:
+		if !isMapLike(ins.Map.Type()) {
+			return nil
+		}
+		if f := ext.newElementAccess(ins.Map, ins.Key, ins.Pos(), "write", ""); f != nil {
+			if err := f.emit(); err != nil {
+				return err
+			}
+			if err := ext.emitFlowValue(ins.Map, f.id); err != nil {
+				return err
+			}
+			return ext.emitFlowValue(ins.Value, f.id)
+		}
+	case *ssa.Send:
+		if !isChanLike(ins.Chan.Type()) {
+			return nil
+		}
+		if f := ext.newElementAccess(ins.Chan, nil, ins.Pos(), "write", "[send]"); f != nil {
+			if err := f.emit(); err != nil {
+				return err
+			}
+			if err := ext.emitFlowValue(ins.Chan, f.id); err != nil {
+				return err
+			}
+			return ext.emitFlowValue(ins.X, f.id)
+		}
+	case *ssa.Range:
+		if f := ext.newElementAccess(ins.X, nil, ins.Pos(), "read", ""); f != nil {
+			if err := f.emit(); err != nil {
+				return err
+			}
+			return ext.emitFlowValue(ins.X, f.id)
+		}
+	}
+	return nil
+}
