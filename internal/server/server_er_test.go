@@ -185,23 +185,25 @@ func TestHandleERHopsParam(t *testing.T) {
 		rels, _ := m["relations"].([]any)
 		return len(rels)
 	}
-	// 默认：5 跳链值流验证通过 → fk（Q218：fk 默认不限跳，直接保留）
-	if n := relsOf("/api/er"); n != 1 {
-		t.Errorf("默认应保留 5 跳 fk（fk 不限跳），got %d 条", n)
+	// 默认：5 跳链值流验证通过 → fk（Q218：fk 默认不限跳，直接保留）；
+	// Q234：table_b.a_id 是 where 条件字段且呼应 table_a（a_id base=a ↔
+	// table_a）→ 规则 B 直接识别反向 fk（hops 0）→ 共 2 条
+	if n := relsOf("/api/er"); n != 2 {
+		t.Errorf("默认应保留 2 条 fk（5 跳值流 + where 直接识别），got %d 条", n)
 	}
-	// q_hops=0（不限制）：5 跳 fk 可见
-	if n := relsOf("/api/er?q_hops=0"); n != 1 {
-		t.Errorf("q_hops=0 应保留 5 跳 fk，got %d 条", n)
+	// q_hops=0（不限制）：fk 全可见
+	if n := relsOf("/api/er?q_hops=0"); n != 2 {
+		t.Errorf("q_hops=0 应保留 2 条 fk，got %d 条", n)
 	}
 	// q_hops=6：5 跳 ≤ 6 保留
-	if n := relsOf("/api/er?q_hops=6"); n != 1 {
-		t.Errorf("q_hops=6 应保留 5 跳 fk，got %d 条", n)
+	if n := relsOf("/api/er?q_hops=6"); n != 2 {
+		t.Errorf("q_hops=6 应保留 2 条 fk，got %d 条", n)
 	}
 	// 非法参数（负数/非数字）回退默认
-	if n := relsOf("/api/er?q_hops=-1"); n != 1 {
+	if n := relsOf("/api/er?q_hops=-1"); n != 2 {
 		t.Errorf("负数参数应回退默认（fk 保留），got %d 条", n)
 	}
-	if n := relsOf("/api/er?q_hops=abc"); n != 1 {
+	if n := relsOf("/api/er?q_hops=abc"); n != 2 {
 		t.Errorf("非法参数应回退默认（fk 保留），got %d 条", n)
 	}
 }

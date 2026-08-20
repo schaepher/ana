@@ -62,6 +62,7 @@ type relationGraph struct {
 	//                              双向会让桥过度宽松 → 多关联噪音）
 	nodes       map[string]*relNode
 	readsByFunc map[string][]*relNode
+	whereCols   map[string]bool // Q234：查询 where 条件字段集（"table.col" filter 节点）
 }
 
 type relNode struct {

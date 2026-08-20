@@ -25,8 +25,10 @@ func TestQueryRelationsAll(t *testing.T) {
 		t.Fatalf("relations --all JSON: %v\n%s", err, out)
 	}
 
-	if len(rels) != 1 {
-		t.Fatalf("rels = %d 条, want 1（默认过滤 read，仅正向 fk）: %s", len(rels), out)
+	// Q234：反向 table_b.a_id → table_a.id 也识别为 fk（where 条件字段 +
+	// 外键形态呼应 table_a，规则 B 直接识别）→ 共 2 条
+	if len(rels) != 2 {
+		t.Fatalf("rels = %d 条, want 2（正向 fk + 反向 where 条件 fk）: %s", len(rels), out)
 	}
 	fwd := rels[0]
 	if fwd["from_table"] != "table_a" || fwd["to_table"] != "table_b" ||
@@ -35,6 +37,14 @@ func TestQueryRelationsAll(t *testing.T) {
 	}
 	if fwd["type"] != "fk" {
 		t.Errorf("fwd type = %v, want fk", fwd["type"])
+	}
+	bwd := rels[1]
+	if bwd["from_table"] != "table_b" || bwd["from_col"] != "a_id" ||
+		bwd["to_table"] != "table_a" || bwd["to_col"] != "id" {
+		t.Errorf("bwd = %v, want table_b.a_id → table_a.id", bwd)
+	}
+	if bwd["type"] != "fk" {
+		t.Errorf("bwd type = %v, want fk（where 条件直接识别）", bwd["type"])
 	}
 
 	out = captureStdout(func() {
@@ -45,8 +55,8 @@ func TestQueryRelationsAll(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &rels); err != nil {
 		t.Fatalf("relations --all --type read JSON: %v", err)
 	}
-	if len(rels) != 1 || rels[0]["from_table"] != "table_b" || rels[0]["type"] != "read" {
-		t.Fatalf("--type read = %v, want table_b.a_id → table_a.id (read)", rels)
+	if len(rels) != 0 {
+		t.Fatalf("--type read = %v, want 0（原 read 已升 fk）", rels)
 	}
 }
 
@@ -58,7 +68,7 @@ func TestQueryRelationsAllText(t *testing.T) {
 			t.Errorf("relations --all exit = %d", code)
 		}
 	})
-	for _, want := range []string{"table_a", "table_b", "外键关联", "1 条"} {
+	for _, want := range []string{"table_a", "table_b", "外键关联", "2 条"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("relations --all text missing %q:\n%s", want, out)
 		}

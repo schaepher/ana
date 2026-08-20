@@ -102,6 +102,14 @@ func fkColMatches(col, table string) bool {
 	return tl == base || strings.HasSuffix(tl, "_"+base) || strings.HasSuffix(tl, base)
 }
 
+// isKeyCol 键形态列（Q234）：下划线归一后等于 id 或以 id 结尾
+// （id/biz_id/user_id/order_id/BuyerId）——where 条件字段提升 fk 时
+// 排除 create_time/status 等非键字段（create_time 不以 id 结尾）。
+func isKeyCol(col string) bool {
+	c := strings.ToLower(strings.ReplaceAll(col, "_", ""))
+	return c == "id" || strings.HasSuffix(c, "id")
+}
+
 // pkColMatches 起点列是否主键形态（Q202b）：id 或表名单数
 // （rbac_role 表的主键列 id）——外键回退仅主键列出发（防任意列误连）。
 func pkColMatches(col, table string) bool {

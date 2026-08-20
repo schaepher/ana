@@ -28,6 +28,7 @@ func loadRelationGraph(r *Repo) (*relationGraph, error) {
 		allOut:      map[string][]string{},
 		nodes:       map[string]*relNode{},
 		readsByFunc: map[string][]*relNode{},
+		whereCols:   map[string]bool{}, // Q234：where 条件字段集
 	}
 	rows, err := r.Query(`SELECT source_id, target_id, kind FROM edges`)
 	if err != nil {
@@ -91,6 +92,11 @@ func loadRelationGraph(r *Repo) (*relationGraph, error) {
 		g.nodes[id] = n
 		if kind == string(domain.KindFieldAccess) && n.access == "read" {
 			g.readsByFunc[n.funcID] = append(g.readsByFunc[n.funcID], n)
+		}
+		// Q234：where 条件字段集（查询时 where 使用的列）——规则 A 提升
+		// BFS 终点 / 规则 B 直接识别的依据
+		if kind == string(domain.KindFieldAccess) && n.access == "filter" && n.isExternal {
+			g.whereCols[n.name] = true
 		}
 	}
 	nrows.Close()

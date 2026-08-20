@@ -184,6 +184,18 @@ func (g *relationGraph) relationsFor(table string) []*domain.TableRelation {
 			if rtype == domain.RelationQuery && taintMatches(tainted[id], col) {
 				rtype = domain.RelationFK
 			}
+			// Q234 规则 A：where 条件字段增强——终点列被查询 where 用作
+			// 条件（filter 节点存在）通常有外键：query 筛选为 fk / 同源
+			// 写提升为 fk（biz_id 先 insert 表 A 再 update 表 B 且被查询
+			// 条件使用 → 真实键关联）。isKeyCol 排除 create_time 等非键
+			// 字段；呼应（同名键列 / 外键形态 / 值流 taint）防 Q218 换名
+			// 噪声（t15.BuyerId 全不满足保持 query）。
+			if (rtype == domain.RelationQuery || rtype == domain.RelationWrite) &&
+				g.whereCols[otherTable+"."+col] && isKeyCol(col) &&
+				(colMatchFold(col, fromCol) || fkColMatches(col, table) ||
+					taintMatches(tainted[id], col)) {
+				rtype = domain.RelationFK
+			}
 			key := st.name + "|" + otherTable + "|" + col
 			if ex, ok := seen[key]; ok {
 
@@ -202,6 +214,14 @@ func (g *relationGraph) relationsFor(table string) []*domain.TableRelation {
 			}
 			all = append(all, seen[key])
 		}
+	}
+
+	// Q234 规则 B：where 条件字段直接识别（BFS 值流之外——where 参数
+	// 来自请求/字面量时 BFS 不通）——filter 字段按列名呼应直接 fk。
+	// 同 key 走 seen 去重（fk rank 最高覆盖 BFS 低 rank 行）。
+	for _, rel := range g.whereDirectRels(table) {
+		key := table + "." + rel.FromCol + "|" + rel.ToTable + "|" + rel.ToCol
+		all = mergeRelation(seen, all, key, rel)
 	}
 
 	out := filterFKNoise(all)

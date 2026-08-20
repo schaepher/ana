@@ -157,9 +157,11 @@ func TestGetAllTableRelations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetAllTableRelations: %v", err)
 	}
-	// 正向：table_a.id → table_b.a_id（query 键关联）；反向：table_b.a_id → table_a.id（read）
+	// 正向：table_a.id → table_b.a_id（query 键关联）；反向：table_b.a_id → table_a.id
+	// Q234：反向为 fk——table_b.a_id 是查询 where 条件字段（filter）且外键
+	// 形态呼应 table_a（a_id base=a ↔ table_a 以 a 结尾）→ 规则 B 直接识别
 	if len(rels) != 2 {
-		t.Fatalf("rels = %+v, want 2（正向 query + 反向 read）", rels)
+		t.Fatalf("rels = %+v, want 2（正向 query + 反向 read/fk）", rels)
 	}
 	fwd, bwd := rels[0], rels[1]
 	if fwd.FromTable != "table_a" || fwd.FromCol != "id" || fwd.ToTable != "table_b" || fwd.ToCol != "a_id" {
@@ -171,7 +173,7 @@ func TestGetAllTableRelations(t *testing.T) {
 	if bwd.FromTable != "table_b" || bwd.FromCol != "a_id" || bwd.ToTable != "table_a" || bwd.ToCol != "id" {
 		t.Errorf("bwd = %+v, want table_b.a_id → table_a.id", bwd)
 	}
-	if bwd.Type != domain.RelationRead {
-		t.Errorf("bwd type = %q, want read（起点非 filter）", bwd.Type)
+	if bwd.Type != domain.RelationFK {
+		t.Errorf("bwd type = %q, want fk（where 条件字段直接识别）", bwd.Type)
 	}
 }

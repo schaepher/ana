@@ -172,7 +172,9 @@ func TestRelationsAll(t *testing.T) {
 	if fwd.FromTable != "table_a" || fwd.ToTable != "table_b" || fwd.Type != domain.RelationFK {
 		t.Errorf("fwd = %+v, want table_a→table_b fk", fwd)
 	}
-	if bwd.FromTable != "table_b" || bwd.ToTable != "table_a" || bwd.Type != domain.RelationRead {
-		t.Errorf("bwd = %+v, want table_b→table_a read", bwd)
+	// Q234：bwd 为 fk——table_b.a_id 是 where 条件字段且呼应 table_a
+	// （规则 B 直接识别）
+	if bwd.FromTable != "table_b" || bwd.ToTable != "table_a" || bwd.Type != domain.RelationFK {
+		t.Errorf("bwd = %+v, want table_b→table_a fk（where 条件直接识别）", bwd)
 	}
 }

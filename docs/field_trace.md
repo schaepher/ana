@@ -2636,4 +2636,47 @@ relations/进度/闭包参数等改动使文件重新超行）。
 
 ---
 
-**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q231，逐 Q 编号 + 日期）。
+## 63. where 条件字段识别：filter 增强 fk 判定（Q234，2026-08-20）
+
+**需求**：增加一种识别方式——找出所有表在查询时用的 where 语句，
+提取出所有被 where 作为条件的字段（这些字段通常有外键）。经确认：
+不做独立产出形态（非新连线模式/清单），而是把 where 条件字段作为
+**增强条件**——筛选 fk（query 候选→fk）和把同源写提升为 fk，最终
+统一 fk 展示；呼应判定「两者都做」（外键形态呼应表名 + 与另一表
+主键列呼应）。
+
+**机制**：SSA 适配器已产出 `access_kind="filter"` 的外部虚拟节点
+（table.col——SQL WHERE 列解析 / gorm/xorm Where 条件字段）。两条
+规则（内存路径 rg_relationsfor.go + SQL 路径 rg_sql.go 同步）：
+
+- **规则 A（BFS 终点提升）**：query/write 终点 + 终点列是 where 条件
+  字段（存在 filter 节点）+ 键形态（isKeyCol：下划线归一后以 id 结尾
+  或等于 id，排除 create_time/status）+ 呼应（同名键列 colMatchFold /
+  外键形态 fkColMatches / 值流 taintMatches）→ 提升 fk。同源写
+  （Q225 biz_id 双写）被 where 使用 → fk；Q218 换名噪声（t15.BuyerId
+  呼应全不满足）保持 query 不误升。
+- **规则 B（filter 字段直接识别）**：BFS 值流之外——本表 filter 节点
+  按列名呼应直接生成 fk（hops 0）：外键形态（user_id ↔ user 表名 →
+  user.id，要求目标表有 id 列）或同名键列（biz_id ↔ 另一表 biz_id，
+  colMatchFold 归一）；自表主键（WHERE id=?）与非键字段排除。where
+  参数来自请求/字面量（值流不通）也能识别——Q220c 的 merchant_id
+  案例自动解决，无需用户规则。
+
+**实现**：relationGraph 增加 whereCols 集合（loadRelationGraph 收集）；
+SQL 路径 collectWhereMeta 一次全表查询收集；共享 mergeRelation（同
+key 去重：rank 最高 + hops 最小）；用户规则合并改为同 rank 也覆盖
+（用户显式声明优先于自动识别，保持规则 hops 语义）。rg_sql.go 超行
+300 → Q234 代码抽入 rg_where.go（collectWhereMeta/whereDirectRelsSQL）。
+
+**验证**：新增 relations_where_fk_test.go（同源写提升/无 where 保持
+write/create_time 不提升/外键形态直接识别/同名键列直接识别/自表主键
+排除/Q218 噪声不误升，full + sql 双路径）；3 处既有测试期望更新
+（table_b.a_id 反向 read→fk——规则 B 正确新行为）；make test 12 包 +
+e2e-fixture 38 项全绿。go2o 实测：merchant_id 系列（dlv_merchant_
+bind/gs_sale_label/mch_api_info/mch_buyer_group/pm_info/pt_mail_queue
+等 8 表）自动识别 fk 连到 mch_merchant.id；同名键列 85 条（item_id/
+member_id/order_id/order_no 跨表引用）语义合理；fk 16 → 172 条。
+
+---
+
+**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q234，逐 Q 编号 + 日期）。

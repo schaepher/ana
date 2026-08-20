@@ -9,23 +9,28 @@ import (
 
 func (r *Repo) relationsForSQL(table string) ([]*domain.TableRelation, error) {
 
-	rows, err := r.Query(`SELECT id, name FROM nodes
+	rows, err := r.Query(`SELECT id, name, json_extract(properties, '$.access_kind') FROM nodes
 		WHERE kind = 'field_access' AND json_extract(properties, '$.is_external') = 'true'
 		  AND (name = ? OR name LIKE ?)`, table, table+".%")
 	if err != nil {
 		return nil, err
 	}
-	type colNode struct{ id, name string }
 	var starts []colNode
 	for rows.Next() {
 		var c colNode
-		if err := rows.Scan(&c.id, &c.name); err != nil {
+		if err := rows.Scan(&c.id, &c.name, &c.access); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		starts = append(starts, c)
 	}
 	rows.Close()
+
+	// Q234：where 条件字段集 + 其他表列集合（规则 A 提升 / 规则 B 直接识别）
+	whereCols, otherCols, err := collectWhereMeta(r, table)
+	if err != nil {
+		return nil, err
+	}
 
 	const maxDepth = 12
 	dataKinds := "'data_flows_to','argument','returns','summary_io','alias','phi_operand'"
@@ -254,6 +259,15 @@ func (r *Repo) relationsForSQL(table string) ([]*domain.TableRelation, error) {
 			if rtype == domain.RelationQuery && taintMatches(tainted[id], col) {
 				rtype = domain.RelationFK
 			}
+			// Q234 规则 A（同内存路径）：终点列是查询 where 条件字段（filter
+			// 节点存在）通常有外键——query 筛选 / 同源写提升为 fk。isKeyCol
+			// 排除非键字段；呼应防 Q218 换名噪声。
+			if (rtype == domain.RelationQuery || rtype == domain.RelationWrite) &&
+				whereCols[otherTable+"."+col] && isKeyCol(col) &&
+				(colMatchFold(col, fromCol) || fkColMatches(col, table) ||
+					taintMatches(tainted[id], col)) {
+				rtype = domain.RelationFK
+			}
 
 			if ex, ok := seen[key]; ok {
 
@@ -274,6 +288,10 @@ func (r *Repo) relationsForSQL(table string) ([]*domain.TableRelation, error) {
 			all = append(all, rel)
 		}
 	}
+
+	// Q234 规则 B（同内存路径）：本表 where 条件字段（filter 起点）按
+	// 列名呼应直接识别 fk（whereDirectRelsSQL 在 rg_where.go）
+	all = whereDirectRelsSQL(seen, all, table, starts, otherCols)
 
 	// Q212：filterFKNoise 统一用共享函数（原内联版缺 query 豁免——
 	// hasFK 时 id 起点过滤不作用于 query，attr.id → attr_item.attr_id
