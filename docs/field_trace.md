@@ -2781,4 +2781,41 @@ go2o 15 万节点库 Open 实测 4–7ms（幂等 DDL 空操作，可忽略）�
 
 ---
 
+## 67. 匿名分配类型短名（Q235-6，2026-08-22）
+
+**背景**：调研「ssa 中间量名称场景」时发现 go2o 4814 个 tN Alloc——
+经 probe 实验（go/ssa v0.26）确认 **Alloc.Pos 语义**：`&T{}` 指向复合
+字面量 `{`（非变量 Ident）、`make()` 指向 make 关键字、标量变量
+（`var a int` / `b := 1`）不产生 Alloc、仅被取址变量声明的 Pos 指向
+变量 Ident。**4814 个 tN Alloc 全部是匿名分配**（`&proto.String{}` /
+grpc 生成的 `&UnaryServerInfo{}` 等）——无源码变量名，tN 语义正确
+但展示不可读。
+
+**改动**（纯展示优化，ID/图结构/边不变，不影响判定逻辑）：
+
+1. `allocTypeShort`（fe_helpers.go）：去 `*`/`[]` 前缀后取最后一个
+   `/` 之后——**保留末段包名**（`*github.com/.../proto.String` →
+   `proto.String` 而非 `String`，用户确认防同名混淆）；无包路径
+   （`*interface{}` / `*member.Member`）取本身
+2. emitValue 通用分支：Alloc 且 Name 仍 SSA 名（tN）→ 类型短名；
+   phi 等纯中间值仍回退 slot
+3. instancePath Alloc 分支：idents 命中预声明标识符（make/new/len
+   等关键字位置）不算变量名（防某些 go/ssa 版本 make Pos=关键字
+   的误恢复）
+4. alias 路径（valueNodeID / objectIDOf）同步类型短名回退
+
+**效果**（go2o 实测）：tN Alloc 4814 → 3；value-trace 展示
+`← t0:73` → `← proto.messageServiceClient:73`。make 的 `[]int` →
+`int`。取址变量声明（arr）仍恢复源码变量名（回归保护）。
+
+**测试先行**：fe_anon_alloc_test.go 2 用例（匿名 &T{} 类型短名 +
+make 防误恢复；取址变量仍恢复变量名）；13 包全绿 + e2e-fixture
+38 项。
+
+**遗留**：FieldAddr 的实例路径基址仍是 tN（`t0.cc`）——instancePath
+基于 SSA 名拼接，与节点 Name 不一致（展示瑕疵，ID 链一致）；修复需
+改 instancePath 的 tN 基址恢复，待后续。
+
+---
+
 **文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q235，逐 Q 编号 + 日期）。
