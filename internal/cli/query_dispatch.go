@@ -117,6 +117,8 @@ func cmdQuery(args []string) int {
 		return queryRelations(acts, target, f.format, opts, &f)
 	case "path":
 		return queryPath(acts, f.positional[0], f.positional[1], f)
+	case "table-path":
+		return queryTablePath(acts, f.positional, f.json)
 	case "callers", "callees", "impact":
 		d := f.depth
 		if d <= 0 {

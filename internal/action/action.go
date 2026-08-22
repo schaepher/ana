@@ -37,6 +37,7 @@ type Reader interface {
 	GetAllTableColumns() ([]*domain.TableColumn, error) // ER 图：全库外部列（无 writers/readers 明细）
 	GetTableRelations(table, memoryMode string) ([]*domain.TableRelation, error)
 	GetAllTableRelations(memoryMode string) ([]*domain.TableRelation, error) // Q160 全库聚合
+	GetTables() ([]string, error) // Q241 表名枚举（table-path 表名解析）
 	GetUncalledFunctions() ([]*domain.UnusedFunc, error)
 	GetIsolatedChains() ([][]*domain.UnusedFunc, error)
 	GetPath(from, to domain.CanonicalID, maxDepth int, viaCalls bool) ([]*domain.TraceRow, error)
