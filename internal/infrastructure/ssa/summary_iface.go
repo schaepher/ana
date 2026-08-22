@@ -98,7 +98,7 @@ func (ext *fieldExtractor) inferInterfaceFilter(cc *ssa.CallCommon, callVal ssa.
 		if strings.HasPrefix(up, "SELECT ") || strings.HasPrefix(up, "UPDATE ") ||
 			strings.HasPrefix(up, "DELETE FROM ") || strings.HasPrefix(up, "INSERT INTO ") {
 			vtype = "sql"
-			if _, _, wc := parseSQLStmt(s); len(wc) > 0 {
+			if _, _, wc, _ := parseSQLStmt(s); len(wc) > 0 {
 				cols = wc
 			}
 		}

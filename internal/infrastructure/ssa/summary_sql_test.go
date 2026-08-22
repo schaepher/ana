@@ -36,7 +36,7 @@ func TestParseSQLStmt(t *testing.T) {
 		{"", "", nil, nil},
 	}
 	for _, c := range cases {
-		table, cols, whereCols := parseSQLStmt(c.sql)
+		table, cols, whereCols, _ := parseSQLStmt(c.sql)
 		if table != c.table {
 			t.Errorf("parseSQLStmt(%q) table = %q, want %q", c.sql, table, c.table)
 		}
@@ -147,5 +147,119 @@ func settle(c Conn) {
 	}
 	if !found {
 		t.Errorf("users.id.read 出边应指向回调闭包形参 settle#param.r（非返回值），got %v", outs)
+	}
+}
+
+// TestParseSQLJoinPairs：Q239——JOIN ON 键对提取（sqlJoinPair）。
+// INNER/LEFT JOIN + ON 等值键对（别名映射）；CROSS JOIN 无 ON / 逗号
+// 连接 / 子查询 JOIN 放弃（无键信号）。
+func TestParseSQLJoinPairs(t *testing.T) {
+	cases := []struct {
+		sql   string
+		pairs []sqlJoinPair
+	}{
+		// go2o 真实形态：INNER JOIN + ON 键对（a.code = s.city_code）
+		{"SELECT s.id,a.name FROM sys_sub_station s INNER JOIN sys_district a ON a.code = s.city_code",
+			[]sqlJoinPair{{"sys_district", "code", "sys_sub_station", "city_code"}}},
+		{"SELECT s.id FROM sys_sub_station s LEFT JOIN sys_district a ON a.code = s.city_code",
+			[]sqlJoinPair{{"sys_district", "code", "sys_sub_station", "city_code"}}},
+		{"SELECT it.id FROM sale_sub_item it INNER JOIN sale_normal_order ord ON ord.id = it.order_id INNER JOIN mm_member m ON m.member_id = ord.buyer_id",
+			[]sqlJoinPair{{"sale_normal_order", "id", "sale_sub_item", "order_id"},
+				{"mm_member", "member_id", "sale_normal_order", "buyer_id"}}},
+		// 无别名 JOIN（users.id = orders.uid）
+		{"SELECT u.name FROM users u JOIN orders ON u.id = orders.uid",
+			[]sqlJoinPair{{"users", "id", "orders", "uid"}}},
+		// AND 多键对（SQL 书写顺序：左 = From）
+		{"SELECT * FROM a JOIN b ON a.x = b.y AND a.m = b.n",
+			[]sqlJoinPair{{"a", "x", "b", "y"}, {"a", "m", "b", "n"}}},
+		// CROSS JOIN 无 ON → 放弃
+		{"SELECT * FROM a CROSS JOIN b", nil},
+		// 逗号连接 → 放弃
+		{"SELECT * FROM a, b WHERE a.id = b.a_id", nil},
+		// 子查询 JOIN → 放弃
+		{"SELECT * FROM a JOIN (SELECT id FROM b) x ON x.id = a.b_id", nil},
+		// 无 JOIN
+		{"SELECT name FROM users WHERE id = ?", nil},
+	}
+	for _, c := range cases {
+		_, _, _, pairs := parseSQLStmt(c.sql)
+		if len(pairs) != len(c.pairs) {
+			t.Errorf("%q: joinPairs = %+v, want %+v", c.sql, pairs, c.pairs)
+			continue
+		}
+		for i, want := range c.pairs {
+			if pairs[i] != want {
+				t.Errorf("%q: pair[%d] = %+v, want %+v", c.sql, i, pairs[i], want)
+			}
+		}
+	}
+}
+
+// TestSQLJoinEmit：Q239——JOIN ON 键对产出 origin=join 的虚拟节点与
+// data_flows_to 边（from 表列 read → to 表列 filter）。go2o 真实形态。
+func TestSQLJoinEmit(t *testing.T) {
+	nodes, facts := indexFixture(t, map[string]string{
+		"go.mod": moduleGoMod,
+		"field-summary.yaml": `
+summaries:
+  - iface: example.com/mtest.Conn
+    method: Query
+    kind: sql
+    sql_write: false
+    where_arg: 0
+`,
+		"main.go": `package m
+
+type Rows struct{}
+
+type Conn interface {
+	Query(sql string, cb func(*Rows))
+}
+
+func station(c Conn) {
+	c.Query("SELECT s.id,a.name FROM sys_sub_station s INNER JOIN sys_district a ON a.code = s.city_code WHERE a.parent IN ($1)", func(r *Rows) {})
+}
+`,
+	})
+	// to 侧 filter 节点（origin=join）
+	var filterNode *domain.CodeEntity
+	for _, n := range nodes {
+		if n.Kind != domain.KindFieldAccess {
+			continue
+		}
+		if n.Name == "sys_sub_station.city_code" && n.Property("access_kind") == "filter" {
+			filterNode = n
+			if n.Property("origin") != "join" {
+				t.Errorf("JOIN filter 节点应标 origin=join，got %v", n.Property("origin"))
+			}
+		}
+	}
+	if filterNode == nil {
+		t.Fatalf("未产出 JOIN to 侧 filter 节点（sys_sub_station.city_code filter）")
+	}
+	// from 侧 read 节点（origin=join）
+	fromID := ""
+	for _, n := range nodes {
+		if n.Kind == domain.KindFieldAccess && n.Name == "sys_district.code" &&
+			n.Property("access_kind") == "read" {
+			fromID = string(n.ID)
+			if n.Property("origin") != "join" {
+				t.Errorf("JOIN read 节点应标 origin=join，got %v", n.Property("origin"))
+			}
+		}
+	}
+	if fromID == "" {
+		t.Fatalf("未产出 JOIN from 侧 read 节点（sys_district.code read）")
+	}
+	// data_flows_to 边：from read → to filter
+	found := false
+	for _, f := range facts {
+		if string(f.SourceID) == fromID && string(f.TargetID) == string(filterNode.ID) &&
+			f.Kind == domain.FactDataFlowsTo {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("缺 JOIN 值流边（sys_district.code → sys_sub_station.city_code）")
 	}
 }

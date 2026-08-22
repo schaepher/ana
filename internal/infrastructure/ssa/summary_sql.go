@@ -29,7 +29,7 @@ func (ext *fieldExtractor) applySQLSummary(cc *ssa.CallCommon, calleeID domain.C
 		// Q177 真实形态：Exec(sql interface{}) 常量被 MakeInterface 包装
 		sqlStr = constant.StringVal(c.Value)
 	}
-	table, cols, whereCols := parseSQLStmt(sqlStr)
+	table, cols, whereCols, joinPairs := parseSQLStmt(sqlStr)
 	line := ext.prog.Fset.PositionFor(cc.Pos(), false).Line
 
 	if !spec.SQLWrite {
@@ -122,6 +122,53 @@ func (ext *fieldExtractor) applySQLSummary(cc *ssa.CallCommon, calleeID domain.C
 				if err := ext.emitEdgeKindLine(argID, id, domain.FactSummaryIO, line); err != nil {
 					return err
 				}
+			}
+		}
+		// Q239：JOIN ON 键对 → 值流边（from 表列 read → to 表列 filter，
+		// origin=join）——JOIN 等值语义 = 值流（A.col 的值 = B.col 筛选），
+		// relations BFS 经 data_flows_to 自然吸收为 query 键关联
+		for _, jp := range joinPairs {
+			if jp.FromTable == "" || jp.FromCol == "" || jp.ToTable == "" || jp.ToCol == "" {
+				continue
+			}
+			fromName := jp.FromTable + "." + jp.FromCol
+			toName := jp.ToTable + "." + jp.ToCol
+			fromID := domain.CanonicalID(string(ext.funcID) + "#ext.sql." + fromName + ".read@" + fmt.Sprintf("%d", line))
+			toID := domain.CanonicalID(string(ext.funcID) + "#ext.sql." + toName + ".filter@" + fmt.Sprintf("%d", line))
+			fromProps := map[string]any{
+				"full_path":     fromName,
+				"instance_path": fromName,
+				"access_kind":   "read",
+				"code_snippet":  sqlStr,
+				"type_string":   "sql",
+				"is_external":   "true",
+				"func_id":       string(ext.funcID),
+				"origin":        "join",
+			}
+			toProps := map[string]any{
+				"full_path":     toName,
+				"instance_path": toName,
+				"access_kind":   "filter",
+				"code_snippet":  sqlStr,
+				"type_string":   "sql",
+				"is_external":   "true",
+				"func_id":       string(ext.funcID),
+				"origin":        "join",
+			}
+			if err := ext.emit(domain.Item{Node: &domain.CodeEntity{
+				ID: fromID, Kind: domain.KindFieldAccess, Name: fromName,
+				FilePath: ext.currentFile, LineStart: line, Properties: fromProps,
+			}}); err != nil {
+				return err
+			}
+			if err := ext.emit(domain.Item{Node: &domain.CodeEntity{
+				ID: toID, Kind: domain.KindFieldAccess, Name: toName,
+				FilePath: ext.currentFile, LineStart: line, Properties: toProps,
+			}}); err != nil {
+				return err
+			}
+			if err := ext.emitEdgeKindLine(fromID, toID, domain.FactDataFlowsTo, line); err != nil {
+				return err
 			}
 		}
 		return nil
