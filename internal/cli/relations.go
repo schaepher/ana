@@ -219,7 +219,12 @@ func printRelationsAllMermaid(rels []*domain.TableRelation) int {
 	sort.Strings(tableNames)
 	for _, t := range tableNames {
 		sb.WriteString(fmt.Sprintf("  subgraph %s[\"%s\"]\n", t, t))
+		cols := make([]string, 0, len(byTable[t]))
 		for c := range byTable[t] {
+			cols = append(cols, c)
+		}
+		sort.Strings(cols)
+		for _, c := range cols {
 			sb.WriteString(fmt.Sprintf("    %s[\"%s.%s\"]\n", colID(t, c), t, c))
 		}
 		sb.WriteString("  end\n")
@@ -247,7 +252,12 @@ func printRelationsMermaid(fromTable string, rels []*domain.TableRelation) int {
 	for _, r := range rels {
 		fromCols[r.FromCol] = true
 	}
+	var fromColList []string
 	for c := range fromCols {
+		fromColList = append(fromColList, c)
+	}
+	sort.Strings(fromColList)
+	for _, c := range fromColList {
 		sb.WriteString(fmt.Sprintf("  %s[\"%s.%s\"]\n", colID(fromTable, c), fromTable, c))
 	}
 	// 关联表列节点（子图按表分组）
@@ -255,7 +265,13 @@ func printRelationsMermaid(fromTable string, rels []*domain.TableRelation) int {
 	for _, r := range rels {
 		byTable[r.ToTable] = append(byTable[r.ToTable], r)
 	}
-	for tt, list := range byTable {
+	var ttList []string
+	for tt := range byTable {
+		ttList = append(ttList, tt)
+	}
+	sort.Strings(ttList)
+	for _, tt := range ttList {
+		list := byTable[tt]
 		sb.WriteString(fmt.Sprintf("  subgraph %s[\"%s\"]\n", tt, tt))
 		for _, r := range list {
 			sb.WriteString(fmt.Sprintf("    %s[\"%s.%s\"]\n", colID(tt, r.ToCol), tt, r.ToCol))

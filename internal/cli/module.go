@@ -76,7 +76,19 @@ func renderModulesMermaid(calls []action.ModuleCall) string {
 		k := edgeKey{c.FromModule, to}
 		edges[k] = append(edges[k], c.Service+"."+c.Method)
 	}
-	for k, svcs := range edges {
+	// 边按 (from,to) 排序输出（Q243 确定性——map range 随机）
+	var edgeKeys []edgeKey
+	for k := range edges {
+		edgeKeys = append(edgeKeys, k)
+	}
+	sort.Slice(edgeKeys, func(i, j int) bool {
+		if edgeKeys[i].from != edgeKeys[j].from {
+			return edgeKeys[i].from < edgeKeys[j].from
+		}
+		return edgeKeys[i].to < edgeKeys[j].to
+	})
+	for _, k := range edgeKeys {
+		svcs := edges[k]
 		// 去重服务标注
 		seen := map[string]bool{}
 		var labels []string
