@@ -2679,4 +2679,37 @@ member_id/order_id/order_no 跨表引用）语义合理；fk 16 → 172 条。
 
 ---
 
-**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q234，逐 Q 编号 + 日期）。
+## 64. schema 加法自动迁移（Q235-3，2026-08-22）
+
+**需求**：借鉴 GitNexus schemaFingerprint 摘要驱动自动重建——但规避其
+教训（新旧二进制交替导致反复重建）。我们的现状：SchemaVersion=4 +
+PRAGMA user_version 严格相等校验，v≠4 报错要求 clean；而 v1→v4 演进
+全是加法（新表/新索引），clean 是多余的（Q161/Q220c 均踩过）。
+
+**设计**（不存 fingerprint——「期望列 ⊆ 实际列」子集判断无写入状态，
+交替二进制无反复迁移）：
+
+1. user_version 仅作初次建库标记（v==0 建全量），不再严格相等校验
+2. 打开时总是幂等执行 schema DDL（CREATE IF NOT EXISTS）——旧库
+   （v1–v3）自动补建缺失表/索引
+3. 结构齐全性检查（verifySchema）：PRAGMA table_xinfo 校验每个核心表
+   期望列（schemaCols 常量清单）；缺列（破坏性列变更，幂等无法表达）
+   → 报错提示 clean；旧二进制打开新库（实际列更多）通过
+4. 补建阶段早期失败路径（表达式索引引用缺失列 → no such column）也
+   包装为 clean 提示
+
+**坑**：PRAGMA table_info **不返回生成列**（signature_text VIRTUAL 只
+在 table_xinfo 里）——初版 verifySchema 误报缺列，改用 table_xinfo。
+
+**验证**：schema_migrate_test.go 三用例（v1 旧库自动补建+查询可用 /
+缺列报错 clean / 未知版本 v99 结构齐全可用——替代原
+TestOpenSchemaVersionMismatch）；12 包全绿 + e2e-fixture 38 项；
+go2o 15 万节点库 Open 实测 4–7ms（幂等 DDL 空操作，可忽略）。
+
+**边界**：列类型/约束/删除/加列变更（CREATE IF NOT EXISTS 不动已存在
+表）→ 仍 clean（schemaCols 清单与 DDL 不同步即暴露）；分析逻辑版本
+变更走 build_id/relation_progress 失效（不纳入 schema 迁移）。
+
+---
+
+**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q235，逐 Q 编号 + 日期）。

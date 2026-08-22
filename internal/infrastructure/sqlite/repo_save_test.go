@@ -2,7 +2,6 @@ package sqlite
 
 import (
 	"errors"
-	"path/filepath"
 	"testing"
 
 	"github.com/schaepher/codeintel/internal/domain"
@@ -211,27 +210,9 @@ func TestDeleteByFileCascade(t *testing.T) {
 		t.Errorf("node b should remain: %v", err)
 	}
 }
-func TestOpenSchemaVersionMismatch(t *testing.T) {
-	dir := t.TempDir()
-	db, err := Open(dir)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-
-	if _, err := db.Exec("PRAGMA user_version = 99"); err != nil {
-		t.Fatalf("set user_version: %v", err)
-	}
-	db.Close()
-
-	if _, err := Open(dir); err == nil {
-		t.Error("Open should fail on schema version mismatch")
-	}
-
-	if db2, _ := Open(t.TempDir()); db2.RepoPath() != filepath.Clean(t.TempDir()) {
-
-		db2.Close()
-	}
-}
+// TestOpenSchemaVersionMismatch 已由 Q235-3 替代：user_version 不再做
+// 严格相等校验——结构齐全即可用（TestOpenSchemaUnknownVersionSelfHeal
+// 覆盖）；缺列才报错 clean（TestOpenSchemaMissingColumnFails 覆盖）。
 func TestGetSymbolByNameExcludesFieldTrace(t *testing.T) {
 	r := newTestRepo(t)
 	funcID := "symbol:go:example.com/m:f"
