@@ -2889,10 +2889,18 @@ tN 从链上消失。
    （Call/MakeSlice/Convert 等）；**phi 保留**（分支汇合语义）
 2. alias 路径 valueNodeID 同步扩展（非 phi 回退）
 
-**评估**（probe 确认）：go/ssa 的 Call.Pos = **Rparen**（右括号）——
-原 recoverVarName 的 `p == callPos`（Lparen）是死代码，调用赋值
-恢复从未生效；嵌套调用外层 Pos 不可靠——**有参数调用不恢复变量名**
-（类型短名兜底），形态 1 无参调用维持 Alloc 分支恢复（u）。
+**评估**（probe 确认）：go/ssa 的 Call.Pos = **Lparen**（左括号——
+builder.go:1002 `c.pos = e.Lparen`）——原 recoverVarName 的
+`p == callPos`（Lparen）**有效**：无参/有参调用赋值均恢复变量名
+（u := f() / u := makeT(42) 的 Call.Pos = 调用 '('，与
+buildAssignTargets 记录的 ce.Lparen 精确匹配）；嵌套内层调用
+Pos = 内层 '(' ≠ 外层 callPos，防误配依旧成立。
+**更正（Q236，2026-08-22）**：本节原记录「Call.Pos = Rparen、Lparen
+匹配是死代码、有参数调用不恢复」系 probe 索引错位误判——token.Pos =
+base+offset（base 自 1 起），直接用 `src[pos]` 反查字符错位 1 字节，
+把 '(' 显示成 ')'。修正索引（`Position().Offset`）后复核 + x/tools
+源码双证：Call.Pos = Lparen，恢复逻辑无死代码，行为正确（补测试
+TestTempValueCallWithArgsRecovers 固化）。
 
 **效果**（go2o）：tN 总量 2.15 万 → ~3200（Phi 1732 设计保留 +
 load 1374 + Field 90 残余）。链级验证 + 13 包全绿 + e2e 38 项。
@@ -2920,8 +2928,8 @@ tN；严格纯 tN（无点）仅剩 **Phi 1732（设计保留）+ 2 残余**。�
 
 **实现**：recoverVarName 开头加 **idents[Pos] 直接反查**——phi 的
 Pos 命中源码声明 Ident → 恢复变量名（size/lastId/err/i 等）；对
-Call（Pos=Rparen）/Alloc（Pos='{'）等非 Ident 位置天然不命中，不
-影响既有路径；合成 phi（无 Pos）查不到保持原样。
+Call（Pos=Lparen，§69 更正）/Alloc（Pos='{'）等非 Ident 位置天然
+不命中，不影响既有路径；合成 phi（无 Pos）查不到保持原样。
 
 **第二层**：通用分支/alias 路径去掉 phi 排除——无 Pos 的合成 phi
 同样回退类型短名（`int` 比 t3 可读；汇合语义由链结构体现，不依赖

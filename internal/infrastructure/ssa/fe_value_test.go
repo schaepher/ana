@@ -93,6 +93,50 @@ func g(b bool) {
 	}
 }
 
+// TestTempValueCallWithArgsRecovers：Q236——有参数调用恢复变量名。
+// §69 曾记录「有参数调用不恢复变量名（Call.Pos=Rparen，Lparen 匹配
+// 死代码）」——probe 复核（用 Position().Offset 而非 token.Pos 索引
+// 源码，token.Pos = base+offset）证明 go/ssa v0.26 Call.Pos = **Lparen**
+// （builder.go:1002 c.pos = e.Lparen）：有参调用 u := makeT(42) 的
+// Call.Pos = makeT( 的 '('，与 buildAssignTargets 记录的 ce.Lparen
+// 精确匹配 → 恢复 u；嵌套内层调用 Pos=内层 '(' 与外层 callPos 不等，
+// 防误配依旧成立（TestTempValueNestedNoMismatch）。
+func TestTempValueCallWithArgsRecovers(t *testing.T) {
+	nodes, _ := indexFixture(t, map[string]string{
+		"go.mod": moduleGoMod,
+		"main.go": `package m
+
+type T struct {
+	A int
+}
+
+func makeT(v int) *T { return &T{A: v} }
+
+func g() {
+	u := makeT(42)
+	u.A = 1
+}
+`,
+	})
+	funcID := "symbol:go:example.com/mtest:g"
+	found := false
+	for _, n := range nodes {
+		if n.Kind != domain.KindSSAValue || n.Property("func_id") != funcID {
+			continue
+		}
+		if n.Name == "u" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("有参调用 u := makeT(42) 应恢复变量名 u")
+	}
+	// 字段写实例路径同样恢复：u.A（base 是 Call 寄存器而非 Alloc）
+	if fa := findFieldAccess(t, nodes, funcID, "u.A", "write"); fa == nil {
+		t.Errorf("字段写实例路径应为 u.A（有参调用 base 恢复）")
+	}
+}
+
 // TestTempValueNestedNoMismatch：Q193——嵌套表达式误配回归。
 // err := outer(inner())：inner() 的返回值（内层，经 argument 边发射）
 // 不得恢复为 err（err 是 outer 的结果）——保持寄存器名；outer() 的

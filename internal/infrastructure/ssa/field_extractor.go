@@ -125,7 +125,7 @@ func (ext *fieldExtractor) recoverVarName(v ssa.Value) string {
 	// Q235-9：匿名 phi / lifting 寄存器的 Pos 指向源码变量声明位置
 	// （短声明多值循环更新等 go/ssa 不保留变量名的形态——size, lastId
 	// := 5, 0 的 phi）——idents 直接反查恢复；合成 phi（无声明位置）
-	// 查不到保持 SSA 名。对 Call（Pos=Rparen）/Alloc（Pos='{'）等非
+	// 查不到保持 SSA 名。对 Call（Pos=Lparen）/Alloc（Pos='{'）等非
 	// Ident 位置天然不命中，不影响既有路径
 	if dn, ok := ext.idents[v.Pos()]; ok && !isSSAName(dn) {
 		return dn
