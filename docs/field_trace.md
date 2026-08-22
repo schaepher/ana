@@ -3184,4 +3184,40 @@ worktree 同名）→ 清理 prune。测试隔离：TestMain 注入注册表目�
 
 ---
 
-**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q238，逐 Q 编号 + 日期）。
+## 78. SQL 关系识别增强（Q239，2026-08-22）
+
+**背景**（Q238 验证）：go2o 152 表 20 张孤立——4 类分析短板：JOIN 不解析
+（sys_sub_station/sale_sub_item）、子查询括号并进表名（mm_member)）、
+gorm Model(类型实参) 表名错（transaction_data 假表）、动态 where 盲区
+（rbac 系）。四轮访谈收敛（design-q239.md 已归档）：JOIN 键对归 query
+（来源作元数据）、还原深度 3 层、部分还原尽力、parser 长期候选、
+完全跟随现有降噪。
+
+**实现（四批）**：
+1. **JOIN ON 键对**（B1）：parseSQLStmt 提取（INNER/LEFT/RIGHT/CROSS +
+   别名映射 + AND 多键对；逗号/子查询 JOIN/无 ON 放弃）→ from/to 两侧
+   filter 虚拟节点（origin=join）+ data_flows_to 边——JOIN 等值语义 =
+   值流，relations BFS 自然吸收。坑：多行 SQL（\n\t\tINNER JOIN）
+   stop 前导空格匹配不到——INNER 残留并进表名（sale_sub_item.order_id
+   \n\t\tINNER）——ON 操作数取首 token
+2. **子查询括号剥离**（B2）：表名/where 列名去尾 ')'（(SELECT ... FROM
+   mm_member) → mm_member）；子查询 FROM（派生表）按 Q6 放弃
+3. **gorm Model(类型实参)**（B3）：chainTableNameValue 兼容 Value 风格
+   方法调用（链式中间值 Method=nil、Value=MethodValue——此前只查
+   Method 导致 Table/Model 分支对链式调用从未生效，Q177 隐藏失效）；
+   实参 Args[1]（Args[0]=receiver）；any 参数 MakeInterface 解包；
+   类型实参 → tableNameOf。wal_wallet_log 恢复
+4. **动态拼接还原**（B4）：resolveSQLString——常量 / Sprintf 模板 + %s
+   实参值流（嵌套 Sprintf / 跨函数参数静态调用点追溯，深度 3）；
+   变参打包 slice 解包（Alloc/MakeSlice + IndexAddr + Store 序列）；
+   部分还原不误报；只处理 string Kind
+
+**go2o 复检**（端到端）：mm_member) / transaction_data 假表消失；
+wal_wallet_log 出现 + 107 关系；sys_sub_station → sys_district fk；
+sale_sub_item 1→15 条（多行 JOIN 修复）；**rbac 系保持孤立为合理盲区**
+——where 来自 RPC 请求参数（r.Params.Where 用户输入）+ dao 接口调用，
+静态无法还原（非 bug，文档标注）。
+
+---
+
+**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q239，逐 Q 编号 + 日期）。
