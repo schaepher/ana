@@ -140,12 +140,15 @@ func (ext *fieldExtractor) applySQLSummary(cc *ssa.CallCommon, calleeID domain.C
 			fromProps := map[string]any{
 				"full_path":     fromName,
 				"instance_path": fromName,
-				"access_kind":   "read",
-				"code_snippet":  sqlStr,
-				"type_string":   "sql",
-				"is_external":   "true",
-				"func_id":       string(ext.funcID),
-				"origin":        "join",
+				// Q239：JOIN ON 两侧都是键筛选（a.code = s.city_code 双向）——
+				// from 侧标 filter 使 relations BFS 从任一侧出发都归 query
+				// （标 read 会因终点 read 归入「间接读」默认不可见）
+				"access_kind":  "filter",
+				"code_snippet": sqlStr,
+				"type_string":  "sql",
+				"is_external":  "true",
+				"func_id":      string(ext.funcID),
+				"origin":       "join",
 			}
 			toProps := map[string]any{
 				"full_path":     toName,

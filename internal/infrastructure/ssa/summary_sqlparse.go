@@ -154,6 +154,15 @@ func extractJoinPairs(rest string) []sqlJoinPair {
 			}
 			l := strings.TrimSpace(cond[:eq])
 			r := strings.TrimSpace(cond[eq+1:])
+			// 多行 SQL 的 ON 段截断后右操作数可能带尾随 INNER/LEFT 等
+			// 残留（\n\t\tINNER JOIN 的 stop 前导空格匹配不到）——
+			// 取首 token 防残留并进表名
+			if i := strings.IndexAny(l, " \t\n"); i >= 0 {
+				l = l[:i]
+			}
+			if i := strings.IndexAny(r, " \t\n"); i >= 0 {
+				r = r[:i]
+			}
 			lt, lc := splitQualified(l)
 			rt, rc := splitQualified(r)
 			if lc == "" || rc == "" {

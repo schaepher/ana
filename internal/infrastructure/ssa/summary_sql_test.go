@@ -237,19 +237,20 @@ func station(c Conn) {
 	if filterNode == nil {
 		t.Fatalf("未产出 JOIN to 侧 filter 节点（sys_sub_station.city_code filter）")
 	}
-	// from 侧 read 节点（origin=join）
+	// from 侧 filter 节点（origin=join——JOIN ON 两侧都是键筛选，标 filter
+	// 使 relations BFS 从任一侧出发都归 query 类型）
 	fromID := ""
 	for _, n := range nodes {
 		if n.Kind == domain.KindFieldAccess && n.Name == "sys_district.code" &&
-			n.Property("access_kind") == "read" {
+			n.Property("access_kind") == "filter" {
 			fromID = string(n.ID)
 			if n.Property("origin") != "join" {
-				t.Errorf("JOIN read 节点应标 origin=join，got %v", n.Property("origin"))
+				t.Errorf("JOIN 节点应标 origin=join，got %v", n.Property("origin"))
 			}
 		}
 	}
 	if fromID == "" {
-		t.Fatalf("未产出 JOIN from 侧 read 节点（sys_district.code read）")
+		t.Fatalf("未产出 JOIN from 侧 filter 节点（sys_district.code filter）")
 	}
 	// data_flows_to 边：from read → to filter
 	found := false
@@ -350,5 +351,27 @@ func main() {}
 	}
 	if filterNode == nil {
 		t.Errorf("动态 SQL 未还原 where 列 role_id（跨函数参数追溯失败）")
+	}
+}
+
+// TestParseSQLJoinPairsMultiline：Q239——多行 SQL（\\n\\t\\tINNER JOIN）
+// ON 段截断残留（INNER 并进表名）修复。
+func TestParseSQLJoinPairsMultiline(t *testing.T) {
+	sql := `SELECT m.user_code FROM sale_sub_item it
+		INNER JOIN sale_normal_order ord ON ord.id = it.order_id
+		INNER JOIN mm_member m ON m.member_id = ord.buyer_id
+		WHERE it.item_id = $1`
+	_, _, _, pairs := parseSQLStmt(sql)
+	want := []sqlJoinPair{
+		{"sale_normal_order", "id", "sale_sub_item", "order_id"},
+		{"mm_member", "member_id", "sale_normal_order", "buyer_id"},
+	}
+	if len(pairs) != len(want) {
+		t.Fatalf("多行 JOIN pairs = %+v, want %+v", pairs, want)
+	}
+	for i, w := range want {
+		if pairs[i] != w {
+			t.Errorf("pair[%d] = %+v, want %+v", i, pairs[i], w)
+		}
 	}
 }
