@@ -2897,9 +2897,13 @@ tN 从链上消失。
 **效果**（go2o）：tN 总量 2.15 万 → ~3200（Phi 1732 设计保留 +
 load 1374 + Field 90 残余）。链级验证 + 13 包全绿 + e2e 38 项。
 
-**遗留**：load/Field 残余 tN 的 **Name（slot）与 ID（instance 路径
-#t0.Account.Balance）分离**——疑似节点 UPSERT 合并覆盖（同一 ID
-多次发射、Name 列后写覆盖），独立问题待查。
+**遗留修正**：初判「load/Field 残余 tN 的 Name/ID 分离」为**统计误报**
+——SQLite GLOB `t[0-9]*` 的 `*` 匹配任意字符（含 `.`），`t0.Account.
+Balance`（Name 带 lifting 基址路径，ID/Name 一致、展示可读）被误计入
+tN；严格纯 tN（无点）仅剩 **Phi 1732（设计保留）+ 2 残余**。真正
+遗留：lifting 参数基址（`t0.Account.Balance` 的 t0 是 lifting 后的
+参数寄存器，recoverVarName 对参数无 Pos 匹配）——恢复需参数名映射，
+属 §66 A 类结构性边界，待评估。
 
 ---
 
