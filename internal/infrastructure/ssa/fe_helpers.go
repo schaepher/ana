@@ -143,20 +143,20 @@ func ssaOp(v ssa.Value) string {
 }
 
 // isSSAName 判断是否为 SSA 临时名（t0、t91 等），用于决定展示名回退。
-// allocTypeShort 匿名分配的类型短名（Q235-6）：去 * / [] 前缀后取
-// 最后一个 '/' 之后（*example.com/mtest.Inner → mtest.Inner；跨包
-// 保留末段包名防同名混淆——proto.String 而非 String）；无包路径
-// （*interface{} / *member.Member）取本身。用于匿名 &T{} / make
-// 分配的展示名回退（tN 不可读；ID 不变不影响图结构）。
+// allocTypeShort 匿名分配的类型短名（Q235-6）：取最后一个 '/' 之后
+// 并**补回 * / [] 前缀**——* 与 [] 在包路径之前，直接取 '/' 后会丢
+// （*example.com/mtest.Inner → *mtest.Inner；[]int → []int；
+// *github.com/.../proto.String → *proto.String）——指针/数组是类型
+// 形态信息，展示时保留（用户确认）。无包路径（*interface{} /
+// *member.Member）取本身。用于匿名 &T{} / make 分配的展示名回退
+// （tN 不可读；ID 不变不影响图结构）。
 func allocTypeShort(ts string) string {
-	t := strings.TrimLeft(ts, "*[]")
-	if t == "" {
-		return ""
+	trimmed := strings.TrimLeft(ts, "*[]")
+	prefix := ts[:len(ts)-len(trimmed)]
+	if i := strings.LastIndex(trimmed, "/"); i >= 0 {
+		return prefix + trimmed[i+1:]
 	}
-	if i := strings.LastIndex(t, "/"); i >= 0 {
-		return t[i+1:]
-	}
-	return t
+	return ts
 }
 
 func isSSAName(name string) bool {

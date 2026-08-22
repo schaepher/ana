@@ -8,9 +8,10 @@ import (
 
 // TestTempValueAnonymousAllocTypeName：Q235-6——匿名对象分配（&T{} /
 // make）无源码变量名（go/ssa 的 Alloc.Pos 指向复合字面量 '{' 或 make
-// 关键字，非变量 Ident），tN 回退为类型短名（保留末段包名：
-// *example.com/mtest.Inner → mtest.Inner）——value-trace 展示可读。
-// make 分配不得误恢复为 make 关键字（idents 命中的是预声明标识符）。
+// 关键字，非变量 Ident），tN 回退为类型短名（保留末段包名与 * / []
+// 形态：*example.com/mtest.Inner → *mtest.Inner、[]int → []int）——
+// value-trace 展示可读。make 分配不得误恢复为 make 关键字（idents
+// 命中的是预声明标识符）。
 func TestTempValueAnonymousAllocTypeName(t *testing.T) {
 	nodes, _ := indexFixture(t, map[string]string{
 		"go.mod": moduleGoMod,
@@ -45,8 +46,8 @@ func g(v string) {
 		}
 		got[n.Name] = true
 	}
-	if !got["mtest.Inner"] {
-		t.Errorf("匿名 &Inner{} 分配应显示类型短名 mtest.Inner（保留末段包名），got names=%v", got)
+	if !got["*mtest.Inner"] {
+		t.Errorf("匿名 &Inner{} 分配应显示类型短名 *mtest.Inner（保留末段包名与 * 形态），got names=%v", got)
 	}
 	if got["make"] {
 		t.Errorf("make 分配不得误恢复为 make 关键字，got names=%v", got)
@@ -60,8 +61,8 @@ func g(v string) {
 		}
 		gotF[n.Name] = true
 	}
-	if !gotF["mtest.Outer"] {
-		t.Errorf("匿名 &Outer{} 分配应显示 mtest.Outer，got names=%v", gotF)
+	if !gotF["*mtest.Outer"] {
+		t.Errorf("匿名 &Outer{} 分配应显示 *mtest.Outer（保留 * 形态），got names=%v", gotF)
 	}
 }
 

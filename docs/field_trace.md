@@ -2793,10 +2793,12 @@ grpc 生成的 `&UnaryServerInfo{}` 等）——无源码变量名，tN 语义�
 
 **改动**（纯展示优化，ID/图结构/边不变，不影响判定逻辑）：
 
-1. `allocTypeShort`（fe_helpers.go）：去 `*`/`[]` 前缀后取最后一个
-   `/` 之后——**保留末段包名**（`*github.com/.../proto.String` →
-   `proto.String` 而非 `String`，用户确认防同名混淆）；无包路径
-   （`*interface{}` / `*member.Member`）取本身
+1. `allocTypeShort`（fe_helpers.go）：取最后一个 `/` 之后并**补回
+   `*`/`[]` 前缀**——`*` 与 `[]` 在包路径之前直接取 `/` 后会丢
+   （初版两次迭代踩坑：先 TrimLeft 去前缀丢形态、后取 `/` 丢 `*`）；
+   **保留末段包名与指针/数组形态**（`*github.com/.../proto.String`
+   → `*proto.String`，用户确认）；无包路径（`*interface{}` /
+   `*member.Member`）取本身
 2. emitValue 通用分支：Alloc 且 Name 仍 SSA 名（tN）→ 类型短名；
    phi 等纯中间值仍回退 slot
 3. instancePath Alloc 分支：idents 命中预声明标识符（make/new/len
@@ -2805,8 +2807,9 @@ grpc 生成的 `&UnaryServerInfo{}` 等）——无源码变量名，tN 语义�
 4. alias 路径（valueNodeID / objectIDOf）同步类型短名回退
 
 **效果**（go2o 实测）：tN Alloc 4814 → 3；value-trace 展示
-`← t0:73` → `← proto.messageServiceClient:73`。make 的 `[]int` →
-`int`。取址变量声明（arr）仍恢复源码变量名（回归保护）。
+`← t0:73` → `← *proto.messageServiceClient:73`（`*` 与末段包名保留，
+用户确认：`[]`/`*` 是类型形态信息）。make 的 `[]int` → `[]int`。
+取址变量声明（arr）仍恢复源码变量名（回归保护）。
 
 **测试先行**：fe_anon_alloc_test.go 2 用例（匿名 &T{} 类型短名 +
 make 防误恢复；取址变量仍恢复变量名）；13 包全绿 + e2e-fixture
