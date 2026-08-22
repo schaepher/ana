@@ -21,6 +21,21 @@
 **图数据模型总表（节点/边/属性/置信度/表结构）见 [`docs/data-model.md`](docs/data-model.md)**——
 理解本项目优先读它，再读 field_trace.md 各功能 §。
 
+## 强制流程（Q235-2，借鉴 GitNexus impact-before-edit）
+
+1. **改符号前影响分析**：修改任何被其他符号引用的符号（函数/方法/
+   类型/字段/包级变量；跨包、被调用者多者必查）前，先跑
+   `codeintel query impact <sym> --repo <path>`（本仓库未索引时用
+   codegraph_impact）
+2. **影响面明示**：影响评估为 HIGH/CRITICAL（调用者 ≥10 或跨模块/
+   跨包边界）的变更，须在回复中明示影响面与回归策略（哪些测试/
+   验证覆盖）
+3. **UNKNOWN 视为未解决**：符号未索引 / 索引陈旧 → 先
+   `codeintel update --repo <path>` 或 `init` 补索引，不得直接改
+
+支撑：`.claude/hooks/impact-check.sh`（PreToolUse 非阻断提醒，只提示
+不拒绝；仓库已索引/未索引两种情况各一行）。
+
 ## 常用命令
 
 ```shell
