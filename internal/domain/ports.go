@@ -61,6 +61,7 @@ type TraceRow struct {
 	Kind              EntityKind
 	Access            string   // field_access 的 read/write
 	FuncID            string   // 所属函数 canonical ID（GetValueTrace 函数上下文分组用）
+	FilePath          string   // 节点文件（Q235-10：CLI 渲染源码片段用）
 	FullPath          string   // field_access 的类型限定路径（前端展开匹配用）
 	Conditions        []string // 路径条件标注（Q92 查询期计算，不落库）
 	DispatchCandidate bool     // 该行所属函数是接口候选实现（Q157 P1）

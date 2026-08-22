@@ -67,11 +67,11 @@ func (r *Repo) GetValueTrace(nodeID domain.CanonicalID, maxDepth int, minConf fl
 	}
 	// 锚点字段上下文：field_access 锚点 → full_path（精确）+ instance_path
 	// （前缀）；值锚点 → ''（对象级）
-	var anchorCtx, anchorInst sql.NullString
+	var anchorCtx, anchorInst, anchorFile sql.NullString
 	if err := r.QueryRow(`SELECT json_extract(properties, '$.full_path'),
-		COALESCE(json_extract(properties, '$.instance_path'), json_extract(properties, '$.full_path'))
-		FROM nodes WHERE id = ? AND kind = 'field_access'`, string(nodeID)).Scan(&anchorCtx, &anchorInst); err != nil {
-		anchorCtx, anchorInst = sql.NullString{}, sql.NullString{}
+		COALESCE(json_extract(properties, '$.instance_path'), json_extract(properties, '$.full_path')),
+		file_path FROM nodes WHERE id = ? AND kind = 'field_access'`, string(nodeID)).Scan(&anchorCtx, &anchorInst, &anchorFile); err != nil {
+		anchorCtx, anchorInst, anchorFile = sql.NullString{}, sql.NullString{}, sql.NullString{}
 	}
 	ctx, inst := "", ""
 	if anchorCtx.Valid {
@@ -120,7 +120,7 @@ SELECT dp.id, MIN(dp.depth), n.name,
        (SELECT COALESCE(GROUP_CONCAT(DISTINCT e2.kind), '') FROM edges e2
          WHERE ((dp.dir = 0 AND e2.target_id = dp.id) OR (dp.dir = 1 AND e2.source_id = dp.id))
            AND e2.kind IN ('data_flows_to','argument','returns','phi_operand','summary_io')),
-       n.line_start, dp.dir, n.kind,
+       n.line_start, dp.dir, n.kind, n.file_path,
        json_extract(n.properties, '$.access_kind'), json_extract(n.properties, '$.func_id'),
        json_extract(n.properties, '$.full_path'),
        (SELECT v2.c_iface FROM vt v2 WHERE v2.id = dp.id AND v2.dir = dp.dir ORDER BY v2.depth LIMIT 1),
@@ -149,11 +149,15 @@ ORDER BY dp.dir, MIN(dp.depth), dp.id`,
 			cOrigin  sql.NullString
 			cConf    sql.NullFloat64
 		)
-		if err := rows.Scan(&id, &row.Depth, &row.Name, &row.EdgeKinds, &line, &dir, &kind, &access, &funcID, &fullPath, &cIface, &cOrigin, &cConf); err != nil {
+		var filePath sql.NullString
+		if err := rows.Scan(&id, &row.Depth, &row.Name, &row.EdgeKinds, &line, &dir, &kind, &filePath, &access, &funcID, &fullPath, &cIface, &cOrigin, &cConf); err != nil {
 			return nil, err
 		}
 		row.ID = domain.CanonicalID(id)
 		row.Dir = dir
+		if filePath.Valid {
+			row.FilePath = filePath.String
+		}
 		row.EdgeKinds = sortEdgeKinds(row.EdgeKinds)
 		row.Kind = domain.EntityKind(kind)
 		if access.Valid {
@@ -164,6 +168,9 @@ ORDER BY dp.dir, MIN(dp.depth), dp.id`,
 		}
 		if fullPath.Valid {
 			row.FullPath = fullPath.String
+		}
+		if row.Depth == 0 && anchorFile.Valid {
+			row.FilePath = anchorFile.String
 		}
 		if line.Valid {
 			row.Line = int(line.Int64)
@@ -180,7 +187,47 @@ ORDER BY dp.dir, MIN(dp.depth), dp.id`,
 		}
 		out = append(out, &row)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// Q235-10：ssa_value 等节点无 file_path——从函数节点批量补
+	// （源码片段渲染用；一次查询）。单连接池——必须先关 rows 再开
+	// 新查询（否则阻塞静默失败）
+	rows.Close()
+	// missing 以 index 为键（同函数多个节点共 FuncID——以 FuncID 为键
+	// 会后者覆盖前者漏填，Q235-10 调试发现）
+	missingIdx := map[int]string{}
+	funcIDs := map[string]bool{}
+	for i, row := range out {
+		if row.FilePath == "" && row.FuncID != "" {
+			missingIdx[i] = row.FuncID
+			funcIDs[row.FuncID] = true
+		}
+	}
+	if len(missingIdx) > 0 {
+		ids := make([]any, 0, len(funcIDs))
+		for fid := range funcIDs {
+			ids = append(ids, fid)
+		}
+		fr, err := r.Query(`SELECT id, file_path FROM nodes WHERE id IN (`+
+			strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")+`)`, ids...)
+		if err == nil {
+			fileByFunc := map[string]string{}
+			for fr.Next() {
+				var fid, fp string
+				if err := fr.Scan(&fid, &fp); err == nil {
+					fileByFunc[fid] = fp
+				}
+			}
+			fr.Close()
+			for i, fid := range missingIdx {
+				if fp := fileByFunc[fid]; fp != "" {
+					out[i].FilePath = fp
+				}
+			}
+		}
+	}
+	return out, nil
 }
 
 // GetValueTraceMulti 多锚点合并正向追踪（⑧ 跳板合并）：一次查询返回
@@ -217,7 +264,7 @@ SELECT dp.id, MIN(dp.depth), n.name,
        (SELECT COALESCE(GROUP_CONCAT(DISTINCT e2.kind), '') FROM edges e2
          WHERE ((dp.dir = 0 AND e2.target_id = dp.id) OR (dp.dir = 1 AND e2.source_id = dp.id))
            AND e2.kind IN ('data_flows_to','argument','returns','phi_operand','summary_io')),
-       n.line_start, dp.dir, n.kind,
+       n.line_start, dp.dir, n.kind, n.file_path,
        json_extract(n.properties, '$.access_kind'), json_extract(n.properties, '$.func_id'),
        json_extract(n.properties, '$.full_path')
 FROM vt dp JOIN nodes n ON n.id = dp.id
@@ -239,12 +286,16 @@ ORDER BY MIN(dp.depth), dp.id`,
 			funcID   sql.NullString
 			fullPath sql.NullString
 		)
-		if err := rows.Scan(&id, &row.Depth, &row.Name, &row.EdgeKinds, &line, &row.Dir, &kind, &access, &funcID, &fullPath); err != nil {
+		var filePath sql.NullString
+		if err := rows.Scan(&id, &row.Depth, &row.Name, &row.EdgeKinds, &line, &row.Dir, &kind, &filePath, &access, &funcID, &fullPath); err != nil {
 			return nil, err
 		}
 		row.ID = domain.CanonicalID(id)
 		row.EdgeKinds = sortEdgeKinds(row.EdgeKinds)
 		row.Kind = domain.EntityKind(kind)
+		if filePath.Valid {
+			row.FilePath = filePath.String
+		}
 		if access.Valid {
 			row.Access = access.String
 		}

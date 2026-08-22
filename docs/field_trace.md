@@ -2933,4 +2933,37 @@ Call（Pos=Rparen）/Alloc（Pos='{'）等非 Ident 位置天然不命中，不
 
 ---
 
+## 71. value-trace 四格式输出（Q235-10，2026-08-22）
+
+**需求**：用户反馈 value-trace 输出格式看不懂（超长 canonical ID
+刷屏、英文边类型、行号无源码对照、函数分组割裂链）——优化为分组
+文本 + 树形图 + mermaid 图 + json 四种格式。
+
+**设计**（用户确认）：分组按**锚点行等号左右**分类来源侧节点：
+- 写入值：等号右边变量（`u.Brands = brands` 的 brands）
+- 对象：等号左边路径基址（u——字段所属对象）
+- 来源：更深层的值产生处（递归子层）
+- 去向：dir=1 使用链
+
+**实现**：
+1. TraceRow 加 FilePath；GetValueTrace SQL 补 file_path 列（ssa_value
+   无 file_path——Go 层批量从函数节点补，**missing 以 index 为键**——
+   同函数多节点共 FuncID 以 FuncID 为键会后者覆盖漏填）
+2. CLI vt_render.go：文本（分组+源码片段+短锚点）/ --format tree
+   （ASCII 树 ├─└─）/ --format mermaid（flowchart LR）/ --json 保持
+3. 源码片段：FilePath+行号读文件（截断 60 字符，缓存）
+
+**坑**：单连接池——rows 未 Close 时开新查询静默失败（补函数文件
+查询须先 rows.Close）；replace 全量替换误伤 GetValueTraceMulti 的
+scan（SQL 加列但 scan 未对应 → 列错位 → SummaryChain/Lifecycle
+去重错乱——测试回归暴露）。
+
+**效果**（go2o 实测）：`AccountEmail: req.AccountEmail,` 等源码片段
+随节点展示；分组/树形/图四种格式。13 包全绿 + e2e 38 项。
+
+**遗留**：复合字面量初始化锚点（`AccountEmail: req.AccountEmail,`
+无等号）分组退化为全「来源」——等号解析需扩展复合字面量形态。
+
+---
+
 **文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q235，逐 Q 编号 + 日期）。

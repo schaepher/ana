@@ -16,8 +16,9 @@ import (
 
 // outputOpts 查询输出选项（--json / --compact，Q96）。
 type outputOpts struct {
-	json    bool // 结构化 JSON 输出（stdout 仅 JSON，日志已切文件）
-	compact bool // 树形/表格输出压缩为紧凑形式
+	json     bool // 结构化 JSON 输出（stdout 仅 JSON，日志已切文件）
+	compact  bool // 树形/表格输出压缩为紧凑形式
+	repoPath string // 目标仓库根（Q235-10：value-trace 源码片段读取）
 }
 
 // encodeJSON 输出结构化 JSON（stdout 唯一内容）。
@@ -71,7 +72,7 @@ func cmdQuery(args []string) int {
 		fmt.Fprintf(os.Stderr, "warning: %s\n", tip)
 	}
 
-	opts := outputOpts{json: f.json, compact: f.compact}
+	opts := outputOpts{json: f.json, compact: f.compact, repoPath: f.repoPath}
 	// --since 标注（§17.2）：symbol/fields/callers/callees/impact 输出
 	// 对函数/方法节点标注 [new]/[mod]
 	var since *domain.SinceInfo
@@ -91,7 +92,7 @@ func cmdQuery(args []string) int {
 		if !f.minConfSet {
 			mc = 1.0
 		}
-		return queryValueTrace(acts, target, f.maxDepth, mc, f.includeContainer, opts)
+		return queryValueTrace(acts, target, f.maxDepth, mc, f.includeContainer, opts, f.format)
 	case "summary":
 		return querySummary(acts, target, opts, f.format)
 	case "context":

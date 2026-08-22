@@ -12,7 +12,7 @@ import (
 
 // queryValueTrace 输出数据值在整条链路上的处理过程，按函数上下文分组
 // （field_trace.md §14.2 数据值全链追踪）。
-func queryValueTrace(acts *action.Actions, nodeID string, maxDepth int, minConf float64, includeContainer bool, opts outputOpts) int {
+func queryValueTrace(acts *action.Actions, nodeID string, maxDepth int, minConf float64, includeContainer bool, opts outputOpts, format string) int {
 	logger := zap.L()
 	logger.Debug("enter queryValueTrace")
 	defer logger.Debug("exit queryValueTrace")
@@ -64,52 +64,15 @@ func queryValueTrace(acts *action.Actions, nodeID string, maxDepth int, minConf 
 		fmt.Println("无数据流（节点不存在或无数据流边）")
 		return 0
 	}
-	fmt.Printf("数据值追踪（%s，--max-depth %d）:\n", nodeID, maxDepth)
-	var curFunc string
-	for _, r := range rows {
-
-		if r.FuncID != curFunc {
-			curFunc = r.FuncID
-			group := shortFuncName(curFunc)
-			if group == "" {
-				group = "（未知函数）"
-			}
-			fmt.Printf("\n【%s】\n", group)
-		}
-		arrow := "→"
-		if r.Dir == 0 {
-			arrow = "←"
-		}
-		edge := lastEdgeKind(r.EdgeKinds)
-		acc := ""
-		if r.Kind == domain.KindFieldAccess {
-			if r.Access == "read" {
-				acc = " [读]"
-			} else {
-				acc = " [写]"
-			}
-		}
-		line := ""
-		if r.Line > 0 {
-			line = fmt.Sprintf(":%d", r.Line)
-		}
-		cond := ""
-		if len(r.Conditions) > 0 {
-			cond = " [条件: " + strings.Join(r.Conditions, "; ") + "]"
-		}
-		disp := ""
-		if r.DispatchCandidate {
-			disp = fmt.Sprintf(" [候选 %s %.1f]", r.DispatchOrigin, r.DispatchConf)
-		}
-		if r.EdgeOrigin != "" {
-			disp = fmt.Sprintf(" [动态候选 %s %.1f %s]", r.EdgeOrigin, r.EdgeConf, r.EdgeIface)
-		}
-		indent := strings.Repeat("  ", r.Depth)
-		if opts.compact {
-			indent = ""
-		}
-		fmt.Printf("%s%s %s %s%s%s%s\n", indent, arrow, edge, r.Name+acc, line, cond, disp)
+	// Q235-10：四格式渲染（文本分组 / tree / mermaid / json 在前）
+	if format == "" {
+		format = "text"
 	}
+	repoDir := opts.repoPath
+	if repoDir == "" {
+		repoDir = "."
+	}
+	fmt.Print(vtRender(rows, repoDir, format))
 	return 0
 }
 
