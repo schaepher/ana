@@ -263,3 +263,34 @@ func station(c Conn) {
 		t.Errorf("缺 JOIN 值流边（sys_district.code → sys_sub_station.city_code）")
 	}
 }
+
+// TestParseSQLSubqueryParen：Q239——子查询右括号不得并进表名/列名
+// （(SELECT COUNT(1) FROM mm_member) → mm_member；Q220a 同类 where 串误解析）。
+func TestParseSQLSubqueryParen(t *testing.T) {
+	cases := []struct {
+		sql       string
+		table     string
+		whereCols []string
+	}{
+		{"SELECT (SELECT COUNT(1) FROM mm_member) as totalMembers", "mm_member", nil},
+		{"SELECT (SELECT COUNT(1) FROM mm_member WHERE status = ?) as n", "mm_member", []string{"status"}},
+		{"SELECT * FROM mm_member) WHERE status = ?", "mm_member", []string{"status"}},
+		// 子查询 FROM（派生表）按 Q6 精神放弃——不产出假表
+		{"SELECT * FROM (SELECT id FROM b) x WHERE x.id = ?", "", nil},
+	}
+	for _, c := range cases {
+		table, _, whereCols, _ := parseSQLStmt(c.sql)
+		if table != c.table {
+			t.Errorf("%q: table = %q, want %q", c.sql, table, c.table)
+		}
+		if len(whereCols) != len(c.whereCols) {
+			t.Errorf("%q: whereCols = %v, want %v", c.sql, whereCols, c.whereCols)
+			continue
+		}
+		for i, w := range c.whereCols {
+			if whereCols[i] != w {
+				t.Errorf("%q: whereCols[%d] = %q, want %q", c.sql, i, whereCols[i], w)
+			}
+		}
+	}
+}

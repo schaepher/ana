@@ -203,6 +203,7 @@ func extractWhereCols(rest string) []string {
 			c = c[i+1:]
 		}
 		c = strings.Trim(c, "`\"[]")
+		c = strings.TrimRight(c, ")") // Q239：子查询闭合括号剥离
 		if c != "" {
 			out = append(out, c)
 		}
@@ -270,6 +271,8 @@ func parseSQLStmt(sql string) (table string, cols []string, whereCols []string, 
 	}
 	table = strings.TrimSpace(rest[:tableEnd])
 	table = strings.Trim(table, "`\"[]")
+	// Q239：子查询右括号不得并进表名（(SELECT ... FROM mm_member) → mm_member）
+	table = strings.TrimRight(table, ")")
 	if table == "" {
 		return "", nil, nil, nil
 	}
