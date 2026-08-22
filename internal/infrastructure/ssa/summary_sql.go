@@ -24,10 +24,12 @@ func (ext *fieldExtractor) applySQLSummary(cc *ssa.CallCommon, calleeID domain.C
 	if sqlArg < 0 || sqlArg >= len(cc.Args) {
 		return nil
 	}
-	sqlStr := ""
-	if c, ok := unwrapConst(cc.Args[sqlArg]); ok {
+	sqlStr := ext.resolveSQLString(cc.Args[sqlArg], 0)
+	if sqlStr == "" {
 		// Q177 真实形态：Exec(sql interface{}) 常量被 MakeInterface 包装
-		sqlStr = constant.StringVal(c.Value)
+		if c, ok := unwrapConst(cc.Args[sqlArg]); ok {
+			sqlStr = constant.StringVal(c.Value)
+		}
 	}
 	table, cols, whereCols, joinPairs := parseSQLStmt(sqlStr)
 	line := ext.prog.Fset.PositionFor(cc.Pos(), false).Line

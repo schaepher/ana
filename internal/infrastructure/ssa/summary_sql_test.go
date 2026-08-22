@@ -294,3 +294,61 @@ func TestParseSQLSubqueryParen(t *testing.T) {
 		}
 	}
 }
+
+// TestSQLDynamicSprintf：Q239——fmt.Sprintf 动态拼接 SQL 还原：
+// `...WHERE %s` 的 %s ← where 实参（常量 / 嵌套 Sprintf / 跨函数参数）
+// → 还原后走统一解析（表/where 列）。go2o rbac_dao_impl 真实形态。
+func TestSQLDynamicSprintf(t *testing.T) {
+	nodes, _ := indexFixture(t, map[string]string{
+		"go.mod": moduleGoMod,
+		"field-summary.yaml": `
+summaries:
+  - iface: example.com/mtest.Conn
+    method: Query
+    kind: sql
+    sql_write: false
+    where_arg: 0
+`,
+		"main.go": `package m
+
+import "fmt"
+
+type Rows struct{}
+
+type Conn interface {
+	Query(sql string, cb func(*Rows))
+}
+
+func pagingPermRole(c Conn, begin, end int, where string) {
+	s := fmt.Sprintf("SELECT COUNT(1) FROM rbac_role WHERE %s", where)
+	c.Query(s, func(r *Rows) {})
+}
+
+func caller(c Conn) {
+	pagingPermRole(c, 0, 10, "role_id = ?")
+}
+
+func main() {}
+`,
+	})
+	var tableNode, filterNode *domain.CodeEntity
+	for _, n := range nodes {
+		if n.Kind != domain.KindFieldAccess {
+			continue
+		}
+		if n.Name == "rbac_role" || n.Name == "rbac_role.role_id" {
+			if n.Name == "rbac_role" && n.Property("access_kind") == "read" {
+				tableNode = n
+			}
+			if n.Name == "rbac_role.role_id" && n.Property("access_kind") == "filter" {
+				filterNode = n
+			}
+		}
+	}
+	if tableNode == nil {
+		t.Errorf("动态 SQL 未还原表 rbac_role（Sprintf %%s 未解析）")
+	}
+	if filterNode == nil {
+		t.Errorf("动态 SQL 未还原 where 列 role_id（跨函数参数追溯失败）")
+	}
+}

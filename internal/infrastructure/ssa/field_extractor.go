@@ -176,4 +176,6 @@ type fieldExtractor struct {
 	chainTables   map[ssa.Value]string                   // Q175：XORM 链式表名（Table 调用返回值 → 表名）
 	tableNames    map[*types.Named]string                // Q205：tableNameOf 结果缓存（无 spec 接口调用兜底高频触发）
 	typeMapping   map[*types.Named]string                // Q211：orm.Mapping 实体类型→表名（Index 级收集共享）
+	paramCallerCache map[*ssa.Function]*paramCalls       // Q239：参数→静态调用点缓存（动态 SQL 还原）
+	funcCache      []*ssa.Function                       // Q239：prog 全函数缓存
 }
