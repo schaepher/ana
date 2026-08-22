@@ -18,6 +18,7 @@ func cmdClean(args []string) int {
 	force := fs.Bool("force", false, "不提示直接删除")
 	purgeCache := fs.Bool("purge-cache", false, "连包级分析缓存（.codeintel/cache）一起删除——默认保留")
 	fs.Parse(args)
+	*repoPath = resolveRepoRef(*repoPath) // Q238：注册表短名/后缀/module
 
 	abs, err := filepath.Abs(*repoPath)
 	if err != nil {
@@ -43,6 +44,7 @@ func cmdClean(args []string) int {
 			return 1
 		}
 		fmt.Printf("已删除 %s（含包级分析缓存）\n", target)
+		unregisterRepoAfterClean(abs)
 		return 0
 	}
 	// 默认保留 .codeintel/cache（Q176 包级分析缓存）：pkg 源码 hash 自校验
@@ -63,5 +65,7 @@ func cmdClean(args []string) int {
 		}
 	}
 	fmt.Printf("已删除索引 %s（保留 .codeintel/cache 包级分析缓存；--purge-cache 可一并删除）\n", target)
+	// Q238：clean 注销全局台账（级联 worktree 条目）
+	unregisterRepoAfterClean(abs)
 	return 0
 }

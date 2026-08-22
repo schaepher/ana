@@ -28,6 +28,7 @@ func cmdInit(ctx context.Context, args []string) int {
 	repoPath := fs.String("repo", ".", "仓库根目录（含 go.mod；默认当前目录）")
 	workers := fs.Int("workers", defaultBuildWorkers(), "SSA 分析按包并发数（Q221：默认 min(NumCPU, 8)——8 核冷启动 5m16s→40s，峰值 RSS ~2.9G；小内存机器可调小，如 1）")
 	fs.Parse(args)
+	*repoPath = resolveRepoRef(*repoPath) // Q238：注册表短名/后缀/module
 
 	abs, err := filepath.Abs(*repoPath)
 	if err != nil {
@@ -107,6 +108,8 @@ func cmdInit(ctx context.Context, args []string) int {
 		fmt.Fprintln(os.Stderr, "警告：构建降级完成（部分工具失败，已保留可用数据）。")
 	}
 	fmt.Printf("数据库: %s/.codeintel/codeintel.db\n", abs)
+	// Q238：构建成功注册全局台账（路径/module/HEAD/worktree 归属）
+	registerRepoAfterBuild(abs, repo.Module, len(repo.Modules), result.CommitSHA)
 	return 0
 }
 
@@ -155,6 +158,7 @@ func resolveRepo(repoPath string) (string, string, error) {
 	if repoPath == "" {
 		repoPath = "."
 	}
+	repoPath = resolveRepoRef(repoPath) // Q238：注册表短名/后缀/module 解析
 	abs, err := filepath.Abs(repoPath)
 	if err != nil {
 		return "", "", err

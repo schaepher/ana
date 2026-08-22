@@ -54,6 +54,9 @@ func cmdQuery(args []string) int {
 	abs, _, err := resolveRepo(f.repoPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		if f.repoPath == "." { // Q238：缺省 cwd 非仓库时附引导（Q13）
+			printRepoHint()
+		}
 		return 1
 	}
 
@@ -143,10 +146,10 @@ func parseQueryFlags(args []string) queryFlags {
 		a := args[i]
 		switch {
 		case a == "--repo" && i+1 < len(args):
-			f.repoPath = args[i+1]
+			f.repoPath = resolveRepoRef(args[i+1]) // Q238：注册表短名/后缀/module
 			i++
 		case strings.HasPrefix(a, "--repo="):
-			f.repoPath = strings.TrimPrefix(a, "--repo=")
+			f.repoPath = resolveRepoRef(strings.TrimPrefix(a, "--repo="))
 		case a == "--depth" && i+1 < len(args):
 			f.depth, _ = strconv.Atoi(args[i+1])
 			i++

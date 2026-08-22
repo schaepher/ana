@@ -211,7 +211,8 @@ func splitRuleExpr(expr string) (from, to string, ok bool) {
 }
 
 // parseRepoFlag 提取 --repo <path>（或 --repo=path）并返回剩余参数。
-// Q237：未指定 --repo 默认当前工作目录（"."）。
+// Q237：未指定 --repo 默认当前工作目录（"."）；Q238：指定值经注册表
+// 短名/后缀/module 解析。
 func parseRepoFlag(args []string) (string, []string, error) {
 	repo := "."
 	var rest []string
@@ -219,10 +220,10 @@ func parseRepoFlag(args []string) (string, []string, error) {
 		a := args[i]
 		switch {
 		case a == "--repo" && i+1 < len(args):
-			repo = args[i+1]
+			repo = resolveRepoRef(args[i+1])
 			i++
 		case strings.HasPrefix(a, "--repo="):
-			repo = strings.TrimPrefix(a, "--repo=")
+			repo = resolveRepoRef(strings.TrimPrefix(a, "--repo="))
 		case a == "--json":
 			rest = append(rest, a)
 		default:

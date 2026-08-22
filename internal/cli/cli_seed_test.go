@@ -26,6 +26,21 @@ func captureStdout(f func()) string {
 	return buf.String()
 }
 
+// captureStderr 捕获 stderr 输出（提示/候选断言用）。
+func captureStderr(f func()) string {
+	old := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+	f()
+	w.Close()
+	os.Stderr = old
+	var buf strings.Builder
+	if _, err := io.Copy(&buf, r); err != nil {
+		return ""
+	}
+	return buf.String()
+}
+
 // seedRepo 建临时仓库 + 预填一个小图（query 的 resolveRepo 要求 go.mod）。
 func seedRepo(t *testing.T) string {
 	t.Helper()

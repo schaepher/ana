@@ -32,6 +32,7 @@ func cmdUpdate(ctx context.Context, args []string) int {
 	repoPath := fs.String("repo", ".", "仓库根目录（须已运行 codeintel init 且为 git 仓库；默认当前目录）")
 	workers := fs.Int("workers", defaultBuildWorkers(), "SSA 分析按包并发数（Q221：默认 min(NumCPU, 8)）")
 	fs.Parse(args)
+	*repoPath = resolveRepoRef(*repoPath) // Q238：注册表短名/后缀/module
 
 	abs, err := filepath.Abs(*repoPath)
 	if err != nil {
@@ -122,6 +123,8 @@ func cmdUpdate(ctx context.Context, args []string) int {
 	if result.Status == domain.BuildDegraded {
 		fmt.Fprintln(os.Stderr, "警告：增量更新降级完成（部分工具失败，已保留可用数据）。")
 	}
+	// Q238：update 成功刷新全局台账构建状态（registered_at 不变）
+	refreshRepoAfterUpdate(abs, result.CommitSHA)
 	return 0
 }
 
