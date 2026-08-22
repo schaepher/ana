@@ -2744,4 +2744,41 @@ go2o 15 万节点库 Open 实测 4–7ms（幂等 DDL 空操作，可忽略）�
 
 ---
 
+## 66. Q235 六项借鉴总览 + query context 聚合查询（Q235-5，2026-08-22）
+
+调研 GitNexus（Agent 上下文的神经系统——预计算关系智能 + AI 代理
+协作工程实践）后选取六项落地（设计文档 docs/design-q235.md，实施
+完成后归档删除，本节省略号内为最终形态）：
+
+| # | 借鉴项 | 落点 | 完成 |
+|---|---|---|---|
+| ① | impact-before-edit 规则 + 非阻断 hook | AGENTS.md 强制流程节 + .claude/hooks/impact-check.sh（PreToolUse，只提示不拒绝） | 3faac62 |
+| ② | asttool rename 符号感知重命名 | §65（Q235-4） | 3f3ae11 |
+| ③ | Runbook 故障速查表 | docs/runbook.md（14 条真实踩坑） | 9572cae |
+| ④ | DoD 交付清单 + 五轴自检 | docs/DoD.md + AGENTS.md 导航 | 9572cae |
+| ⑤ | query context 聚合查询 | 本节约（下述） | 本批 |
+| ⑥ | schema 加法自动迁移 | §64（Q235-3） | 3376331 |
+
+**⑤ query context（借鉴 GitNexus context 工具——一次调用返回完整
+上下文，替代多次查询链，省 token、小模型可用）**：
+
+- `codeintel query context <节点> --repo <path>`：一次返回 symbol +
+  callers/callees（depth 1）+ fields（按 direct_read/write/
+  indirect_write 分组）+ chain（summary 生命周期主链）+ traces（值流
+  depth 4）+ dispatch（接口节点候选）
+- action 层 Context(input) 编排——**全部复用现有 repo/action 查询，
+  无新增图逻辑**；子查询失败部分降级（字段 null 不整体失败），主字段
+  （symbol）失败整体失败
+- **MCP 地基**：编排与传输解耦，未来 MCP 暴露直接复用 action.Context
+  （只加 transport 层）
+- server `/api/context?node=<锚点>`（缺 node 400 / 未知符号 500）
+- traces 深度固定 4（上下文摘要级，防输出过载；深链用 value-trace）
+
+**验证**：action_context_test.go 4 用例（完整结构/字段锚点 chain/
+接口 dispatch/未知符号）+ CLI + server 测试；13 包全绿 + e2e-fixture
+38 项；go2o 实测：orm.Save（fields+chain+traces）与 init（49 callees
+一次拿到），含进程启动 179ms。
+
+---
+
 **文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q235，逐 Q 编号 + 日期）。

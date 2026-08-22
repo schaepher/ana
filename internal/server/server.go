@@ -53,6 +53,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/expand", s.handleExpand)
 	mux.HandleFunc("/api/flows", s.handleFlows)
 	mux.HandleFunc("/api/value-trace", s.handleValueTrace)
+	mux.HandleFunc("/api/context", s.handleContext) // Q235-5：一次调用拿全链上下文
 	mux.HandleFunc("/api/source", s.handleSource)
 	mux.HandleFunc("/incremental", s.handleIncremental)
 	mux.HandleFunc("/api/module-calls", s.handleModuleCalls)

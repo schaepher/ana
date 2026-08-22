@@ -94,6 +94,8 @@ func cmdQuery(args []string) int {
 		return queryValueTrace(acts, target, f.maxDepth, mc, f.includeContainer, opts)
 	case "summary":
 		return querySummary(acts, target, opts, f.format)
+	case "context":
+		return queryContext(acts, target, opts)
 	case "unused":
 		return queryUnused(acts, abs, f)
 	case "module-calls":

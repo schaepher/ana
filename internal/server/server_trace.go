@@ -9,6 +9,25 @@ import (
 )
 
 // handleValueTrace 返回数据值全链（函数上下文分组渲染数据）。
+// handleContext Q235-5：/api/context?node=<锚点>——一次调用拿全链
+// 上下文（action.Context 编排；子查询部分降级，主字段失败 500）。
+func (s *Server) handleContext(w http.ResponseWriter, r *http.Request) {
+	logger := logging.FromContext(s.ctx)
+	logger.Debug("enter (Server).handleContext")
+	defer logger.Debug("exit (Server).handleContext")
+	node := r.URL.Query().Get("node")
+	if node == "" {
+		writeErr(w, http.StatusBadRequest, "missing node")
+		return
+	}
+	ctx, err := s.acts.Context(node)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, ctx)
+}
+
 func (s *Server) handleValueTrace(w http.ResponseWriter, r *http.Request) {
 	logger := logging.FromContext(s.ctx)
 	logger.Debug("enter (Server).handleValueTrace")

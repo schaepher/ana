@@ -8,8 +8,8 @@
   改动交付前逐项自查**（Q235）
 - [`docs/runbook.md`](docs/runbook.md)：故障模式速查表（/tmp 满、WAL、
   端口冲突、schema 迁移等 14 条，Q235）
-- [`docs/design-q235.md`](docs/design-q235.md)：Q235 六项借鉴设计（实施
-  完成后归档进 field_trace.md）
+- `docs/design-q235.md` 已归档：Q235 六项借鉴设计已实施并落档
+  field_trace.md §64–§66（设计文档已删除）
 - [`docs/field_trace.md`](docs/field_trace.md)：逐 Q 实现记录（§63 起为
   Q234/Q235 系列）
 
