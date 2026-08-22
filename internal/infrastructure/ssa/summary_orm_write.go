@@ -38,7 +38,8 @@ func (ext *fieldExtractor) applyORMWrite(cc *ssa.CallCommon, calleeID domain.Can
 		if c, isConst := realArg.(*ssa.Const); isConst && c.Value != nil &&
 			constant.StringVal(c.Value) != "" && len(cc.Args) >= 3 {
 
-			table := chainTableNameValue(cc.Args[0])
+			table := ext.chainTableNameValue(cc.Args[0])
+			fmt.Printf("DEBUG B3 table=%q\n", table)
 			if table == "" {
 				scope := chainScopeObject(cc.Args[0])
 				if scope == nil {

@@ -32,7 +32,7 @@ func (ext *fieldExtractor) applyORMRead(cc *ssa.CallCommon, calleeID domain.Cano
 		return nil
 	}
 
-	table := chainTableNameValue(cc.Args[0])
+	table := ext.chainTableNameValue(cc.Args[0])
 	if table == "" {
 		table = ext.tableNameOf(named)
 	}

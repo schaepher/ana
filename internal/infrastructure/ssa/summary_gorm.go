@@ -1,6 +1,7 @@
 package ssa
 
 import (
+	"fmt"
 	"go/constant"
 
 	"golang.org/x/tools/go/ssa"
@@ -42,22 +43,49 @@ import (
 // 不一致时（Table("mch_account") + 结构体 Merchant）以显式为准。无显式
 // 表名返回 ""（fallback 实体类型推断）。Where/Not/Or 的条件串不被误取
 // （方法名限定 Table/Model）。
-func chainTableNameValue(recv ssa.Value) string {
+// Q239：Model(类型实参)（Model(&WalletLog{})）——经实体类型 TableName()
+// 摘要解析（go2o 曾把 wal_wallet_log 误解析成 transaction_data）。
+func (ext *fieldExtractor) chainTableNameValue(recv ssa.Value) string {
 	c, ok := recv.(*ssa.Call)
 	if !ok {
 		return ""
 	}
-	if c.Call.Method != nil && len(c.Call.Args) > 0 {
-		if name := c.Call.Method.Name(); name == "Table" || name == "Model" {
-			if cst, isConst := c.Call.Args[0].(*ssa.Const); isConst && cst.Value != nil {
+	for i, a := range c.Call.Args {
+		fmt.Printf("  arg%d=%T type=%v\n", i, a, a.Type())
+	}
+	// 方法调用 CallCommon.Args[0] 是 receiver——实参从 Args[1] 起；
+	// any 参数被 MakeInterface 包装（Type()=interface{}）须解包取实体类型
+	// 链式中间值调用是 Value 风格（Method=nil、Value=MethodValue）——
+	// 方法名判定须兼容两种（Q239：此前只查 Method 导致链式 Table/Model
+	// 分支从未生效）
+	if len(c.Call.Args) >= 2 {
+		callee := ""
+		if c.Call.Method != nil {
+			callee = c.Call.Method.Name()
+		} else if v, ok := c.Call.Value.(*ssa.Function); ok {
+			callee = v.Name()
+		}
+		if callee == "Table" || callee == "Model" {
+			arg1 := c.Call.Args[1]
+					if mi, ok := arg1.(*ssa.MakeInterface); ok {
+				arg1 = mi.X
+						}
+			if cst, isConst := arg1.(*ssa.Const); isConst && cst.Value != nil {
 				if s := constant.StringVal(cst.Value); s != "" {
 					return s
 				}
 			}
+			// Q239：类型实参（&T{} / T{}）→ TableName()/Mapping/snakeCase
+			if et := arg1.Type(); et != nil {
+				if tn := ext.tableNameOf(et); tn != "" {
+					return tn
+				}
+			}
 		}
 	}
+	// 递归沿 receiver（Args[0]）回溯链式调用
 	if len(c.Call.Args) > 0 {
-		return chainTableNameValue(c.Call.Args[0])
+		return ext.chainTableNameValue(c.Call.Args[0])
 	}
 	return ""
 }
