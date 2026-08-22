@@ -54,10 +54,11 @@ codeintel query table-path <表A> <表B> [--max-hops N] [--json] [--repo <path>]
 - 表名多匹配报候选
 - --json 结构
 
-## 5. 待确认
+## 5. 决策确认（2026-08-23 访谈）
 
-1. 命令名：`query table-path` vs 扩展 `query path`（表名时自动切换）？
-   （推荐独立 table-path——path 语义是节点/符号，混入表名易歧义）
-2. 同跳数多路径：取类型优先级最优一条 vs 全部列出（--json 全列）？
-   （推荐：文本一条最优，--json 全列候选）
-3. --max-hops 默认值：6？（推荐 6——超过基本是全局环链噪音）
+1. **命令名**：独立 `query table-path <表A> <表B>`（不扩展 query path——
+   path 语义是节点/符号，混入表名易歧义；与 query relations 并列表级家族）
+2. **同跳数多路径**：文本输出类型优先级最优一条（fk>query>write>read），
+   `--json` 全列候选（程序消费）
+3. **--max-hops 默认 6**：mapping 链常见 2-3 跳，6 留足余量；显式查询
+   意图明确，放宽于 relations 降噪默认 4
