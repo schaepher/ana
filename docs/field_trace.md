@@ -2971,6 +2971,12 @@ scan（SQL 加列但 scan 未对应 → 列错位 → SummaryChain/Lifecycle
 
 **遗留**：复合字面量初始化锚点（`AccountEmail: req.AccountEmail,`
 无等号）分组退化为全「来源」——等号解析需扩展复合字面量形态。
+**解决（Q236，2026-08-22）**：splitAssign 扩展——无等号时识别
+`Key: value,` 冒号形态：右侧去行尾注释 + 去尾逗号后按完整表达式
+匹配节点 instance_path（`req.AccountEmail`）→ 归「写入值」；左侧
+字段名非对象基址（对象在字面量赋值目标处，行内取不到），不产生
+「对象」组。文本/tree/mermaid 三种格式共用 classifySource 同步受益
+（补测试 TestValueTraceFormatCompositeLiteral[Tree]）。
 
 ---
 

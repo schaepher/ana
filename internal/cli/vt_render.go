@@ -77,12 +77,24 @@ func shortAnchor(r *domain.TraceRow) string {
 
 // splitAssign 解析锚点行等号：返回左边路径基址与右边首个标识符。
 //  "u.Brands = brands" → ("u", "brands")；无等号 → ("", "")。
+// Q236 扩展：无等号时的复合字面量键值对（§71/§73 遗留）——
+//  "Email: req.Email," → ("", "req.Email")：冒号右侧是写入值来源
+// （去尾逗号，完整表达式匹配节点 instance_path），左侧是写入字段名
+// （非对象基址，对象在字面量赋值目标处，行内取不到）。
 func splitAssign(line string) (string, string) {
 	idx := strings.Index(line, ":=")
 	if idx < 0 {
 		idx = strings.Index(line, "=")
 	}
 	if idx < 0 {
+		if i := strings.Index(line, ":"); i >= 0 {
+			rv := strings.TrimSpace(line[i+1:])
+			if j := strings.Index(rv, "//"); j >= 0 {
+				rv = rv[:j] // 去行尾注释
+			}
+			rv = strings.TrimSuffix(strings.TrimSpace(rv), ",")
+			return "", rv
+		}
 		return "", ""
 	}
 	left := strings.TrimSpace(line[:idx])
