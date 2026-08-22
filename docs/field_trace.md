@@ -3031,4 +3031,29 @@ S4["*tndemo.T:24 ((Svc).GetOrm)"] --- S1             ← 父子链
 
 ---
 
+## 74. export-pdf skill：查询结果导出 PDF（Q235-13，2026-08-22）
+
+**需求**：把 value-trace 四格式导出 PDF 的流程沉淀为 skill（仓库内
+版本化，可软链全局）——源码带行号 + 文本/tree/mermaid/json + mermaid
+渲染图。
+
+**沉淀**（skills/export-pdf/）：
+- SKILL.md：用途/前置（pymupdf + 网络）/使用/技术要点
+- scripts/value-trace-pdf.py：主脚本（--repo/--anchor/--out/--bin/
+  --depth/--src-file/--title）——CLI 四格式查询 + mermaid.ink 渲染
+  （失败自动跳过图）+ pymupdf 构建（分页/宽度适配/中英混排）
+- scripts/render-mermaid.py：独立 mermaid.ink 渲染（可单独用）
+
+**技术要点沉淀**（Q235-10/11/12 教训入 skill）：
+- 字体：PDF 标准字体（courier 英文等宽 + china-s 中文）不嵌入——
+  文件 ~240KB（Noto CJK 全嵌入 21MB 教训）；中英混排分段绘制
+  （china-s 对英文全角宽度——字母间隔过大教训）
+- mermaid：width=2000 高分辨率渲染 + 插入时宽度优先缩放居中
+- 分页：y 超限自动 new_page（单页溢出图插到页面外教训）
+- 无网络：mermaid.ink 失败跳过图继续
+
+**验证**：tn-demo 端到端跑通（3 页、图在第 2 页、237KB）。
+
+---
+
 **文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q235，逐 Q 编号 + 日期）。
