@@ -13,14 +13,11 @@ import (
 // 保留 build_metadata 与配置表），语义明确为"重建"。
 func cmdReindex(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("reindex", flag.ExitOnError)
-	repoPath := fs.String("repo", "", "仓库根目录（含 go.mod）")
+	// Q237：--repo 缺省当前工作目录
+	repoPath := fs.String("repo", ".", "仓库根目录（含 go.mod；默认当前目录）")
 	fs.Int("workers", defaultBuildWorkers(), "SSA 分析按包并发数（Q221：默认 min(NumCPU, 8)；透传给 init）")
 	fs.Parse(args)
 
-	if *repoPath == "" {
-		fmt.Fprintln(os.Stderr, "error: --repo is required")
-		return 2
-	}
 	abs, err := filepath.Abs(*repoPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: resolve repo path: %v\n", err)

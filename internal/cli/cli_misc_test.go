@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -194,6 +195,30 @@ func TestInitNoGoMod(t *testing.T) {
 	dir := t.TempDir()
 	if code := cmdInit(context.Background(), []string{"--repo", dir}); code == 0 {
 		t.Error("init 无 go.mod 应失败")
+	}
+}
+
+// TestCmdInitNoRepoDefaultsToCwd：Q237——init 缺 --repo 默认当前工作目录
+// （chdir 到有 go.mod 的 fixture 后缺省跑，应命中 fixture 而非报错）。
+func TestCmdInitNoRepoDefaultsToCwd(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "go.mod"), "module example.com/m\n\ngo 1.21\n")
+	writeTestFile(t, filepath.Join(dir, "main.go"), "package main\n\nfunc main() {}\n")
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(old)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	out := captureStdout(func() {
+		if code := cmdInit(context.Background(), []string{}); code == 2 {
+			t.Errorf("init 缺 --repo 不应再报 --repo is required（exit 2）")
+		}
+	})
+	if !strings.Contains(out, "构建索引: "+dir) {
+		t.Errorf("init 缺 --repo 应默认当前目录（输出 %q，期望含 %q）", out, "构建索引: "+dir)
 	}
 }
 

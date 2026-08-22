@@ -28,14 +28,11 @@ func cmdUpdate(ctx context.Context, args []string) int {
 	logger.Debug("enter cmdUpdate")
 	defer logger.Debug("exit cmdUpdate")
 	fs := flag.NewFlagSet("update", flag.ExitOnError)
-	repoPath := fs.String("repo", "", "仓库根目录（须已运行 codeintel init 且为 git 仓库）")
+	// Q237：--repo 缺省当前工作目录
+	repoPath := fs.String("repo", ".", "仓库根目录（须已运行 codeintel init 且为 git 仓库；默认当前目录）")
 	workers := fs.Int("workers", defaultBuildWorkers(), "SSA 分析按包并发数（Q221：默认 min(NumCPU, 8)）")
 	fs.Parse(args)
 
-	if *repoPath == "" {
-		fmt.Fprintln(os.Stderr, "error: --repo is required")
-		return 2
-	}
 	abs, err := filepath.Abs(*repoPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: resolve repo path: %v\n", err)

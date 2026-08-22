@@ -1,15 +1,35 @@
 package cli
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-// TestCmdReindexNoRepo：reindex 缺 --repo → exit 2。
-func TestCmdReindexNoRepo(t *testing.T) {
-	if code := cmdReindex(nil, []string{}); code != 2 {
-		t.Errorf("reindex 缺 --repo exit = %d, want 2", code)
+// TestCmdReindexNoRepoDefaultsToCwd：Q237——reindex 缺 --repo 不再报错，
+// 默认当前工作目录（chdir 到有 go.mod 的 fixture 后缺省跑，应命中 fixture
+// 而非报 --repo is required exit 2）。
+func TestCmdReindexNoRepoDefaultsToCwd(t *testing.T) {
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, "go.mod"), "module example.com/m\n\ngo 1.21\n")
+	writeTestFile(t, filepath.Join(dir, "main.go"), "package main\n\nfunc main() {}\n")
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(old)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	out := captureStdout(func() {
+		if code := cmdReindex(context.Background(), []string{}); code == 2 {
+			t.Errorf("reindex 缺 --repo 不应再报 --repo is required（exit 2）")
+		}
+	})
+	if !strings.Contains(out, "重建索引: "+dir) {
+		t.Errorf("reindex 缺 --repo 应默认当前目录（输出 %q，期望含 %q）", out, "重建索引: "+dir)
 	}
 }
 

@@ -8,6 +8,21 @@ import (
 	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
 )
 
+// TestParseRepoFlagDefaultsToCwd：Q237——parseRepoFlag 缺 --repo 默认
+// 当前工作目录（"."），不再返回空串（precompute/rule 缺省可用）。
+func TestParseRepoFlagDefaultsToCwd(t *testing.T) {
+	repo, rest, err := parseRepoFlag([]string{"list"})
+	if err != nil {
+		t.Fatalf("parseRepoFlag: %v", err)
+	}
+	if repo != "." {
+		t.Errorf("parseRepoFlag 缺 --repo 应默认 \".\"，got %q", repo)
+	}
+	if len(rest) != 1 || rest[0] != "list" {
+		t.Errorf("rest 应保留非 repo 参数，got %v", rest)
+	}
+}
+
 // seedRuleRepo 带目标表 id 节点的 relations fixture（Q220c 规则测试用）：
 // table_a.id → table_b.a_id 值流 + table_b.id read 节点（规则目标）。
 func seedRuleRepo(t *testing.T) string {

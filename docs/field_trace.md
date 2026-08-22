@@ -3104,4 +3104,35 @@ S4["*tndemo.T:24 ((Svc).GetOrm)"] --- S1             ← 父子链
 
 ---
 
-**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q236，逐 Q 编号 + 日期）。
+## 76. --repo 缺省当前工作目录（Q237，2026-08-22）
+
+**需求**：用户两点要求——①`--repo` 不传时默认找当前工作目录（在仓库
+内直接 `codeintel init/query/serve ...`）；②文档不硬编码本仓库绝对路径
+（目录可能被重命名，与现状不一致）。
+
+**现状**：query/clean/serve/export/export_graph 已默认 "."（resolveRepo
+兜底）；init/reindex/update 报 `--repo is required`（exit 2）；rule/
+precompute 的 parseRepoFlag 返回空串报错；main.go extractRepoDir 空时
+日志保持 stdout。
+
+**改动**：
+1. init/reindex/update：`repo` flag 默认 "."，删除 `--repo is required`
+   分支（Q237 注释）
+2. parseRepoFlag（rule.go）：未指定默认 "."——precompute/rule 的
+   `repoDir == ""` 报错分支随之删除（不再可能为空）
+3. main.go extractRepoDir：未指定回退 os.Getwd()（日志与 db 同目录，
+   缺省即 cwd/.codeintel）
+4. AGENTS.md 自举节 / 全局 skill / 记忆：去掉本仓库绝对路径硬编码，
+   统一为「在仓库内直接跑（--repo 缺省 = 当前目录）」
+
+**测试**（先行）：TestCmdInitNoRepoDefaultsToCwd / TestCmdReindexNoRepo
+DefaultsToCwd（chdir fixture 后缺省跑，断言输出命中 fixture 路径且不再
+exit 2；发现 cmdInit(nil ctx) 会 panic——测试须传 context.Background()）、
+TestParseRepoFlagDefaultsToCwd。13 包全绿。
+
+**效果**：`cd <仓库> && codeintel query symbol ...` 直接可用；外部仓库
+仍需 `--repo <path>`（语义不变）。
+
+---
+
+**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q237，逐 Q 编号 + 日期）。

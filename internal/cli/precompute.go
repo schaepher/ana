@@ -22,9 +22,10 @@ func cmdPrecompute(args []string) int {
 	logger := zap.L()
 	logger.Debug("enter cmdPrecompute")
 	defer logger.Debug("exit cmdPrecompute")
+	// Q237：--repo 缺省当前目录（parseRepoFlag 默认 "."）
 	repoDir, rest, err := parseRepoFlag(args)
-	if err != nil || repoDir == "" {
-		fmt.Fprintln(os.Stderr, "--repo 是必需的")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
 	sub := "relations"

@@ -31,9 +31,10 @@ func cmdRule(args []string) int {
 		fmt.Fprintln(os.Stderr, "用法: codeintel rule add|list|remove …")
 		return 2
 	}
+	// Q237：--repo 缺省当前目录（parseRepoFlag 默认 "."）
 	repoDir, rest, err := parseRepoFlag(args[1:])
-	if err != nil || repoDir == "" {
-		fmt.Fprintln(os.Stderr, "--repo 是必需的")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
 	db, err := sqlite.Open(repoDir)
@@ -210,8 +211,9 @@ func splitRuleExpr(expr string) (from, to string, ok bool) {
 }
 
 // parseRepoFlag 提取 --repo <path>（或 --repo=path）并返回剩余参数。
+// Q237：未指定 --repo 默认当前工作目录（"."）。
 func parseRepoFlag(args []string) (string, []string, error) {
-	var repo string
+	repo := "."
 	var rest []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]

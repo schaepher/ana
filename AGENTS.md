@@ -48,14 +48,17 @@ go build -o codeintel ./cmd/codeintel
 #   codeintel query symbol|callers|callees|impact|table ...
 ```
 
-## 项目自举（Q236）：本仓库已建索引
+## 项目自举（Q236/Q237）：本仓库已建索引
 
 分析/修改/搜索**本仓库自身**代码时，优先用 codeintel 查询（用户明确要求，
 2026-08-22）——符号定义/签名/调用者/值流/影响面等**结构问题**用
-`./codeintel query symbol|callers|callees|value-trace|context|impact
---repo /home/schaepher/Codes/ana`；grep 仅用于字面文本（字符串/注释/日志）。
+`./codeintel query symbol|callers|callees|value-trace|context|impact`；
+grep 仅用于字面文本（字符串/注释/日志）。
 
 注意：
+- **--repo 缺省 = 当前工作目录（Q237）**：在仓库内直接跑 `./codeintel
+  query ...` 即可，无需 `--repo`；跨仓库查别的项目时才传 `--repo <path>`
+  （文档中不硬编码本仓库路径——目录可能被重命名）
 - 本仓库 `.codeintel/` 已 reindex（2026-08-22，含最新分析逻辑）；逻辑变更后
   `update` 按 git diff 判断（工作区干净会跳过）——用 `reindex` 确保新逻辑生效
 - 改 `assets/web/` 前端后须重新 `go build -o codeintel ./cmd/codeintel`

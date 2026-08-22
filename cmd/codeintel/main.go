@@ -89,7 +89,7 @@ func main() {
 }
 
 // extractRepoDir 从命令行粗解析 --repo 目录（`--repo X` / `--repo=X`），
-// 未指定返回空串（日志保持 stdout）。
+// 未指定默认当前工作目录（Q237：日志与 db 同目录，缺省即 cwd/.codeintel）。
 func extractRepoDir(args []string) string {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -99,6 +99,9 @@ func extractRepoDir(args []string) string {
 		if strings.HasPrefix(a, "--repo=") {
 			return strings.TrimPrefix(a, "--repo=")
 		}
+	}
+	if dir, err := os.Getwd(); err == nil {
+		return dir
 	}
 	return ""
 }
