@@ -2817,7 +2817,60 @@ make 防误恢复；取址变量仍恢复变量名）；13 包全绿 + e2e-fixtu
 
 **遗留**：FieldAddr 的实例路径基址仍是 tN（`t0.cc`）——instancePath
 基于 SSA 名拼接，与节点 Name 不一致（展示瑕疵，ID 链一致）；修复需
-改 instancePath 的 tN 基址恢复，待后续。
+改 instancePath 的 tN 基址恢复，见 §68（Q235-7）。
+
+---
+
+## 68. 字段路径基址 tN → 类型短名（Q235-7，2026-08-22）
+
+**用户视角问题**（Q235-6 后复查真实 value-trace 发现）：tN 仍出现在
+**用户必读的字段路径**里——`t21.AccountEmail [写]:118 [条件: userType==1]`
+——用户不认识 t21，且同一字段 3 个分支写点（67/118/159）因 tN 前缀
+看不出是同一对象字段。这是 §67「遗留」从用户视角升级为**最显眼的
+干扰源**（非展示瑕疵）。
+
+**设计**：instancePathDepth 的叶子回退处（Q179 recoverVarName 之后）——
+仍为 SSA 名且是 Alloc（匿名分配基址）→ 回退类型短名（allocTypeShort，
+保留 * 与末段包名）：
+
+- `t21.AccountEmail` → `*payment.PayMerchant.AccountEmail`
+- `t0.cc` → `*proto.messageServiceClient.cc`
+- 变量名恢复（idents 命中 / Q179 assignTargets）**优先级不变**——
+  `var arr T` 场景仍显示 `arr.AccountEmail`（类型短名只在恢复失败时兜底）
+- Phi 基址（非 Alloc）保持 SSA 名（结构性盲区，不变）
+
+**影响面**（instancePath 全局调用点统一受益）：
+1. 字段节点 instance_path / Name / **ID**（accessID 含 instance）——
+   reindex 兼容（构建内自洽）
+2. emitValue ⑥/通用分支：instancePath 返回非 SSA 名 → 分支行为变化
+   ——ID 从 `#t0@行号`（slot）变 `#*payment.PayMerchant`（实例路径），
+   Name 一致（殊途同归）；Q205 统一逻辑（*alloc 与 Alloc 同节点）依赖
+   `ext.values` 缓存命中，不受 instancePath 返回值影响——**go2o
+   SelectAttr 案例回归验证**
+3. cf_call 参数路径 / summary_apply ORM 基址 / fe_elements 容器路径
+   同步可读
+
+**边界**：不改 recoverVarName 的 Q193 精确匹配（Call 恢复收窄保持）；
+不改 phi/纯中间值（§66 分类的 C 类）。
+
+**测试先行**：新用例（匿名 &Inner{} 基址字段 instance_path =
+`*mtest.Inner.Value`；变量名恢复回归 arr.Value）。
+
+**实现**：instancePathDepth 叶子回退（recoverVarName 后）加 Alloc 类型
+短名兜底；emitValue 的 UnOp/*alloc/Alloc 三分支 ID 构造统一走
+`valueIDByInstance`——类型短名（含 */[]/. 特征）同函数内同名附加
+@行号消歧（phi 两分支同类型匿名分配防 Q155 误合并），源码变量名
+（arr）保持合并（Q205 shadowing 语义）。
+
+**验证**：13 包全绿（-race）+ e2e-fixture 38 项；go2o reindex 后
+`t21.AccountEmail [写]` → `*payment.PayMerchant.AccountEmail [写]`、
+`← t21` → `← *payment.PayMerchant`；cf_edges_test 断言更新（returns
+边 source `#t` → `#*mtest.T`，类型短名更可读）。
+
+**边界**：非 Alloc 基址（lifting 寄存器/phi——recoverVarName 恢复
+失败的 Call 场景，Q193 收窄）保持 tN——go2o 实测剩余 1789 个
+instance_path tN 前缀（t6 read 104 等）均属此类，不在本范围（见
+§66 A 类 Call 待评估）。
 
 ---
 

@@ -94,3 +94,54 @@ func h() {
 		t.Errorf("取址变量声明应恢复变量名 arr，got names=%v", names)
 	}
 }
+
+// TestFieldPathBaseTypeName：Q235-7——字段路径基址 tN → 类型短名。
+// 匿名 &Inner{} 分配（无变量名）的字段访问实例路径应显示
+// *mtest.Inner.Value（基址类型短名）而非 tN.Value——用户视角 tN
+// 不可读；变量名恢复（var arr T）不受影响。
+func TestFieldPathBaseTypeName(t *testing.T) {
+	nodes, _ := indexFixture(t, map[string]string{
+		"go.mod": moduleGoMod,
+		"main.go": `package m
+
+type Inner struct {
+	Value string
+}
+
+func g(v string) {
+	r := &Inner{Value: v}
+	_ = r.Value
+}
+
+func h() {
+	var arr Inner
+	arr.Value = "x"
+	_ = arr.Value
+}
+`,
+	})
+	// g：匿名基址 → 类型短名路径
+	gID := "symbol:go:example.com/mtest:g"
+	got := map[string]bool{}
+	for _, n := range nodes {
+		if n.Kind != domain.KindFieldAccess || n.Property("func_id") != gID {
+			continue
+		}
+		got[n.Name] = true
+	}
+	if !got["*mtest.Inner.Value"] {
+		t.Errorf("匿名基址字段路径应显示 *mtest.Inner.Value（基址类型短名），got names=%v", got)
+	}
+	// h：变量名恢复优先——arr.Value 不变
+	hID := "symbol:go:example.com/mtest:h"
+	gotH := map[string]bool{}
+	for _, n := range nodes {
+		if n.Kind != domain.KindFieldAccess || n.Property("func_id") != hID {
+			continue
+		}
+		gotH[n.Name] = true
+	}
+	if !gotH["arr.Value"] {
+		t.Errorf("变量名恢复字段路径应保持 arr.Value，got names=%v", gotH)
+	}
+}

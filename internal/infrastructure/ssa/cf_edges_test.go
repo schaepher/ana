@@ -48,7 +48,9 @@ func main() {
 		t.Errorf("param func_id = %q", param.Property("func_id"))
 	}
 
-	ret := findFactByKindPrefix(facts, domain.FactReturns, makeID+"#t")
+	// Q235-7：make 返回值节点从 #t 变 #*mtest.T（匿名 T{A:v} 分配类型
+	// 短名 + 行号消歧）——更可读，前缀匹配（@行号不参与）
+	ret := findFactByKindPrefix(facts, domain.FactReturns, makeID+"#*mtest.T")
 	if ret == nil {
 		t.Fatal("returns edge from make not found")
 	}

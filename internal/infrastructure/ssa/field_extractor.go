@@ -94,7 +94,19 @@ func (ext *fieldExtractor) instancePathDepth(v ssa.Value, depth int) string {
 	}
 	// Q179：叶子为临时寄存器（tN）时恢复源码变量名——字段实例路径
 	// t0.A → t.A（u := f() 后 u.A 的 FieldAddr.X 是 lifting 寄存器 t0）
-	return ext.recoverVarName(v)
+	name := ext.recoverVarName(v)
+	// Q235-7：仍为 SSA 名且是 Alloc（匿名分配基址——Alloc.Pos 指向
+	// 复合字面量 '{'，无源码变量名）→ 回退类型短名——用户视角 tN 不可读
+	// （t21.AccountEmail → *payment.PayMerchant.AccountEmail）；变量名
+	// 恢复（idents 命中 / assignTargets）优先级不变，仅失败时兜底
+	if isSSAName(name) {
+		if _, isAlloc := v.(*ssa.Alloc); isAlloc {
+			if tn := allocTypeShort(v.Type().String()); tn != "" {
+				return tn
+			}
+		}
+	}
+	return name
 }
 
 // recoverVarName 临时寄存器（tN）→ 源码变量名：lifting 后变量提升为

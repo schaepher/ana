@@ -3,6 +3,7 @@ package ssa
 import (
 	"fmt"
 	"go/token"
+	"strings"
 
 	"github.com/schaepher/codeintel/internal/domain"
 	"go.uber.org/zap"
@@ -63,6 +64,28 @@ func (ext *fieldExtractor) emitEdge(from, to domain.CanonicalID) error {
 	logger.Debug("enter (fieldExtractor).emitEdge")
 	defer logger.Debug("exit (fieldExtractor).emitEdge")
 	return ext.emitEdgeKind(from, to, domain.FactDataFlowsTo)
+}
+
+// valueIDByInstance instancePath 名字的节点 ID（Q235-7）：类型短名
+// （含 * / [] / . 特征——匿名分配回退）同函数内同名附加 @行号消歧
+// （phi 两分支同类型匿名分配等，防 Q155 去重误合并）；源码变量名
+// （arr）保持合并（shadowing 语义，与 Q205 一致）。
+func (ext *fieldExtractor) valueIDByInstance(funcID domain.CanonicalID, v ssa.Value, name string) (domain.CanonicalID, string) {
+	display := name
+	if strings.ContainsAny(name, "*[].") {
+		slots := ext.slotsFor[funcID]
+		if slots == nil {
+			slots = map[string]bool{}
+			ext.slotsFor[funcID] = slots
+		}
+		if slots[name] {
+			line := ext.prog.Fset.PositionFor(v.Pos(), false).Line
+			display = fmt.Sprintf("%s@%d", name, line)
+		} else {
+			slots[name] = true
+		}
+	}
+	return domain.CanonicalID(string(funcID) + "#" + display), display
 }
 
 // emitValue 发射（并去重）参与字段访问或跨过程数据流的 ssa_value 节点（Q73）。
@@ -195,7 +218,7 @@ func (ext *fieldExtractor) emitValue(v ssa.Value) (domain.CanonicalID, error) {
 			}
 			if fid, ok := ext.funcIDOf(uo.X); ok {
 				if name := ext.instancePath(uo); !isSSAName(name) {
-					id := domain.CanonicalID(string(fid) + "#" + name)
+					id, _ := ext.valueIDByInstance(fid, uo, name)
 					ext.values[uo.X] = id
 					ext.values[v] = id
 					// Q221：不能提前 return——节点发射在下方统一分支。
@@ -210,12 +233,12 @@ func (ext *fieldExtractor) emitValue(v ssa.Value) (domain.CanonicalID, error) {
 			if name := ext.instancePath(uo); !isSSAName(name) {
 				fid, ok2 := ext.funcIDOf(uo)
 				if ok2 {
-					id := domain.CanonicalID(string(fid) + "#" + name)
+					id, display := ext.valueIDByInstance(fid, uo, name)
 					ext.values[v] = id
 					n := &domain.CodeEntity{
 						ID:        id,
 						Kind:      domain.KindSSAValue,
-						Name:      name,
+						Name:      display,
 						LineStart: lineOf(ext, v),
 						Properties: map[string]any{
 							"origin_kind": "local",
@@ -239,12 +262,12 @@ func (ext *fieldExtractor) emitValue(v ssa.Value) (domain.CanonicalID, error) {
 	// 同节点）。shadowing 同名变量会合并（与 load/scan 既有规则一致）
 	if _, isAlloc := v.(*ssa.Alloc); isAlloc {
 		if name := ext.instancePath(v); !isSSAName(name) {
-			id := domain.CanonicalID(string(funcID) + "#" + name)
+			id, display := ext.valueIDByInstance(funcID, v, name)
 			ext.values[v] = id
 			n := &domain.CodeEntity{
 				ID:        id,
 				Kind:      domain.KindSSAValue,
-				Name:      name,
+				Name:      display,
 				LineStart: lineOf(ext, v),
 				Properties: map[string]any{
 					"origin_kind": "local",
