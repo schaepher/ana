@@ -34,6 +34,10 @@ func Main(ctx context.Context, args []string) int {
 		return cmdClean(args[1:])
 	case "rule":
 		return cmdRule(args[1:])
+	case "list":
+		return cmdList(args[1:])
+	case "workspace":
+		return cmdWorkspace(args[1:])
 	case "precompute":
 		return cmdPrecompute(args[1:])
 	case "version", "--version", "-v":

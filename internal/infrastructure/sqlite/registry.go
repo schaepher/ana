@@ -276,6 +276,34 @@ func (r *Registry) CountRepos() (int, error) {
 	return n, nil
 }
 
+// FindRepo 按路径查条目（不存在返回 false）。Q238：workspace 注册的
+// worktree 条目经 --build 后 cmdInit 重新注册——须保留 workspace 字段。
+func (r *Registry) FindRepo(path string) (RegistryRepo, bool, error) {
+	rows, err := r.db.Query(`SELECT path, module, go_mod_count, head_commit, build_id,
+		last_built_at, is_worktree, worktree_of, workspace, registered_at
+		FROM repos WHERE path=?`, path)
+	if err != nil {
+		return RegistryRepo{}, false, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return RegistryRepo{}, false, rows.Err()
+	}
+	var rp RegistryRepo
+	var wt int
+	var module, head, build, built, wtOf, ws, reg sql.NullString
+	if err := rows.Scan(&rp.Path, &module, &rp.GoModCount, &head,
+		&build, &built, &wt, &wtOf, &ws, &reg); err != nil {
+		return RegistryRepo{}, false, err
+	}
+	rp.Module, rp.HeadCommit = module.String, head.String
+	rp.BuildID, rp.LastBuiltAt = build.String, built.String
+	rp.WorktreeOf, rp.Workspace = wtOf.String, ws.String
+	rp.RegisteredAt = reg.String
+	rp.IsWorktree = wt != 0
+	return rp, true, nil
+}
+
 // Close 关闭全局库连接。
 func (r *Registry) Close() error {
 	return r.db.Close()
