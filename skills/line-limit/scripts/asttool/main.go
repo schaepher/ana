@@ -38,6 +38,8 @@ func main() {
 		migrateMain(os.Args[2:])
 	case "orphan":
 		orphanMain(os.Args[2:])
+	case "rename":
+		renameMain(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand %q\n", os.Args[1])
 		usage()
@@ -50,5 +52,6 @@ func usage() {
   asttool analyze <file...>
   asttool split <src.go> <out1.go:name1,name2> [<out2.go:...>...]
   asttool migrate [--pkg <name>] <out_prefix> <src_test_files...>
+  asttool rename <file.go> <old> <new> [--scope pkg|file] [--dry-run] [--include-tests]
 see file headers for details`)
 }

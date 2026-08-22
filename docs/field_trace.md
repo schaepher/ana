@@ -2712,4 +2712,36 @@ go2o 15 万节点库 Open 实测 4–7ms（幂等 DDL 空操作，可忽略）�
 
 ---
 
+## 65. asttool rename：符号感知重命名（Q235-4，2026-08-22）
+
+**需求**：借鉴 GitNexus「重命名禁用查找替换，必须用符号感知 rename
+工具」。我们的教训：Q232 move 脚本文本替换误删代码行（rg_bfs.go func
+行、action.go 变量行）——文本替换不感知符号边界。
+
+**设计**：`asttool rename <file.go> <old> <new> [--scope pkg|file]
+[--dry-run] [--include-tests]`：
+
+- AST Ident 遍历替换（astutil.Apply）——字符串/注释/import 路径不动
+- 声明跟随：包级函数+调用处 / 类型+使用处 / 方法+选择器 / 局部变量
+  （var/短声明/参数）+ 引用
+- 遮蔽：词法作用域栈（根=包级声明），声明点起生效（p <= pos 边界——
+  遮蔽声明处 ident 命中局部而非包级，防包级重命名误改）；局部遮蔽
+  作用域内引用不替换
+- 方法重命名近似：同文件 SelectorExpr.Sel 全替换（无类型信息，文件内
+  有同名结构体字段时需人工复核——头注释明示）
+- 冲突检测：新名与包级声明/同 Recv 方法集冲突 → 报错不写文件
+- scope=pkg 预扫描全局声明（跨文件引用文件不误报「未找到」）+ new 名
+  跨文件冲突检测；--scope file 只改指定文件
+
+**坑**（测试驱动发现）：
+1. 声明处 ident 被 astutil 二次命中 identReplacer → seen 标记防重复
+2. nearestDecl 边界 `p < pos` → 遮蔽声明处落入包级被误改 → `p <= pos`
+3. scope=pkg 引用文件（无声明）resolveMode 误报 → global 模式沿用
+
+**验证**：rename_test.go 9 用例（包级函数/类型/方法/局部变量/遮蔽/
+冲突/dry-run/scope file/scope pkg）全绿；真实文件 dry-run 验证
+（file 单文件、pkg 跨文件 rg_sql.go+rg_where.go 正确列出）。
+
+---
+
 **文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q235，逐 Q 编号 + 日期）。
