@@ -105,7 +105,7 @@ func cmdWorkspaceInit(args []string) int {
 	var targets []sqlite.RegistryRepo
 	if len(subset) > 0 {
 		for _, s := range subset {
-			ref := resolveRepoRef(s)
+			ref := ResolveRepoRef(s)
 			for _, rp := range repos {
 				if rp.Path == ref && !rp.IsWorktree {
 					targets = append(targets, rp)

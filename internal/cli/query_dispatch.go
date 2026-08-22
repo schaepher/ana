@@ -146,10 +146,10 @@ func parseQueryFlags(args []string) queryFlags {
 		a := args[i]
 		switch {
 		case a == "--repo" && i+1 < len(args):
-			f.repoPath = resolveRepoRef(args[i+1]) // Q238：注册表短名/后缀/module
+			f.repoPath = ResolveRepoRef(args[i+1]) // Q238：注册表短名/后缀/module
 			i++
 		case strings.HasPrefix(a, "--repo="):
-			f.repoPath = resolveRepoRef(strings.TrimPrefix(a, "--repo="))
+			f.repoPath = ResolveRepoRef(strings.TrimPrefix(a, "--repo="))
 		case a == "--depth" && i+1 < len(args):
 			f.depth, _ = strconv.Atoi(args[i+1])
 			i++

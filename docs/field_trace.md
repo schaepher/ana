@@ -3135,4 +3135,53 @@ TestParseRepoFlagDefaultsToCwd。13 包全绿。
 
 ---
 
-**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q237，逐 Q 编号 + 日期）。
+## 77. 全局注册表 + worktree/workspace（Q238，2026-08-22）
+
+**需求**（四轮设计访谈收敛，design-q238.md 已归档）：
+- `~/.codeintel/codeintel.db` 全局注册台账；init 后自动注册（含路径）
+- 全局任意位置可用 `--repo <短名>` 指定已注册仓库
+- 支持 git worktree（独立索引 + worktree_of 关联）与 workspace
+  （把所涉及项目创建 worktree 到 workspace 目录）
+
+**实现**：
+1. **存储层**（sqlite registry）：repos 表（path UNIQUE/module/go_mod_count/
+   head_commit/build_id/last_built_at/is_worktree/worktree_of/workspace/
+   registered_at）；缺失自动重建（Q12）；列变更自动重建表+迁移数据
+   （Q16 不丢台账）；单写者 busy_timeout=5000
+2. **worktree 检测**（detectWorktree）：.git 目录=主仓库；.git 为
+   gitdir 指针文件=worktree（解析 `<主仓库>/.git/worktrees/<名>` 前缀）
+3. **注册钩子**：init/reindex 成功注册（含 worktree 归属、HEAD、
+   build_id=CommitSHA——BuildResult 无 BuildID 字段）、update 成功刷新
+   （registered_at 不变）、clean 注销（级联 worktree 条目）、失败不注册；
+   注册失败仅警告（非必需前置）
+4. **--repo 四步解析**（ResolveRepoRef）：文件系统存在 → 注册表路径
+   后缀（arg 以 / 开头）→ 目录名 → module 名；唯一命中即用，多命中
+   报候选（不静默），未命中原样；缺省 cwd 非仓库报错附引导
+   （printRepoHint：已注册 N 个仓库）
+5. **codeintel list**：台账（短名/路径/module/状态/worktree 归属 ⊢/
+   workspace）；四态状态机（已构建/过期=HEAD 变/未构建/【missing】=
+   目录消失）；过滤 --worktree-of/--workspace/--module/--stale/--unbuilt；
+   --json
+6. **workspace init/prune**：注册表驱动 `git worktree add`（幂等跳过、
+   --repo 子集、--build 逐个构建、单失败继续汇总 exit 非零、注册
+   worktree_of+workspace）；prune 清理目录消失条目（list 先标
+   【missing】）
+
+**实施修订**（git 硬约束，Q5 原「默认当前分支」不可行）：同一分支
+不能被主仓库与 worktree 同时 checkout——默认 detached HEAD；--branch
+用 `-b` 创建新分支（worktree add 不会自动建分支）。
+
+**坑**（端到端实测发现）：main.go extractRepoDir 把 `--repo` 短名当
+相对路径 → logging.Setup 在错误位置建 .codeintel（`--repo ana` 误建
+cwd/ana/.codeintel），且污染 ResolveRepoRef 的文件系统检查——显式
+--repo 值经 ResolveRepoRefQuiet 解析（不打印候选，避免与命令重复）。
+
+**验证**：13 包全绿；端到端（真实注册表）：reindex 注册 ana →
+`codeintel list` 台账 → workspace init 创建真实 worktree（注册
+worktree_of+workspace，未构建）→ `--repo ana` 多命中报候选（主仓库+
+worktree 同名）→ 清理 prune。测试隔离：TestMain 注入注册表目录
+（防污染真实 ~/.codeintel）；isolateRegistryDir 每测试独立目录。
+
+---
+
+**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q238，逐 Q 编号 + 日期）。

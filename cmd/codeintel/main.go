@@ -90,14 +90,16 @@ func main() {
 
 // extractRepoDir 从命令行粗解析 --repo 目录（`--repo X` / `--repo=X`），
 // 未指定默认当前工作目录（Q237：日志与 db 同目录，缺省即 cwd/.codeintel）。
+// Q238：显式 --repo 值经注册表解析（短名/后缀/module）——防止把短名
+// 当相对路径在错误位置建日志目录（--repo ana 曾误建 cwd/ana/.codeintel）。
 func extractRepoDir(args []string) string {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		if a == "--repo" && i+1 < len(args) {
-			return args[i+1]
+			return cli.ResolveRepoRefQuiet(args[i+1])
 		}
 		if strings.HasPrefix(a, "--repo=") {
-			return strings.TrimPrefix(a, "--repo=")
+			return cli.ResolveRepoRefQuiet(strings.TrimPrefix(a, "--repo="))
 		}
 	}
 	if dir, err := os.Getwd(); err == nil {

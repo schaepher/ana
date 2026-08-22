@@ -32,7 +32,7 @@ func cmdUpdate(ctx context.Context, args []string) int {
 	repoPath := fs.String("repo", ".", "仓库根目录（须已运行 codeintel init 且为 git 仓库；默认当前目录）")
 	workers := fs.Int("workers", defaultBuildWorkers(), "SSA 分析按包并发数（Q221：默认 min(NumCPU, 8)）")
 	fs.Parse(args)
-	*repoPath = resolveRepoRef(*repoPath) // Q238：注册表短名/后缀/module
+	*repoPath = ResolveRepoRef(*repoPath) // Q238：注册表短名/后缀/module
 
 	abs, err := filepath.Abs(*repoPath)
 	if err != nil {

@@ -36,7 +36,7 @@ func seedRegistryRefs(t *testing.T) {
 func TestResolveRepoRefFilesystemFirst(t *testing.T) {
 	seedRegistryRefs(t)
 	dir := t.TempDir() // 真实存在的目录
-	if got := resolveRepoRef(dir); got != dir {
+	if got := ResolveRepoRef(dir); got != dir {
 		t.Errorf("存在路径应原样返回，got %q", got)
 	}
 	// 存在路径与注册表短名同名时，路径优先（chdir 使相对路径 go2o 存在）
@@ -50,7 +50,7 @@ func TestResolveRepoRefFilesystemFirst(t *testing.T) {
 	if err := os.Chdir(parent); err != nil {
 		t.Fatal(err)
 	}
-	if got := resolveRepoRef("go2o"); got != "go2o" {
+	if got := ResolveRepoRef("go2o"); got != "go2o" {
 		t.Errorf("路径存在应优先于注册表短名（原样返回相对路径），got %q", got)
 	}
 }
@@ -58,7 +58,7 @@ func TestResolveRepoRefFilesystemFirst(t *testing.T) {
 // TestResolveRepoRefDirName：目录名匹配（唯一）。
 func TestResolveRepoRefDirName(t *testing.T) {
 	seedRegistryRefs(t)
-	if got := resolveRepoRef("go2o"); got != "/home/schaepher/Codes/go2o" {
+	if got := ResolveRepoRef("go2o"); got != "/home/schaepher/Codes/go2o" {
 		t.Errorf("目录名 go2o → %q, want /home/schaepher/Codes/go2o", got)
 	}
 }
@@ -66,7 +66,7 @@ func TestResolveRepoRefDirName(t *testing.T) {
 // TestResolveRepoRefPathSuffix：绝对路径后缀匹配（/Codes/go2o → 完整路径）。
 func TestResolveRepoRefPathSuffix(t *testing.T) {
 	seedRegistryRefs(t)
-	if got := resolveRepoRef("/Codes/go2o"); got != "/home/schaepher/Codes/go2o" {
+	if got := ResolveRepoRef("/Codes/go2o"); got != "/home/schaepher/Codes/go2o" {
 		t.Errorf("后缀 /Codes/go2o → %q, want /home/schaepher/Codes/go2o", got)
 	}
 }
@@ -74,7 +74,7 @@ func TestResolveRepoRefPathSuffix(t *testing.T) {
 // TestResolveRepoRefModule：module 名精确匹配。
 func TestResolveRepoRefModule(t *testing.T) {
 	seedRegistryRefs(t)
-	if got := resolveRepoRef("github.com/xx/go2o"); got != "/home/schaepher/Codes/go2o" {
+	if got := ResolveRepoRef("github.com/xx/go2o"); got != "/home/schaepher/Codes/go2o" {
 		t.Errorf("module → %q, want /home/schaepher/Codes/go2o", got)
 	}
 }
@@ -84,7 +84,7 @@ func TestResolveRepoRefModule(t *testing.T) {
 func TestResolveRepoRefMultiple(t *testing.T) {
 	seedRegistryRefs(t)
 	out := captureStderr(func() {
-		if got := resolveRepoRef("github.com/schaepher/codeintel"); got != "" {
+		if got := ResolveRepoRef("github.com/schaepher/codeintel"); got != "" {
 			t.Errorf("多命中应返回空，got %q", got)
 		}
 	})
@@ -96,7 +96,7 @@ func TestResolveRepoRefMultiple(t *testing.T) {
 // TestResolveRepoRefNotFound：未命中 → 原样返回（调用方报原路径错误）。
 func TestResolveRepoRefNotFound(t *testing.T) {
 	seedRegistryRefs(t)
-	if got := resolveRepoRef("/no/such/path"); got != "/no/such/path" {
+	if got := ResolveRepoRef("/no/such/path"); got != "/no/such/path" {
 		t.Errorf("未命中应原样返回，got %q", got)
 	}
 }

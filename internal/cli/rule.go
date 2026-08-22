@@ -220,10 +220,10 @@ func parseRepoFlag(args []string) (string, []string, error) {
 		a := args[i]
 		switch {
 		case a == "--repo" && i+1 < len(args):
-			repo = resolveRepoRef(args[i+1])
+			repo = ResolveRepoRef(args[i+1])
 			i++
 		case strings.HasPrefix(a, "--repo="):
-			repo = resolveRepoRef(strings.TrimPrefix(a, "--repo="))
+			repo = ResolveRepoRef(strings.TrimPrefix(a, "--repo="))
 		case a == "--json":
 			rest = append(rest, a)
 		default:

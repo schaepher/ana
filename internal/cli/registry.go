@@ -76,6 +76,11 @@ func registerRepoAfterBuild(abs, module string, goModCount int, commitSHA string
 		WorktreeOf:   wtOf,
 		RegisteredAt: stamp,
 	}
+	// Q238：workspace 场景重新构建时保留既有 workspace 归属（UPSERT 会覆盖空值）
+	if prev, ok, err := r.FindRepo(abs); err == nil && ok {
+		repo.Workspace = prev.Workspace
+		repo.RegisteredAt = prev.RegisteredAt
+	}
 	if err := r.RegisterRepo(repo); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: 全局注册失败: %v\n", err)
 	}
@@ -109,14 +114,24 @@ func unregisterRepoAfterClean(abs string) {
 	}
 }
 
-// resolveRepoRef --repo 参数解析（Q238，design-q238.md §3.3）：
+// ResolveRepoRef --repo 参数解析（Q238，design-q238.md §3.3）：
 //  1. 文件系统存在（现行语义，路径优先）→ 原样返回
 //  2. 注册表绝对路径后缀匹配（唯一）→ 返回匹配路径
 //  3. 注册表目录名精确匹配（唯一）→ 返回
 //  4. 注册表 module 名精确匹配（唯一）→ 返回
 // 多命中 → stderr 打印候选列表、返回空（调用方报错）；
 // 未命中/注册表不可用 → 原样返回（调用方报原路径错误）。
-func resolveRepoRef(arg string) string {
+func ResolveRepoRef(arg string) string {
+	return resolveRepoRef(arg, true)
+}
+
+// ResolveRepoRefQuiet 同 ResolveRepoRef 但不打印多命中候选（main.go
+// extractRepoDir 日志目录解析用——避免同一命令重复打印两遍候选）。
+func ResolveRepoRefQuiet(arg string) string {
+	return resolveRepoRef(arg, false)
+}
+
+func resolveRepoRef(arg string, verbose bool) string {
 	if arg == "" {
 		return arg
 	}
@@ -157,11 +172,13 @@ func resolveRepoRef(arg string) string {
 	case 1:
 		return hits[0]
 	default:
-		fmt.Fprintf(os.Stderr, "error: --repo %q 命中多个已注册仓库:\n", arg)
-		for _, p := range hits {
-			fmt.Fprintf(os.Stderr, "  %s\n", p)
+		if verbose {
+			fmt.Fprintf(os.Stderr, "error: --repo %q 命中多个已注册仓库:\n", arg)
+			for _, p := range hits {
+				fmt.Fprintf(os.Stderr, "  %s\n", p)
+			}
+			fmt.Fprintln(os.Stderr, "请使用完整路径")
 		}
-		fmt.Fprintln(os.Stderr, "请使用完整路径")
 		return ""
 	}
 }

@@ -28,7 +28,7 @@ func cmdInit(ctx context.Context, args []string) int {
 	repoPath := fs.String("repo", ".", "仓库根目录（含 go.mod；默认当前目录）")
 	workers := fs.Int("workers", defaultBuildWorkers(), "SSA 分析按包并发数（Q221：默认 min(NumCPU, 8)——8 核冷启动 5m16s→40s，峰值 RSS ~2.9G；小内存机器可调小，如 1）")
 	fs.Parse(args)
-	*repoPath = resolveRepoRef(*repoPath) // Q238：注册表短名/后缀/module
+	*repoPath = ResolveRepoRef(*repoPath) // Q238：注册表短名/后缀/module
 
 	abs, err := filepath.Abs(*repoPath)
 	if err != nil {
@@ -158,7 +158,7 @@ func resolveRepo(repoPath string) (string, string, error) {
 	if repoPath == "" {
 		repoPath = "."
 	}
-	repoPath = resolveRepoRef(repoPath) // Q238：注册表短名/后缀/module 解析
+	repoPath = ResolveRepoRef(repoPath) // Q238：注册表短名/后缀/module 解析
 	abs, err := filepath.Abs(repoPath)
 	if err != nil {
 		return "", "", err

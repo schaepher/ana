@@ -11,7 +11,8 @@
 - `docs/design-q235.md` 已归档：Q235 六项借鉴设计已实施并落档
   field_trace.md §64–§66（设计文档已删除）
 - [`docs/field_trace.md`](docs/field_trace.md)：逐 Q 实现记录（§63 起为
-  Q234/Q235 系列）
+  Q234/Q235/Q238 系列；§77 = Q238 全局注册表 + worktree/workspace，
+  design-q238.md 已归档）
 
 ## 项目一句话
 
@@ -57,8 +58,9 @@ grep 仅用于字面文本（字符串/注释/日志）。
 
 注意：
 - **--repo 缺省 = 当前工作目录（Q237）**：在仓库内直接跑 `./codeintel
-  query ...` 即可，无需 `--repo`；跨仓库查别的项目时才传 `--repo <path>`
-  （文档中不硬编码本仓库路径——目录可能被重命名）
+  query ...` 即可，无需 `--repo`；跨仓库传 `--repo <path>` 或已注册
+  短名（Q238：`codeintel list` 查看；多命中报候选；文档不硬编码本
+  仓库路径——目录可能被重命名）
 - 本仓库 `.codeintel/` 已 reindex（2026-08-22，含最新分析逻辑）；逻辑变更后
   `update` 按 git diff 判断（工作区干净会跳过）——用 `reindex` 确保新逻辑生效
 - 改 `assets/web/` 前端后须重新 `go build -o codeintel ./cmd/codeintel`

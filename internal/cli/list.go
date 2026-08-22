@@ -81,7 +81,7 @@ func cmdList(args []string) int {
 	// 过滤值解析：--worktree-of 支持注册表短名（Q6）
 	wtTarget := *worktreeOf
 	if wtTarget != "" {
-		wtTarget = resolveRepoRef(wtTarget)
+		wtTarget = ResolveRepoRef(wtTarget)
 	}
 
 	var entries []listEntry

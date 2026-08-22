@@ -17,7 +17,7 @@ func cmdReindex(ctx context.Context, args []string) int {
 	repoPath := fs.String("repo", ".", "仓库根目录（含 go.mod；默认当前目录）")
 	fs.Int("workers", defaultBuildWorkers(), "SSA 分析按包并发数（Q221：默认 min(NumCPU, 8)；透传给 init）")
 	fs.Parse(args)
-	*repoPath = resolveRepoRef(*repoPath) // Q238：注册表短名/后缀/module
+	*repoPath = ResolveRepoRef(*repoPath) // Q238：注册表短名/后缀/module
 
 	abs, err := filepath.Abs(*repoPath)
 	if err != nil {

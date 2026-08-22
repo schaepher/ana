@@ -59,7 +59,14 @@ func usage() {
 	fmt.Fprint(os.Stderr, `codeintel - Go 代码库智能索引与查询（MVP）
 
 用法:
-  （--repo <path> 缺省 = 当前工作目录，Q237；在目标仓库内可直接省略）
+  （--repo <path> 缺省 = 当前工作目录，Q237；也接受已注册仓库的短名/
+  路径后缀/module 名，Q238——codeintel list 查看已注册仓库）
+  codeintel list [--stale|--unbuilt|--worktree-of|--workspace|--module]
+                                  全局注册台账（~/.codeintel：init 后自动注册）
+  codeintel workspace init --dir <目录> [--repo <子集>] [--build] [--branch <b>]
+                                  把已注册仓库创建 git worktree 到 workspace
+                                  （幂等；默认 detached 不构建）
+  codeintel workspace prune       清理目录已消失的注册条目
   codeintel init --repo <path>     全量构建索引（生成 .codeintel/codeintel.db）
   codeintel update --repo <path>   增量更新（git 检测变更文件，全量分析+增量写入）
   codeintel serve --repo <path>    启动图探索 Web 服务（AntV G6 前端，--addr 默认 :8090）

@@ -18,7 +18,7 @@ func cmdClean(args []string) int {
 	force := fs.Bool("force", false, "不提示直接删除")
 	purgeCache := fs.Bool("purge-cache", false, "连包级分析缓存（.codeintel/cache）一起删除——默认保留")
 	fs.Parse(args)
-	*repoPath = resolveRepoRef(*repoPath) // Q238：注册表短名/后缀/module
+	*repoPath = ResolveRepoRef(*repoPath) // Q238：注册表短名/后缀/module
 
 	abs, err := filepath.Abs(*repoPath)
 	if err != nil {
