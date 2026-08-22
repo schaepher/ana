@@ -3070,4 +3070,38 @@ S4["*tndemo.T:24 ((Svc).GetOrm)"] --- S1             ← 父子链
 
 ---
 
-**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q235，逐 Q 编号 + 日期）。
+## 75. Q236 收尾：复核更正 + 复合字面量分组 + 项目自举（2026-08-22）
+
+本会话三项收尾（P0/P1/P2 排序执行），均为内嵌更正段的汇总：
+
+1. **P0 — Call.Pos 结论复核（更正 §69/§70 错误记录，非死代码）**
+   probe 索引错位发现：`token.Pos = base + offset`（base≥1，多文件
+   递增），直接 `src[pos]` 反查错位 1 字节把 '(' 显示成 ')'——§69 原
+   记录「Call.Pos=Rparen、Lparen 匹配死代码、有参数调用不恢复」系此
+   误判。修正索引（`Position().Offset`）+ x/tools v0.26 源码
+   （builder.go:1002 `c.pos = e.Lparen`）双证：**Call.Pos = Lparen**，
+   recoverVarName 恢复逻辑正确（无参/有参调用均恢复变量名；嵌套内层
+   Pos=内层 '(' ≠ 外层 callPos 防误配）。补测试
+   TestTempValueCallWithArgsRecovers 固化（此前无有参调用覆盖）。
+
+2. **P1 — 复合字面量键值对锚点分组（解决 §71 遗留）**
+   splitAssign 无等号时识别 `Key: value,` 冒号形态：右侧去行尾注释
+   + 尾逗号后按完整表达式匹配节点 instance_path（req.Email）→ 归
+   「写入值」；左侧字段名非对象基址（对象在字面量赋值目标处，行内
+   取不到），不产生「对象」组。文本/tree/mermaid 共用 classifySource
+   同步受益。补复合字面量 fixture 测试（行号对齐教训）。
+
+3. **P2 — go2o serve 二进制重建**
+   旧二进制（8/18）嵌入 Q228 时代的 er.html——`go build` 重建后
+   strings 命中 Q230×8，serve 验证 `/er.html` 200 + `/api/er` 200。
+   教训入 runbook #16：前端 go:embed 构建时打包，改 `assets/web/`
+   后必须重新构建二进制。
+
+4. **项目自举**：用户明确后续分析/修改/搜索本项目自身用 codeintel
+   命令（`./codeintel query ... --repo /home/schaepher/Codes/ana`）——
+   已 reindex 本仓库索引（45MB，含最新逻辑）；写入 AGENTS.md 自举节
+   与全局记忆。教训入 runbook #15：源码位置反查一律经 Position。
+
+---
+
+**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q236，逐 Q 编号 + 日期）。

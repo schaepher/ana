@@ -21,3 +21,5 @@
 | 12 | ER 页面刷新后「全图画线」开关恢复 | 预期行为，非故障 | Q227 设计如此：开关不持久化 |
 | 13 | 分析逻辑变更后查询结果未反映 | precompute relations 重跑（build_id 失效自动重算）或 update | relations 按 build_id 缓存；分析逻辑版本变更自动失效 |
 | 14 | 索引与二进制 schema 版本不匹配（旧库） | 加表类自动补建；列变更 clean 重建 | schema 演进。预防：Q235-3 自动迁移 |
+| 15 | probe/脚本用 `src[pos]` 反查源码字符错位 1 字节（把 '(' 看成 ')'） | 用 `fset.Position(pos).Offset` 索引源码，不用 token.Pos 直接索引 | token.Pos = base+offset（base≥1，多文件递增）。预防：源码反查一律经 Position（Q236 教训——错位曾把 Call.Pos=Lparen 误判成 Rparen，「死代码」误报） |
+| 16 | serve 页面是旧版交互（前端改动没生效） | `go build -o codeintel ./cmd/codeintel` 重建二进制；`strings codeintel \| grep <新标记>` 验证 | 前端走 go:embed，构建时打包（Q236 P2：go2o 旧二进制嵌 Q228 页面） |
