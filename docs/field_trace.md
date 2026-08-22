@@ -2992,7 +2992,42 @@ S4["*tndemo.T:24 ((Svc).GetOrm)"] --- S1             ← 父子链
 （reportlab 对 DroidSansFallback 字形渲染失败——黑方块）。
 
 **验证**：13 包全绿 + e2e 38 项；mermaid 父子链 + PDF 3 页（图在
-第 2 页）。
+第 2 页）。PDF 宽度适配：mermaid.ink `?width=2000` 高分辨率渲染 +
+插入时宽度优先缩放（min(可用宽/图宽, 可用高/图高)）+ 居中。
+
+---
+
+## 73. 方法调用接收者补充来源 + 文本来源树归组（Q235-12，2026-08-22）
+
+**需求**：用户指出 `u := svc.GetOrm()` 的完整来源应含**接收者 svc**
+（u 来自 svc 对象的方法调用）——此前来源链只有 GetOrm 内部
+`return &T{}`，缺调用对象。
+
+**实现**（渲染层补充，不动图/边——安全）：
+1. `receiverSource`：节点源码行若为方法调用赋值（`u := svc.GetOrm()`）
+   ——提取接收者（svc）并向前扫描找其定义行（`svc := &Svc{}`）——
+   补充为「来源」子层节点
+2. 文本格式重构为**来源树**：depth=1 写入值/对象为顶层组；depth>=2
+   按 ParentID 归入对应顶层组的子来源层（与 mermaid 父子链一致——
+   `*tndemo.T` 归 u 子层、`[]*tndemo.Brand` 归 brands 子层）；
+   receiver 与深层来源并列在子层
+
+**效果**（tn-demo）：
+```
+  对象 ←
+    u:28   u := svc.GetOrm()
+      来源 ←
+        svc:27   svc := &Svc{}                ← 接收者
+        *tndemo.T:24   func (s *Svc) GetOrm()...
+  写入值 ←
+    brands:29   brands := svc.GetBrands(svc.GetID())
+      来源 ←
+        svc:27   svc := &Svc{}                ← 接收者
+        []*tndemo.Brand:20   return []*Brand{{Name: "a"}}
+```
+
+**验证**：13 包全绿 + e2e 38 项。go2o 复合字面量锚点（无等号）
+仍退化全「来源」（§71 遗留）。
 
 ---
 

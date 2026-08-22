@@ -100,6 +100,47 @@ func splitAssign(line string) (string, string) {
 	return strings.TrimSpace(base), strings.TrimSpace(rv)
 }
 
+// receiverSource 方法调用接收者补充（Q235-12）：节点源码行若为方法
+// 调用赋值（u := svc.GetOrm()）——返回接收者名与其定义行（svc :=
+// &Svc{}）。无方法调用/找不到定义返回空。
+func receiverSource(cache *sourceLineCache, filePath string, line int) (name string, defLine int, defSrc string) {
+	src := cache.line(filePath, line)
+	if src == "" {
+		return "", 0, ""
+	}
+	// 提取 :=/= 后的接收者（svc.GetOrm() → svc）
+	idx := strings.Index(src, ":=")
+	if idx < 0 {
+		idx = strings.Index(src, "=")
+	}
+	if idx < 0 {
+		return "", 0, ""
+	}
+	rhs := strings.TrimSpace(src[idx+2:])
+	if i := strings.Index(rhs, "."); i <= 0 {
+		return "", 0, "" // 无 .Method( —— 非方法调用
+	} else {
+		rhs = rhs[:i]
+	}
+	recv := strings.TrimSpace(rhs)
+	if recv == "" {
+		return "", 0, ""
+	}
+	// 向前扫描找定义行：svc := / var svc / svc =
+	lines, ok := cache.files[filePath]
+	if !ok {
+		return recv, 0, ""
+	}
+	for l := line - 2; l >= 0; l-- {
+		text := strings.TrimSpace(lines[l])
+		if strings.HasPrefix(text, recv+" :=") || strings.HasPrefix(text, recv+" =") ||
+			strings.HasPrefix(text, "var "+recv+" ") || text == "var "+recv {
+			return recv, l + 1, text
+		}
+	}
+	return recv, 0, ""
+}
+
 // classifySource 来源侧（dir=0）节点分组：
 // depth==1 且命中锚点行等号右边 → 写入值；命中左边基址 → 对象；
 // 其余（更深来源）→ 来源。
@@ -180,30 +221,72 @@ func sortTraceRows(rs []*domain.TraceRow) {
 }
 
 // renderText 文本格式（缩进分组）。
+// Q235-12 来源树：depth=1 写入值/对象为顶层组；depth>=2 按 ParentID
+// 归入对应顶层组的子来源层；方法调用赋值（u := svc.GetOrm()）的
+// 接收者 svc 补充进子来源。
 func renderText(head string, sources, usages []*domain.TraceRow,
 	leftBase, rightVar, repoDir string) string {
 	cache := newSourceLineCache(repoDir)
 	var sb strings.Builder
 	sb.WriteString(head + "\n")
-	// 来源侧：写入值/对象分组 + 来源子层
-	var curGroup vtGroup
-	lastDepth := 0
+	// 顶层组（depth=1）：写入值/对象；子来源（depth>=2 + receiver）按 parent 归组
+	top := []*domain.TraceRow{}
+	child := map[string][]string{} // parentID → 子来源行文本
+	// 先收集 depth=1（顶层）
 	for _, r := range sources {
-		g := classifySource(r, leftBase, rightVar)
-		if g != curGroup {
-			curGroup = g
-			sb.WriteString("  " + string(g) + " ←\n")
+		if r.Depth == 1 {
+			top = append(top, r)
 		}
-		sb.WriteString(fmt.Sprintf("    %s%s:%d   %s\n", strings.Repeat("  ", r.Depth-1),
-			r.Name, r.Line, cache.line(r.FilePath, r.Line)))
-		lastDepth = r.Depth
 	}
-	_ = lastDepth
+	// parent key：id|dir（与 mermaid 一致）
+	pkey := func(r *domain.TraceRow) string { return string(r.ID) + "|" + fmt.Sprint(r.Dir) }
+	// depth>=2 归组：parent 若是 depth=1 顶层 → 其子组；否则归到最近顶层
+	childLines := func(r *domain.TraceRow) string {
+		return fmt.Sprintf("%s:%d   %s", r.Name, r.Line, cache.line(r.FilePath, r.Line))
+	}
+	_ = childLines
+	for _, r := range sources {
+		if r.Depth <= 1 {
+			continue
+		}
+		// 顶层节点 id（不含 dir）→ 找对应的顶层
+		topKey := string(r.ParentID)
+		belong := ""
+		for _, t := range top {
+			if string(t.ID) == topKey {
+				belong = pkey(t)
+				break
+			}
+		}
+		if belong == "" {
+			belong = "W"
+		}
+		child[belong] = append(child[belong], childLines(r))
+	}
+	// 渲染顶层组
+	_ = pkey
+	for _, t := range top {
+		g := classifySource(t, leftBase, rightVar)
+		sb.WriteString("  " + string(g) + " ←\n")
+		sb.WriteString(fmt.Sprintf("    %s:%d   %s\n", t.Name, t.Line, cache.line(t.FilePath, t.Line)))
+		// 子来源层：receiver + depth>=2 按 parent
+		sub := []string{}
+		if recv, defLine, defSrc := receiverSource(cache, t.FilePath, t.Line); recv != "" && defSrc != "" {
+			sub = append(sub, fmt.Sprintf("%s:%d   %s", recv, defLine, defSrc))
+		}
+		sub = append(sub, child[pkey(t)]...)
+		if len(sub) > 0 {
+			sb.WriteString("      来源 ←\n")
+			for _, line := range sub {
+				sb.WriteString("        " + line + "\n")
+			}
+		}
+	}
 	if len(usages) > 0 {
 		sb.WriteString("  去向 →\n")
 		for _, r := range usages {
-			sb.WriteString(fmt.Sprintf("    %s%s:%d   %s\n", strings.Repeat("  ", r.Depth-1),
-				r.Name, r.Line, cache.line(r.FilePath, r.Line)))
+			sb.WriteString(fmt.Sprintf("    %s:%d   %s\n", r.Name, r.Line,
+				cache.line(r.FilePath, r.Line)))
 		}
 	}
 	return sb.String()
