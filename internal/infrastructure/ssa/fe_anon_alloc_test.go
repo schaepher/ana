@@ -145,3 +145,70 @@ func h() {
 		t.Errorf("变量名恢复字段路径应保持 arr.Value，got names=%v", gotH)
 	}
 }
+
+// TestPhiRecoversVarName：Q235-9——go2o 形态的匿名 phi（短声明多值 +
+// 循环更新：size, lastId := 5, 0 在 for 中更新——go/ssa lifting 后
+// phi 不保留变量名）——phi 的 Pos 指向源码声明位置，idents 直接反查
+// 恢复 size/lastId。
+func TestPhiRecoversVarName(t *testing.T) {
+	nodes, _ := indexFixture(t, map[string]string{
+		"go.mod": moduleGoMod,
+		"main.go": `package m
+
+func loop() {
+	size, lastId := 5, 0
+	for {
+		if size > 10 {
+			break
+		}
+		size = size + 1
+		lastId = lastId + 1
+	}
+	_ = size + lastId
+}
+`,
+	})
+	funcID := "symbol:go:example.com/mtest:loop"
+	names := map[string]bool{}
+	for _, n := range nodes {
+		if n.Kind != domain.KindSSAValue || n.Property("func_id") != funcID {
+			continue
+		}
+		names[n.Name] = true
+	}
+	if !names["size"] || !names["lastId"] {
+		t.Errorf("匿名 phi 应恢复变量名 size/lastId（Pos 指向声明），got names=%v", names)
+	}
+}
+
+// TestLiftingParamBaseRecovers：lifting 参数基址——参数多块使用被
+// 提升为 phi，字段路径基址应恢复参数名 v（v.Box2.Value 而非 t0.Box2.
+// Value）。
+func TestLiftingParamBaseRecovers(t *testing.T) {
+	nodes, _ := indexFixture(t, map[string]string{
+		"go.mod": moduleGoMod,
+		"main.go": `package m
+
+type Box struct{ Box2 *Box2 }
+type Box2 struct{ Value int }
+
+func handle(v *Box) int {
+	if v.Box2 != nil {
+		return v.Box2.Value
+	}
+	return 0
+}
+`,
+	})
+	funcID := "symbol:go:example.com/mtest:handle"
+	names := map[string]bool{}
+	for _, n := range nodes {
+		if n.Kind != domain.KindSSAValue || n.Property("func_id") != funcID {
+			continue
+		}
+		names[n.Name] = true
+	}
+	if !names["v.Box2.Value"] {
+		t.Errorf("lifting 参数基址应恢复 v.Box2.Value，got names=%v", names)
+	}
+}

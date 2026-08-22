@@ -298,18 +298,15 @@ func (ext *fieldExtractor) emitValue(v ssa.Value) (domain.CanonicalID, error) {
 	// 仍为 SSA 临时名（phi/合成值无 Pos 匹配失败）时回退 slot
 	name := ext.instancePath(v)
 	if isSSAName(name) {
-		// Q235-6/8：SSA 临时名回退类型短名（保留 * / [] 与末段包名：
+		// Q235-6/8/9：SSA 临时名回退类型短名（保留 * / [] 与末段包名：
 		// *proto.String / []*tndemo.Brand / orm.Orm）——用户视角 tN
-		// 不可读，链上显示类型可把前后值联系起来（GetBrands 内部的
-		// 切片构造 ↔ 调用方 brands）。Alloc（Q235-6 匿名分配）扩展到
-		// 全部指令（Call/MakeSlice/Convert 等）；**phi 保留**（分支
-		// 汇合语义，无源码对应，恢复需数据流分析）
-		if _, isPhi := v.(*ssa.Phi); !isPhi {
-			if tn := allocTypeShort(v.Type().String()); tn != "" {
-				name = tn
-			} else {
-				name = slot
-			}
+		// 不可读，链上显示类型可把前后值联系起来。Alloc（Q235-6 匿名
+		// 分配）扩展到全部指令（Call/MakeSlice/Convert 等）；phi 有
+		// 源码声明（Pos 指向变量）时已恢复变量名（Q235-9），**无 Pos
+		// 的合成 phi 同样回退类型短名**（int 比 t3 可读，汇合语义由
+		// 链结构体现）
+		if tn := allocTypeShort(v.Type().String()); tn != "" {
+			name = tn
 		} else {
 			name = slot
 		}

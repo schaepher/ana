@@ -74,12 +74,11 @@ func (p *aliasPass) valueNodeID(v ssa.Value) (domain.CanonicalID, bool) {
 	}
 	id := domain.CanonicalID(string(funcID) + "#" + slot)
 	name := slot
-	// Q235-6/8：SSA 临时名回退类型短名（与 emitValue 一致）——Alloc
-	// （Q235-6 匿名分配）扩展到全部指令；**phi 保留**（分支汇合语义）
-	if _, isPhi := v.(*ssa.Phi); !isPhi {
-		if tn := allocTypeShort(v.Type().String()); tn != "" {
-			name = tn
-		}
+	// Q235-6/8/9：SSA 临时名回退类型短名（与 emitValue 一致）——Alloc
+	// （Q235-6 匿名分配）扩展到全部指令；phi 有声明时已恢复变量名
+	// （Q235-9），无 Pos 合成 phi 同样回退类型短名
+	if tn := allocTypeShort(v.Type().String()); tn != "" {
+		name = tn
 	}
 	if err := p.emit(domain.Item{Node: &domain.CodeEntity{
 		ID:   id,
