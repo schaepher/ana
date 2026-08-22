@@ -2,6 +2,17 @@
 
 本文件供 AI 编码代理（Claude Code、Codex、Cursor 等）在修改本仓库前阅读。
 
+## 文档导航
+
+- [`docs/DoD.md`](docs/DoD.md)：交付验收清单（10 条）+ 五轴自检——**每个
+  改动交付前逐项自查**（Q235）
+- [`docs/runbook.md`](docs/runbook.md)：故障模式速查表（/tmp 满、WAL、
+  端口冲突、schema 迁移等 14 条，Q235）
+- [`docs/design-q235.md`](docs/design-q235.md)：Q235 六项借鉴设计（实施
+  完成后归档进 field_trace.md）
+- [`docs/field_trace.md`](docs/field_trace.md)：逐 Q 实现记录（§63 起为
+  Q234/Q235 系列）
+
 ## 项目一句话
 
 `codeintel` 是一个 Go 代码库智能索引系统：对 Go module 仓库做静态分析，
