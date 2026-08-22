@@ -3220,4 +3220,32 @@ sale_sub_item 1→15 条（多行 JOIN 修复）；**rbac 系保持孤立为合�
 
 ---
 
-**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q239，逐 Q 编号 + 日期）。
+## 79. 表间通路查询（Q241，2026-08-23）
+
+**需求**：添加 action——获取表 A 到表 B 之间的通路（从一张表可以找到
+另一张表的数据，中间可能跨过 mapping 表或其他关联表）。
+
+**设计**（design-q241.md 已归档，访谈确认）：独立 `query table-path`
+子命令（与 query relations 并列表级家族）；同跳数多路径文本输出类型
+优先级最优一条（fk>query>write>read）、--json 全列候选；--max-hops
+默认 6。
+
+**实现**：
+- action：Actions.TablePath（relations 全量 GetTableRelations 建表级
+  无向邻接——同表对多条边取类型最优；BFS 最短跳数 + 前驱边集合回溯
+  全部同跳数路径；类型序列字典序最小为最优）+ ResolveTableName（大小
+  写不敏感精确匹配，多匹配报候选）
+- CLI：query table-path <表A> <表B> [--max-hops N] [--json]；输出
+  `表A.列 → [类型] → 表B.列` 每步列对（用户可据此追溯代码）
+
+**坑**（测试驱动）：fixture 缺中间 SSA 值节点 → 值流边被 SaveBatchStats
+外键约束静默跳过 → relations 链断（只有列名呼应的 fk 规则 B 命中）——
+补 tN/xN 节点；parseQueryFlags 已消费 --json（f.json）——table-path 需
+经参数传入；entrylog 约定 enter/exit 用 logger.Info（AST 测试校验）。
+
+**测试**：直接关联 / 跨 mapping 表（2 跳）/ 不可达（exit 非零）/
+--json 结构 / 同跳数多路径类型优先级（fk 链胜 read 链）。
+
+---
+
+**文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q240，逐 Q 编号 + 日期）。
