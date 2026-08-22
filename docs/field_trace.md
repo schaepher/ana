@@ -2874,4 +2874,33 @@ instance_path tN 前缀（t6 read 104 等）均属此类，不在本范围（见
 
 ---
 
+## 69. 链级展示：tN 全量回退类型短名（Q235-8，2026-08-22）
+
+**用户视角验证**（链级 before/after）：构造含三形态的数据流链
+（`u := svc.GetOrm()` 无参调用 / `brands := svc.GetBrands(svc.GetID())`
+嵌套调用 / `return &T{}` 无赋值）——**before** 链在 GetBrands 内部
+断链：`← t4:20`（切片字面量 MakeSlice 非 Alloc，用户无法与调用方
+brands 联系）；**after** 显示 `← []*tndemo.Brand:20`——整条链
+`*tndemo.T:24 → u:28 → brands:29 → u.Brands [写]:30` 前后可联系，
+tN 从链上消失。
+
+**改动**（承 Q235-6/7）：
+1. emitValue 通用分支：tN 回退类型短名从 Alloc 扩展到**全部指令**
+   （Call/MakeSlice/Convert 等）；**phi 保留**（分支汇合语义）
+2. alias 路径 valueNodeID 同步扩展（非 phi 回退）
+
+**评估**（probe 确认）：go/ssa 的 Call.Pos = **Rparen**（右括号）——
+原 recoverVarName 的 `p == callPos`（Lparen）是死代码，调用赋值
+恢复从未生效；嵌套调用外层 Pos 不可靠——**有参数调用不恢复变量名**
+（类型短名兜底），形态 1 无参调用维持 Alloc 分支恢复（u）。
+
+**效果**（go2o）：tN 总量 2.15 万 → ~3200（Phi 1732 设计保留 +
+load 1374 + Field 90 残余）。链级验证 + 13 包全绿 + e2e 38 项。
+
+**遗留**：load/Field 残余 tN 的 **Name（slot）与 ID（instance 路径
+#t0.Account.Balance）分离**——疑似节点 UPSERT 合并覆盖（同一 ID
+多次发射、Name 列后写覆盖），独立问题待查。
+
+---
+
 **文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q235，逐 Q 编号 + 日期）。

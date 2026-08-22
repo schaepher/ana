@@ -74,8 +74,9 @@ func (p *aliasPass) valueNodeID(v ssa.Value) (domain.CanonicalID, bool) {
 	}
 	id := domain.CanonicalID(string(funcID) + "#" + slot)
 	name := slot
-	// Q235-6：匿名分配（&T{} / make）回退类型短名（与 emitValue 一致）
-	if _, isAlloc := v.(*ssa.Alloc); isAlloc {
+	// Q235-6/8：SSA 临时名回退类型短名（与 emitValue 一致）——Alloc
+	// （Q235-6 匿名分配）扩展到全部指令；**phi 保留**（分支汇合语义）
+	if _, isPhi := v.(*ssa.Phi); !isPhi {
 		if tn := allocTypeShort(v.Type().String()); tn != "" {
 			name = tn
 		}
