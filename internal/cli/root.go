@@ -81,6 +81,9 @@ func usage() {
                                   字段后续使用正向追踪
   codeintel export [--out json]   导出双层索引 JSON（字段 → 产生者/消费者）
   codeintel clean --repo <path>    删除仓库的索引数据库
+  codeintel query table-path <A> <B> [--max-hops N] [--json]
+                                  表 A → 表 B 数据通路（跨 mapping 表，
+                                  每步 表.列 → [类型] → 表.列）
   codeintel precompute relations --repo <path>
                                   全量预计算表间关联（进度写 db，查询
                                   直接命中缓存；serve 首次请求自动兜底）
