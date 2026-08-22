@@ -24,8 +24,9 @@ const BASE = get('--base', 'http://localhost:8096');
 const OUT = get('--out', '/tmp/er.png');
 const dblTable = get('--dblclick', '');
 const fullPage = has('--full-page');
+const width = parseInt(get('--width', '1800'), 10);
 
-const page = await (await chromium.launch()).newPage({ viewport: { width: 1800, height: 1100 } });
+const page = await (await chromium.launch()).newPage({ viewport: { width, height: 1100 } });
 page.on('pageerror', (e) => console.log('[pageerror]', e.message));
 await page.goto(BASE + '/er.html', { waitUntil: 'networkidle' });
 await page.waitForTimeout(3000);
