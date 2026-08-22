@@ -9,9 +9,11 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/schaepher/codeintel/internal/action"
+	"github.com/schaepher/codeintel/internal/domain"
 	"github.com/schaepher/codeintel/internal/infrastructure/sqlite"
 )
 
@@ -26,7 +28,7 @@ func mcpDial(t *testing.T, dir string) *mcp.ClientSession {
 	acts := action.New(sqlite.NewRepo(db))
 
 	clientTransport, serverTransport := mcp.NewInMemoryTransports()
-	server := mcpServer(acts)
+	server := mcpServer(acts, sqlite.NewRepo(db), dir)
 	srvSession, err := server.Connect(context.Background(), serverTransport, nil)
 	if err != nil {
 		t.Fatalf("server connect: %v", err)
@@ -132,5 +134,45 @@ func TestMCPToolError(t *testing.T) {
 	}
 	if !strings.Contains(text, "不存在") {
 		t.Errorf("错误信息应含原因: %s", text)
+	}
+}
+
+// TestMCPToolStale：索引过期（commit_sha ≠ HEAD）时工具结果追加
+// [stale] 标注（Agent 可见；content[0] 仍是契约 JSON）。
+func TestMCPToolStale(t *testing.T) {
+	dir := seedGitRepo(t)
+	db, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	r := sqlite.NewRepo(db)
+	mainID := domain.CanonicalID("symbol:go:example.com/m:main")
+	if _, err := r.SaveBatchStats([]*domain.CodeEntity{
+		{ID: mainID, Kind: domain.KindFunction, Name: "main", FilePath: "main.go"},
+	}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO build_metadata (build_id, commit_sha, tool_name, status, timestamp) VALUES ('b1','deadbeef','all','success',?)`, time.Now().Unix()); err != nil {
+		t.Fatal(err)
+	}
+	cs := mcpDial(t, dir)
+	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "symbol", Arguments: map[string]any{"id": "main"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if len(res.Content) < 2 {
+		t.Fatalf("过期时应有 2 个 content（契约 + stale 标注），got %d", len(res.Content))
+	}
+	tc, ok := res.Content[1].(*mcp.TextContent)
+	if !ok || !strings.Contains(tc.Text, "[stale]") || !strings.Contains(tc.Text, "deadbeef") {
+		t.Errorf("content[1] 应为 stale 标注: %v", res.Content[1])
+	}
+	// content[0] 仍是契约 JSON（不受影响）
+	var m map[string]any
+	if err := json.Unmarshal([]byte(res.Content[0].(*mcp.TextContent).Text), &m); err != nil {
+		t.Errorf("content[0] 应为契约 JSON: %v", err)
 	}
 }

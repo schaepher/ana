@@ -75,6 +75,20 @@ func toolErr(msg string) *mcp.CallToolResult {
 	}
 }
 
+// staleWrap 包装工具 handler（Q243 新鲜度）：结果非错误且索引过期时，
+// content 追加 [stale] 标注——Agent 可见；content[0] 契约 JSON 不变。
+func staleWrap[In, Out any](r *sqlite.Repo, repoAbs string, inner func(context.Context, *mcp.CallToolRequest, In) (*mcp.CallToolResult, Out, error)) func(context.Context, *mcp.CallToolRequest, In) (*mcp.CallToolResult, Out, error) {
+	return func(ctx context.Context, req *mcp.CallToolRequest, args In) (*mcp.CallToolResult, Out, error) {
+		res, out, err := inner(ctx, req, args)
+		if err == nil && res != nil && !res.IsError {
+			if tip := staleInfo(repoAbs, r); tip != "" {
+				res.Content = append(res.Content, &mcp.TextContent{Text: "[stale] " + tip})
+			}
+		}
+		return res, out, err
+	}
+}
+
 // toolJSON 成功结果：契约 JSON 文本（docs/json-contract.md）。
 func toolJSON(v any) *mcp.CallToolResult {
 	b, err := json.MarshalIndent(v, "", "  ")
@@ -84,10 +98,11 @@ func toolJSON(v any) *mcp.CallToolResult {
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(b)}}}
 }
 
-// registerMCPTools 注册全部工具（handler 闭包捕获 acts）。
-func registerMCPTools(server *mcp.Server, acts *action.Actions) {
+// registerMCPTools 注册全部工具（handler 闭包捕获 acts；staleWrap 追加
+// [stale] 标注——Q243 新鲜度显式化）。
+func registerMCPTools(server *mcp.Server, acts *action.Actions, r *sqlite.Repo, repoAbs string) {
 	mcp.AddTool(server, &mcp.Tool{Name: "symbol", Description: "符号详情（调用者/被调用者/动态派发候选）"},
-		func(ctx context.Context, req *mcp.CallToolRequest, args symbolParams) (*mcp.CallToolResult, any, error) {
+		staleWrap(r, repoAbs, func(ctx context.Context, req *mcp.CallToolRequest, args symbolParams) (*mcp.CallToolResult, any, error) {
 			d, err := acts.SymbolDetail(args.ID)
 			if err != nil {
 				return toolErr(err.Error()), nil, nil
@@ -104,25 +119,25 @@ func registerMCPTools(server *mcp.Server, acts *action.Actions) {
 				"callees":   factIDs(d.Callees, "target"),
 			}
 			return toolJSON(out), nil, nil
-		})
+		}))
 	mcp.AddTool(server, &mcp.Tool{Name: "fields", Description: "函数字段读写摘要（direct_read/write + indirect_write）"},
-		func(ctx context.Context, req *mcp.CallToolRequest, args fieldsParams) (*mcp.CallToolResult, any, error) {
+		staleWrap(r, repoAbs, func(ctx context.Context, req *mcp.CallToolRequest, args fieldsParams) (*mcp.CallToolResult, any, error) {
 			n, rows, err := acts.FunctionFields(args.Func)
 			if err != nil {
 				return toolErr(err.Error()), nil, nil
 			}
 			return toolJSON(map[string]any{"func": n.Name, "rows": rows}), nil, nil
-		})
+		}))
 	mcp.AddTool(server, &mcp.Tool{Name: "callers", Description: "调用者（depth 默认 1）"},
-		func(ctx context.Context, req *mcp.CallToolRequest, args graphParams) (*mcp.CallToolResult, any, error) {
+		staleWrap(r, repoAbs, func(ctx context.Context, req *mcp.CallToolRequest, args graphParams) (*mcp.CallToolResult, any, error) {
 			return graphTool(acts, args, "callers"), nil, nil
-		})
+		}))
 	mcp.AddTool(server, &mcp.Tool{Name: "callees", Description: "被调用者（depth 默认 1）"},
-		func(ctx context.Context, req *mcp.CallToolRequest, args graphParams) (*mcp.CallToolResult, any, error) {
+		staleWrap(r, repoAbs, func(ctx context.Context, req *mcp.CallToolRequest, args graphParams) (*mcp.CallToolResult, any, error) {
 			return graphTool(acts, args, "callees"), nil, nil
-		})
+		}))
 	mcp.AddTool(server, &mcp.Tool{Name: "impact", Description: "影响分析（depth 默认 3）"},
-		func(ctx context.Context, req *mcp.CallToolRequest, args graphParams) (*mcp.CallToolResult, any, error) {
+		staleWrap(r, repoAbs, func(ctx context.Context, req *mcp.CallToolRequest, args graphParams) (*mcp.CallToolResult, any, error) {
 			n, err := acts.ResolveSymbol(args.Symbol)
 			if err != nil {
 				return toolErr(err.Error()), nil, nil
@@ -136,9 +151,9 @@ func registerMCPTools(server *mcp.Server, acts *action.Actions) {
 				return toolErr(err.Error()), nil, nil
 			}
 			return toolJSON(map[string]any{"target": string(n.ID), "nodes": nodeBriefs(nodes)}), nil, nil
-		})
+		}))
 	mcp.AddTool(server, &mcp.Tool{Name: "trace", Description: "字段追溯（dir=backward/forward，max_depth 默认 8）"},
-		func(ctx context.Context, req *mcp.CallToolRequest, args traceParams) (*mcp.CallToolResult, any, error) {
+		staleWrap(r, repoAbs, func(ctx context.Context, req *mcp.CallToolRequest, args traceParams) (*mcp.CallToolResult, any, error) {
 			depth := args.MaxDepth
 			if depth <= 0 {
 				depth = 8
@@ -150,9 +165,9 @@ func registerMCPTools(server *mcp.Server, acts *action.Actions) {
 				return toolErr(err.Error()), nil, nil
 			}
 			return toolJSON(map[string]any{"steps": rows}), nil, nil
-		})
+		}))
 	mcp.AddTool(server, &mcp.Tool{Name: "value_trace", Description: "数据值全链（跨函数；node 为节点 ID）"},
-		func(ctx context.Context, req *mcp.CallToolRequest, args valueTraceParams) (*mcp.CallToolResult, any, error) {
+		staleWrap(r, repoAbs, func(ctx context.Context, req *mcp.CallToolRequest, args valueTraceParams) (*mcp.CallToolResult, any, error) {
 			id, err := acts.ResolveAnchor(args.Node)
 			if err != nil {
 				return toolErr(err.Error()), nil, nil
@@ -170,25 +185,25 @@ func registerMCPTools(server *mcp.Server, acts *action.Actions) {
 				return toolErr(err.Error()), nil, nil
 			}
 			return toolJSON(map[string]any{"flows": rows}), nil, nil
-		})
+		}))
 	mcp.AddTool(server, &mcp.Tool{Name: "context", Description: "跨层聚合上下文（symbol+callers/callees+fields+chain+traces）"},
-		func(ctx context.Context, req *mcp.CallToolRequest, args contextParams) (*mcp.CallToolResult, any, error) {
+		staleWrap(r, repoAbs, func(ctx context.Context, req *mcp.CallToolRequest, args contextParams) (*mcp.CallToolResult, any, error) {
 			c, err := acts.Context(args.Node)
 			if err != nil {
 				return toolErr(err.Error()), nil, nil
 			}
 			return toolJSON(c), nil, nil
-		})
+		}))
 	mcp.AddTool(server, &mcp.Tool{Name: "table", Description: "表级数据流聚合（列 + 写入方/读取方）"},
-		func(ctx context.Context, req *mcp.CallToolRequest, args tableParams) (*mcp.CallToolResult, any, error) {
+		staleWrap(r, repoAbs, func(ctx context.Context, req *mcp.CallToolRequest, args tableParams) (*mcp.CallToolResult, any, error) {
 			cols, err := acts.Table(args.Name)
 			if err != nil {
 				return toolErr(err.Error()), nil, nil
 			}
 			return toolJSON(cols), nil, nil
-		})
+		}))
 	mcp.AddTool(server, &mcp.Tool{Name: "relations", Description: "表间关联（type 过滤 query/write/read/fk）"},
-		func(ctx context.Context, req *mcp.CallToolRequest, args relationsParams) (*mcp.CallToolResult, any, error) {
+		staleWrap(r, repoAbs, func(ctx context.Context, req *mcp.CallToolRequest, args relationsParams) (*mcp.CallToolResult, any, error) {
 			rels, err := acts.Relations(args.Table, "")
 			if err != nil {
 				return toolErr(err.Error()), nil, nil
@@ -203,9 +218,9 @@ func registerMCPTools(server *mcp.Server, acts *action.Actions) {
 				rels = rels[:args.MaxResults]
 			}
 			return toolJSON(rels), nil, nil
-		})
+		}))
 	mcp.AddTool(server, &mcp.Tool{Name: "table_path", Description: "表 A → 表 B 数据通路（跨 mapping 表）"},
-		func(ctx context.Context, req *mcp.CallToolRequest, args tablePathParams) (*mcp.CallToolResult, any, error) {
+		staleWrap(r, repoAbs, func(ctx context.Context, req *mcp.CallToolRequest, args tablePathParams) (*mcp.CallToolResult, any, error) {
 			from, _, err := acts.ResolveTableName(args.From)
 			if err != nil {
 				return toolErr("起始表: " + err.Error()), nil, nil
@@ -223,9 +238,9 @@ func registerMCPTools(server *mcp.Server, acts *action.Actions) {
 				return toolErr(err.Error()), nil, nil
 			}
 			return toolJSON(res), nil, nil
-		})
+		}))
 	mcp.AddTool(server, &mcp.Tool{Name: "summary", Description: "跨层生命周期摘要（entry/compute/write/consume 主链）"},
-		func(ctx context.Context, req *mcp.CallToolRequest, args summaryParams) (*mcp.CallToolResult, any, error) {
+		staleWrap(r, repoAbs, func(ctx context.Context, req *mcp.CallToolRequest, args summaryParams) (*mcp.CallToolResult, any, error) {
 			id, err := acts.ResolveAnchor(args.Node)
 			if err != nil {
 				return toolErr(err.Error()), nil, nil
@@ -235,15 +250,15 @@ func registerMCPTools(server *mcp.Server, acts *action.Actions) {
 				return toolErr(err.Error()), nil, nil
 			}
 			return toolJSON(steps), nil, nil
-		})
+		}))
 	mcp.AddTool(server, &mcp.Tool{Name: "module_calls", Description: "模块间调用（gRPC/HTTP）"},
-		func(ctx context.Context, req *mcp.CallToolRequest, args moduleCallsParams) (*mcp.CallToolResult, any, error) {
+		staleWrap(r, repoAbs, func(ctx context.Context, req *mcp.CallToolRequest, args moduleCallsParams) (*mcp.CallToolResult, any, error) {
 			calls, err := acts.ModuleCalls(args.Module)
 			if err != nil {
 				return toolErr(err.Error()), nil, nil
 			}
 			return toolJSON(map[string]any{"calls": calls}), nil, nil
-		})
+		}))
 }
 
 // graphTool callers/callees 共用 handler。
@@ -289,9 +304,9 @@ func filterRels(rels []*domain.TableRelation, keep func(*domain.TableRelation) b
 }
 
 // mcpServer 组装 MCP server（工具注册）。
-func mcpServer(acts *action.Actions) *mcp.Server {
+func mcpServer(acts *action.Actions, r *sqlite.Repo, repoAbs string) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "codeintel", Version: "0.1.0"}, nil)
-	registerMCPTools(server, acts)
+	registerMCPTools(server, acts, r, repoAbs)
 	return server
 }
 
@@ -335,7 +350,7 @@ func cmdMCP(args []string) int {
 	}
 	defer db.Close()
 	acts := action.New(sqlite.NewRepo(db))
-	session, err := mcpServer(acts).Connect(context.Background(), &mcp.StdioTransport{}, nil)
+	session, err := mcpServer(acts, sqlite.NewRepo(db), abs).Connect(context.Background(), &mcp.StdioTransport{}, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mcp: %v\n", err)
 		return 1
