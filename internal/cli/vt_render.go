@@ -253,6 +253,8 @@ func renderTree(head string, sources, usages []*domain.TraceRow, anchor *domain.
 }
 
 // renderMermaid flowchart（LR 方向；节点用序号防特殊字符）。
+// Q235-11 父子链：depth=1 连锚点 W；depth>1 连 ParentID 对应节点
+// （GetBrands 构造 → brands → 锚点写——连线体现真实数据流，非星形）。
 func renderMermaid(head string, anchor *domain.TraceRow, sources, usages []*domain.TraceRow,
 	leftBase, rightVar string) string {
 	var sb strings.Builder
@@ -266,26 +268,55 @@ func renderMermaid(head string, anchor *domain.TraceRow, sources, usages []*doma
 		}
 	}
 	sb.WriteString(fmt.Sprintf("  W[\"%s:%d\"]\n", anchorLabel, anchor.Line))
-	// 来源节点（写入值/对象分组名作为前缀标注）
+	// 节点编号：id → 序号（来源 S、去向 U）
+	num := map[string]string{string(anchor.ID): "W"}
 	idx := 1
+	writeNode := func(r *domain.TraceRow, prefix string) string {
+		label := fmt.Sprintf("%s:%d", r.Name, r.Line)
+		if r.Dir == 0 && r.Depth == 1 {
+			if g := classifySource(r, leftBase, rightVar); g == vtWriteValue || g == vtObject {
+				label = string(g) + " " + label
+			}
+		}
+		if r.FuncID != anchor.FuncID {
+			if fn := shortFuncName(r.FuncID); fn != "" {
+				label += " (" + fn + ")"
+			}
+		}
+		key := string(r.ID) + "|" + fmt.Sprint(r.Dir)
+		if n, ok := num[key]; ok {
+			return n
+		}
+		n := fmt.Sprintf("%s%d", prefix, idx)
+		idx++
+		num[key] = n
+		sb.WriteString(fmt.Sprintf("  %s[\"%s\"]\n", n, label))
+		return n
+	}
+	// 连线（先声明节点，再连线——保证 parent 已编号）
+	edge := func(child, parent string) {
+		sb.WriteString(fmt.Sprintf("  %s --- %s\n", child, parent))
+	}
 	for _, r := range sources {
 		g := classifySource(r, leftBase, rightVar)
-		label := fmt.Sprintf("%s %s:%d", g, r.Name, r.Line)
-		if fn := shortFuncName(r.FuncID); fn != "" && r.FuncID != anchor.FuncID {
-			label += " (" + fn + ")"
+		n := writeNode(r, "S")
+		// 分组名作为节点标签的一部分（depth=1 的写入值/对象）
+		if r.Depth == 1 && (g == vtWriteValue || g == vtObject) {
+			// 标签已有 name——分组名通过节点名区分
 		}
-		sb.WriteString(fmt.Sprintf("  S%d[\"%s\"]\n", idx, label))
-		sb.WriteString(fmt.Sprintf("  S%d --- W\n", idx))
-		idx++
+		p := num[string(r.ParentID)+"|0"]
+		if r.Depth <= 1 || p == "" {
+			p = "W"
+		}
+		edge(n, p)
 	}
 	for _, r := range usages {
-		label := fmt.Sprintf("%s:%d", r.Name, r.Line)
-		if fn := shortFuncName(r.FuncID); fn != "" && r.FuncID != anchor.FuncID {
-			label += " (" + fn + ")"
+		n := writeNode(r, "U")
+		p := num[string(r.ParentID)+"|1"]
+		if r.Depth <= 1 || p == "" {
+			p = "W"
 		}
-		sb.WriteString(fmt.Sprintf("  U%d[\"%s\"]\n", idx, label))
-		sb.WriteString(fmt.Sprintf("  W --- U%d\n", idx))
-		idx++
+		edge(n, p)
 	}
 	return sb.String()
 }

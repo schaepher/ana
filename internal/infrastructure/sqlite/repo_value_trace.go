@@ -81,11 +81,11 @@ func (r *Repo) GetValueTrace(nodeID domain.CanonicalID, maxDepth int, minConf fl
 	fwdFilter := valueTraceFilter(ctx, inst, false, "n_next", includeContainer)
 
 	rows, err := r.Query(`WITH RECURSIVE
-vt(id, dir, depth, kind, seed, c_iface, c_origin, c_conf) AS (
-    SELECT ?, 0, 0, (SELECT n0.kind FROM nodes n0 WHERE n0.id = ?), 1, '', '', 0
+vt(id, dir, depth, parent, kind, seed, c_iface, c_origin, c_conf) AS (
+    SELECT ?, 0, 0, '', (SELECT n0.kind FROM nodes n0 WHERE n0.id = ?), 1, '', '', 0
     UNION
     -- 反向：流向当前节点（产生链）
-    SELECT e.source_id, 0, d.depth + 1, n_prev.kind, 0,
+    SELECT e.source_id, 0, d.depth + 1, d.id, n_prev.kind, 0,
            CASE WHEN json_extract(e.metadata, '$.candidate_origin') IS NOT NULL
                 THEN COALESCE(json_extract(e.metadata, '$.interface'), '') ELSE d.c_iface END,
            CASE WHEN json_extract(e.metadata, '$.candidate_origin') IS NOT NULL
@@ -101,7 +101,7 @@ vt(id, dir, depth, kind, seed, c_iface, c_origin, c_conf) AS (
            OR json_extract(e.metadata, '$.confidence') >= ?)
     UNION
     -- 正向：从当前节点流出（使用链）；锚点（seed）双向可展开
-    SELECT e.target_id, 1, d.depth + 1, n_next.kind, 0,
+    SELECT e.target_id, 1, d.depth + 1, d.id, n_next.kind, 0,
            CASE WHEN json_extract(e.metadata, '$.candidate_origin') IS NOT NULL
                 THEN COALESCE(json_extract(e.metadata, '$.interface'), '') ELSE d.c_iface END,
            CASE WHEN json_extract(e.metadata, '$.candidate_origin') IS NOT NULL
@@ -123,6 +123,7 @@ SELECT dp.id, MIN(dp.depth), n.name,
        n.line_start, dp.dir, n.kind, n.file_path,
        json_extract(n.properties, '$.access_kind'), json_extract(n.properties, '$.func_id'),
        json_extract(n.properties, '$.full_path'),
+       (SELECT v2.parent FROM vt v2 WHERE v2.id = dp.id AND v2.dir = dp.dir ORDER BY v2.depth LIMIT 1),
        (SELECT v2.c_iface FROM vt v2 WHERE v2.id = dp.id AND v2.dir = dp.dir ORDER BY v2.depth LIMIT 1),
        (SELECT v2.c_origin FROM vt v2 WHERE v2.id = dp.id AND v2.dir = dp.dir ORDER BY v2.depth LIMIT 1),
        (SELECT v2.c_conf FROM vt v2 WHERE v2.id = dp.id AND v2.dir = dp.dir ORDER BY v2.depth LIMIT 1)
@@ -150,11 +151,15 @@ ORDER BY dp.dir, MIN(dp.depth), dp.id`,
 			cConf    sql.NullFloat64
 		)
 		var filePath sql.NullString
-		if err := rows.Scan(&id, &row.Depth, &row.Name, &row.EdgeKinds, &line, &dir, &kind, &filePath, &access, &funcID, &fullPath, &cIface, &cOrigin, &cConf); err != nil {
+		var parentID sql.NullString
+		if err := rows.Scan(&id, &row.Depth, &row.Name, &row.EdgeKinds, &line, &dir, &kind, &filePath, &access, &funcID, &fullPath, &parentID, &cIface, &cOrigin, &cConf); err != nil {
 			return nil, err
 		}
 		row.ID = domain.CanonicalID(id)
 		row.Dir = dir
+		if parentID.Valid {
+			row.ParentID = domain.CanonicalID(parentID.String)
+		}
 		if filePath.Valid {
 			row.FilePath = filePath.String
 		}

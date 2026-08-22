@@ -53,6 +53,7 @@ const (
 type TraceRow struct {
 	ID                CanonicalID
 	Depth             int
+	ParentID          CanonicalID // 到达该节点的父节点（Q235-11：mermaid 父子链连线）
 	Name              string
 	EdgeKinds         string // 到达该节点经过的边类型（逗号连接）
 	Line              int

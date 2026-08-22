@@ -2966,4 +2966,34 @@ scan（SQL 加列但 scan 未对应 → 列错位 → SummaryChain/Lifecycle
 
 ---
 
+## 72. mermaid 父子链连线（Q235-11，2026-08-22）
+
+**需求**：用户反馈 mermaid 节点关系不友好——全部直连锚点 W（星形），
+丢了层级（brands 的来源是 GetBrands 内部构造）。
+
+**实现**：GetValueTrace CTE 增加 parent 列（递归时带出当前节点 id，
+反向/正向 UNION 各加 d.id）；TraceRow 加 ParentID；最终 SELECT 按
+c_iface 模式取最小 depth 的 parent。mermaid 渲染：depth=1 连锚点 W，
+depth>1 连 ParentID 对应节点（S3 --- S2：GetBrands 构造 →
+brands）；depth=1 的写入值/对象带分组名标签。
+
+**效果**：
+```
+W["u.Brands [写]:30"]
+S1["对象 u:28"] --- W
+S2["写入值 brands:29"] --- W
+S3["[]*tndemo.Brand:20 ((Svc).GetBrands)"] --- S2   ← 父子链
+S4["*tndemo.T:24 ((Svc).GetOrm)"] --- S1             ← 父子链
+```
+
+**PDF 输出修复**：value-trace 示例 PDF 的 mermaid 图未显示——根因：
+单页内容溢出，图插入 rect 在页面外（images=1 但不可见）——重写
+生成脚本（分页：y 超限 new_page；图独立段），pymupdf + Noto CJK
+（reportlab 对 DroidSansFallback 字形渲染失败——黑方块）。
+
+**验证**：13 包全绿 + e2e 38 项；mermaid 父子链 + PDF 3 页（图在
+第 2 页）。
+
+---
+
 **文档结束**。本版由 go-cpg v1.0 设计文档（2026-08-13 之前版本）整体适配而来：保留全部 SSA 语义与映射规则，重塑为 codeintel 适配器形态；§1–§12 为设计正文（Q1–Q73），§14 为 2026-08-14 实现阶段需求增补（Q74–Q83），§15 起为实现记录（Q84–Q235，逐 Q 编号 + 日期）。
