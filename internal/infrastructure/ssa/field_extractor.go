@@ -83,6 +83,12 @@ func (ext *fieldExtractor) instancePathDepth(v ssa.Value, depth int) string {
 		}
 	case *ssa.Alloc:
 		if name, ok := ext.idents[x.Pos()]; ok {
+			// Q235-6：预声明标识符（make/new 等关键字位置）不是变量名——
+			// 某些 go/ssa 版本 make 分配的 Pos 指向 make 关键字
+			switch name {
+			case "make", "new", "len", "cap", "append", "copy", "delete", "close":
+				return x.Name()
+			}
 			return name
 		}
 	}

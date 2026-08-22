@@ -275,7 +275,18 @@ func (ext *fieldExtractor) emitValue(v ssa.Value) (domain.CanonicalID, error) {
 	// 仍为 SSA 临时名（phi/合成值无 Pos 匹配失败）时回退 slot
 	name := ext.instancePath(v)
 	if isSSAName(name) {
-		name = slot
+		// Q235-6：匿名分配（&T{} / make——Alloc.Pos 指向 '{'/关键字，非
+		// 变量 Ident）回退类型短名（保留末段包名：proto.String）——
+		// value-trace 展示可读；phi 等纯中间值仍回退 slot
+		if _, isAlloc := v.(*ssa.Alloc); isAlloc {
+			if tn := allocTypeShort(v.Type().String()); tn != "" {
+				name = tn
+			} else {
+				name = slot
+			}
+		} else {
+			name = slot
+		}
 	}
 	n := &domain.CodeEntity{
 		ID:        id,

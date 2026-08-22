@@ -73,10 +73,17 @@ func (p *aliasPass) valueNodeID(v ssa.Value) (domain.CanonicalID, bool) {
 		slots[slot] = true
 	}
 	id := domain.CanonicalID(string(funcID) + "#" + slot)
+	name := slot
+	// Q235-6：匿名分配（&T{} / make）回退类型短名（与 emitValue 一致）
+	if _, isAlloc := v.(*ssa.Alloc); isAlloc {
+		if tn := allocTypeShort(v.Type().String()); tn != "" {
+			name = tn
+		}
+	}
 	if err := p.emit(domain.Item{Node: &domain.CodeEntity{
 		ID:   id,
 		Kind: domain.KindSSAValue,
-		Name: slot,
+		Name: name,
 		Properties: map[string]any{
 			"origin_kind": originKind(v),
 			"ssa_op":      ssaOp(v),
@@ -122,10 +129,15 @@ func (p *aliasPass) objectIDOf(obj ssa.Value) (domain.CanonicalID, bool) {
 	if _, isMap := obj.(*ssa.MakeMap); isMap {
 		kind = "make"
 	}
+	name := slot
+	// Q235-6：匿名分配回退类型短名（与 emitValue 一致）
+	if tn := allocTypeShort(obj.Type().String()); tn != "" {
+		name = tn
+	}
 	if err := p.emit(domain.Item{Node: &domain.CodeEntity{
 		ID:   id,
 		Kind: domain.KindSSAValue,
-		Name: slot,
+		Name: name,
 		Properties: map[string]any{
 			"origin_kind": kind,
 			"ssa_op":      ssaOp(obj),
