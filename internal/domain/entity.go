@@ -82,15 +82,16 @@ const (
 type CanonicalID string
 
 // CodeEntity 聚合根：代码库中唯一可标识的概念（函数、结构体、文件、包等）。
+// json tag（Q243 JSON 契约）：所有 --json 输出统一 snake_case。
 type CodeEntity struct {
-	ID        CanonicalID
-	Kind      EntityKind
-	Name      string
-	FilePath  string // 仓库相对路径
-	LineStart int
-	LineEnd   int
+	ID        CanonicalID `json:"id"`
+	Kind      EntityKind  `json:"kind"`
+	Name      string      `json:"name"`
+	FilePath  string      `json:"file_path"` // 仓库相对路径
+	LineStart int         `json:"line_start"`
+	LineEnd   int         `json:"line_end"`
 	// Properties 自由属性：signature / doc_comment / llm_summary 等
-	Properties map[string]any
+	Properties map[string]any `json:"properties,omitempty"`
 }
 
 // Property 读取 properties 中的字符串字段。
@@ -124,25 +125,27 @@ func (e *CodeEntity) DocComment() string {
 }
 
 // Fact 实体：连接两个 Code Entity 的关系，唯一性由 (source, target, kind) 决定。
+// json tag（Q243 JSON 契约）。
 type Fact struct {
-	SourceID   CanonicalID
-	TargetID   CanonicalID
-	Kind       FactKind
-	ToolSource string
-	Confidence float64 // 0.0~1.0
-	Metadata   map[string]any
+	SourceID   CanonicalID    `json:"source_id"`
+	TargetID   CanonicalID    `json:"target_id"`
+	Kind       FactKind       `json:"kind"`
+	ToolSource string         `json:"tool_source,omitempty"`
+	Confidence float64        `json:"confidence"` // 0.0~1.0
+	Metadata   map[string]any `json:"metadata,omitempty"`
 }
 
 // BuildMeta 构建元数据（build_metadata 表），status 三态：success/degraded/failed。
+// json tag（Q243 JSON 契约）。
 type BuildMeta struct {
-	BuildID    string
-	CommitSHA  string
-	ToolName   string
-	Status     string
-	DurationMs int64
-	ErrorMsg   string
-	Nodes      int // 构建产物节点数（--memory auto 判断缓存，P0④）
-	Edges      int // 构建产物边数
+	BuildID    string `json:"build_id"`
+	CommitSHA  string `json:"commit_sha,omitempty"`
+	ToolName   string `json:"tool_name"`
+	Status     string `json:"status"`
+	DurationMs int64  `json:"duration_ms,omitempty"`
+	ErrorMsg   string `json:"error_msg,omitempty"`
+	Nodes      int    `json:"nodes,omitempty"` // 构建产物节点数（--memory auto 判断缓存，P0④）
+	Edges      int    `json:"edges,omitempty"` // 构建产物边数
 }
 
 // BuildStatus 常量
@@ -153,13 +156,14 @@ const (
 )
 
 // Repository 描述被索引的代码仓库。
+// json tag（Q243 JSON 契约）。
 type Repository struct {
-	Path   string // 绝对路径
-	Module string // 根 go.mod 中的 module 路径（主 module）
+	Path   string `json:"path"`   // 绝对路径
+	Module string `json:"module"` // 根 go.mod 中的 module 路径（主 module）
 	// Modules 全部 module 路径（P2-3 多 go.mod monorepo）：含根 module，
 	// 按发现顺序（根在前）；单 module 仓库与 Module 相同
-	Modules []string
+	Modules []string `json:"modules,omitempty"`
 	// ModuleDirs 与 Modules 对齐的 module 目录（相对仓库根，根为 "."）——
 	// 加载与 scip-go 需要按目录定位 module
-	ModuleDirs []string
+	ModuleDirs []string `json:"module_dirs,omitempty"`
 }

@@ -44,7 +44,7 @@ func TestContextEndpoint(t *testing.T) {
 		t.Fatalf("status = %d: %v", resp.StatusCode, body)
 	}
 	sym, ok := body["symbol"].(map[string]any)
-	if !ok || sym["Name"] != "main" {
+	if !ok || sym["name"] != "main" {
 		t.Errorf("symbol 应为主函数节点，got %v", body["symbol"])
 	}
 	if _, ok := body["callees"]; !ok {

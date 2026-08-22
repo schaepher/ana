@@ -9,11 +9,12 @@ import (
 )
 
 // Item 是适配器流式产出的原始数据单元：节点 / 边 / 函数字段摘要行。
+// json tag（Q243 JSON 契约）。
 type Item struct {
-	Node    *CodeEntity
-	Fact    *Fact
-	Summary *FunctionFieldSummary
-	Origins []*SummaryOrigin // Q161 摘要来源（indirect_write 多分支）
+	Node    *CodeEntity           `json:"node,omitempty"`
+	Fact    *Fact                 `json:"fact,omitempty"`
+	Summary *FunctionFieldSummary `json:"summary,omitempty"`
+	Origins []*SummaryOrigin      `json:"origins,omitempty"` // Q161 摘要来源（indirect_write 多分支）
 }
 
 // SummaryOrigin 摘要来源（Q161）：某字段 indirect_write 的一个来源
@@ -21,25 +22,25 @@ type Item struct {
 // 与摘要行配套；origin/confidence 查询期从 dispatch_to 边 join（callee
 // 是候选实现时带出 register/enum + 置信度）。
 type SummaryOrigin struct {
-	FunctionID CanonicalID
-	AccessKind string
-	FieldPath  string
-	CallLine   int
-	CalleeID   CanonicalID
-	Origin     string // register / enum（动态候选时，查询期填充）
-	Confidence float64
+	FunctionID CanonicalID `json:"function_id"`
+	AccessKind string      `json:"access_kind"`
+	FieldPath  string      `json:"field_path"`
+	CallLine   int         `json:"call_line"`
+	CalleeID   CanonicalID `json:"callee_id"`
+	Origin     string      `json:"origin,omitempty"` // register / enum（动态候选时，查询期填充）
+	Confidence float64     `json:"confidence,omitempty"`
 }
 
 // FunctionFieldSummary 函数字段摘要行（function_field_summary 表，
 // 构建时预计算，加速 S1 查询，field_trace.md §5.2）。
 type FunctionFieldSummary struct {
-	FunctionID   CanonicalID
-	AccessKind   string // direct_read / direct_write / indirect_write
-	FieldPath    string // 类型限定路径（同 field_access.full_path）
-	InstancePath string
-	LineStart    int
-	CodeSnippet  string
-	Origins      []*SummaryOrigin // Q161 间接写多来源（查询期填充）
+	FunctionID   CanonicalID      `json:"function_id"`
+	AccessKind   string           `json:"access_kind"` // direct_read / direct_write / indirect_write
+	FieldPath    string           `json:"field_path"`  // 类型限定路径（同 field_access.full_path）
+	InstancePath string           `json:"instance_path"`
+	LineStart    int              `json:"line_start"`
+	CodeSnippet  string           `json:"code_snippet,omitempty"`
+	Origins      []*SummaryOrigin `json:"origins,omitempty"` // Q161 间接写多来源（查询期填充）
 }
 
 // 摘要 access_kind 常量。
@@ -51,58 +52,61 @@ const (
 
 // TraceRow 字段追溯路径上的一步（S2/S3，field_trace.md §6.3/6.4）。
 type TraceRow struct {
-	ID                CanonicalID
-	Depth             int
-	ParentID          CanonicalID // 到达该节点的父节点（Q235-11：mermaid 父子链连线）
-	Name              string
-	EdgeKinds         string // 到达该节点经过的边类型（逗号连接）
-	Line              int
-	IsUsage           bool // S3：该节点是否为匹配 full_path 的使用点
-	Dir               int  // 函数内数据流方向（GetFunctionFlows）：0=产生链（反向），1=使用链（正向）
-	Kind              EntityKind
-	Access            string   // field_access 的 read/write
-	FuncID            string   // 所属函数 canonical ID（GetValueTrace 函数上下文分组用）
-	FilePath          string   // 节点文件（Q235-10：CLI 渲染源码片段用）
-	FullPath          string   // field_access 的类型限定路径（前端展开匹配用）
-	Conditions        []string // 路径条件标注（Q92 查询期计算，不落库）
-	DispatchCandidate bool     // 该行所属函数是接口候选实现（Q157 P1）
-	DispatchOrigin    string   // 候选来源（register / enum）
-	DispatchConf      float64  // 候选置信度
-	EdgeIface         string   // 到达该行的边是动态候选边（Q161）：接口类型
-	EdgeOrigin        string   // 候选来源（register / enum）
-	EdgeConf          float64  // 候选置信度（--min-conf 剪枝阈值用）
+	ID                CanonicalID `json:"id"`
+	Depth             int         `json:"depth"`
+	ParentID          CanonicalID `json:"parent_id,omitempty"` // 到达该节点的父节点（Q235-11：mermaid 父子链连线）
+	Name              string      `json:"name"`
+	EdgeKinds         string      `json:"edge_kinds"` // 到达该节点经过的边类型（逗号连接）
+	Line              int         `json:"line"`
+	IsUsage           bool        `json:"is_usage"` // S3：该节点是否为匹配 full_path 的使用点
+	Dir               int         `json:"dir"`      // 函数内数据流方向（GetFunctionFlows）：0=产生链（反向），1=使用链（正向）
+	Kind              EntityKind  `json:"kind"`
+	Access            string      `json:"access,omitempty"`             // field_access 的 read/write
+	FuncID            string      `json:"func_id,omitempty"`            // 所属函数 canonical ID（GetValueTrace 函数上下文分组用）
+	FilePath          string      `json:"file_path,omitempty"`          // 节点文件（Q235-10：CLI 渲染源码片段用）
+	FullPath          string      `json:"full_path,omitempty"`          // field_access 的类型限定路径（前端展开匹配用）
+	Conditions        []string    `json:"conditions,omitempty"`         // 路径条件标注（Q92 查询期计算，不落库）
+	DispatchCandidate bool        `json:"dispatch_candidate,omitempty"` // 该行所属函数是接口候选实现（Q157 P1）
+	DispatchOrigin    string      `json:"dispatch_origin,omitempty"`    // 候选来源（register / enum）
+	DispatchConf      float64     `json:"dispatch_conf,omitempty"`      // 候选置信度
+	EdgeIface         string      `json:"edge_iface,omitempty"`         // 到达该行的边是动态候选边（Q161）：接口类型
+	EdgeOrigin        string      `json:"edge_origin,omitempty"`        // 候选来源（register / enum）
+	EdgeConf          float64     `json:"edge_conf,omitempty"`          // 候选置信度（--min-conf 剪枝阈值用）
 }
 
 // DispatchMeta 接口派发元数据（Q157 P1：value-trace 候选标注用）。
+// json tag（Q243 JSON 契约）。
 type DispatchMeta struct {
-	Origin     string // register / enum
-	Confidence float64
+	Origin     string  `json:"origin"`     // register / enum
+	Confidence float64 `json:"confidence"` // 0.0~1.0
 }
 
 // UnusedFunc 未调用分析中的一个函数（field_trace.md §16）。
+// json tag（Q243 JSON 契约）。
 type UnusedFunc struct {
-	ID         CanonicalID
-	Kind       EntityKind
-	Name       string
-	FilePath   string
-	LineStart  int
-	LineEnd    int
-	Exported   bool   // 首字母大写（可能被外部模块调用）
-	Called     bool   // 有 calls / passes_result 入边
-	Referenced bool   // 有 passes_to / dispatch_to / initializes / var 初始化引用
-	SinceMark  string // --since 标注："" / "new"（声明行新增）/ "mod"（行号区间新增）
+	ID         CanonicalID `json:"id"`
+	Kind       EntityKind  `json:"kind"`
+	Name       string      `json:"name"`
+	FilePath   string      `json:"file_path"`
+	LineStart  int         `json:"line_start"`
+	LineEnd    int         `json:"line_end"`
+	Exported   bool        `json:"exported"`             // 首字母大写（可能被外部模块调用）
+	Called     bool        `json:"called"`               // 有 calls / passes_result 入边
+	Referenced bool        `json:"referenced"`           // 有 passes_to / dispatch_to / initializes / var 初始化引用
+	SinceMark  string      `json:"since_mark,omitempty"` // --since 标注："" / "new"（声明行新增）/ "mod"（行号区间新增）
 }
 
 // GrpcCallRow 模块间调用原始行（field_trace.md §18.3）：grpc_call 边 +
 // 服务端实现归属（grpc_impl 边反向查）。
+// json tag（Q243 JSON 契约）。
 type GrpcCallRow struct {
-	CallerID   CanonicalID // 客户端调用方函数
-	ServiceID  CanonicalID // grpc_service / http_route 节点
-	Service    string      // grpc：生成包路径+服务名；http：route 名
-	Method     string      // grpc：方法名；http：路径
-	Line       int
-	ImplTypeID CanonicalID // 服务端实现（grpc_impl 边 source / route.handler_id；无实现时空）
-	Transport  string      // grpc_call / http_call
+	CallerID   CanonicalID `json:"caller_id"`  // 客户端调用方函数
+	ServiceID  CanonicalID `json:"service_id"` // grpc_service / http_route 节点
+	Service    string      `json:"service"`    // grpc：生成包路径+服务名；http：route 名
+	Method     string      `json:"method"`     // grpc：方法名；http：路径
+	Line       int         `json:"line"`
+	ImplTypeID CanonicalID `json:"impl_type_id,omitempty"` // 服务端实现（grpc_impl 边 source / route.handler_id；无实现时空）
+	Transport  string      `json:"transport"`              // grpc_call / http_call
 }
 
 // TableEndpoint 表列数据流的端点（写入方/读取方，query table）。
@@ -199,10 +203,11 @@ type ERData struct {
 }
 
 // SinceInfo --since <ref> 的 diff 解析结果（field_trace.md §16.5）。
+// json tag（Q243 JSON 契约）。
 type SinceInfo struct {
-	Ref        string                  // git ref（--since 参数）
-	NewFiles   map[string]bool         // 新增文件（文件内全部函数标 [new]）
-	AddedLines map[string]map[int]bool // 每文件新增行号集合（+ 侧）
+	Ref        string                  `json:"ref"`         // git ref（--since 参数）
+	NewFiles   map[string]bool         `json:"new_files"`   // 新增文件（文件内全部函数标 [new]）
+	AddedLines map[string]map[int]bool `json:"added_lines"` // 每文件新增行号集合（+ 侧）
 }
 
 // EmitFunc 将适配器产出的数据流式交给 Canonicalizer 消费。

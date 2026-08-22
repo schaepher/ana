@@ -19,7 +19,7 @@ func TestQueryContext(t *testing.T) {
 		t.Fatalf("context JSON: %v\n%s", err, out)
 	}
 	sym, ok := ctx["symbol"].(map[string]any)
-	if !ok || sym["Name"] != "main" {
+	if !ok || sym["name"] != "main" {
 		t.Errorf("symbol 应为主函数节点，got %v", ctx["symbol"])
 	}
 	if _, ok := ctx["callees"]; !ok {
